@@ -1,0 +1,56 @@
+{
+  "number": 1,
+  "title": "Day 1 — Onboarding",
+  "candidate_count": 6,
+  "archetype_mix": {
+    "obvious_admit": 2,
+    "day_to_day": 1,
+    "clumsy_cutie": 1,
+    "bad_actor": 1,
+    "sneaky_bugger": 1
+  },
+  "rules": [
+    {
+      "id": "rule_breach",
+      "text": "Deny any candidate whose email appears in a known breach corpus.",
+      "predicate": "has_discrepancy:breach_hit",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_github_mismatch",
+      "text": "Deny any candidate whose claimed GitHub does not match their commit email history.",
+      "predicate": "has_discrepancy:email_github_mismatch",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_hostile",
+      "text": "Deny any candidate who behaves hostilely or threatens the service.",
+      "predicate": "has_discrepancy:hostile_chat",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_brute_force",
+      "text": "Deny any candidate whose submitted logs show brute-force activity from their account.",
+      "predicate": "has_discrepancy:brute_force_in_log",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_stego",
+      "text": "Deny any candidate who submits an image with a covert embedded payload.",
+      "predicate": "has_discrepancy:stego_payload_present",
+      "severity": "disqualifying"
+    }
+  ],
+  "quotas": {
+    "min_correct_admits": 2,
+    "max_false_admits": 1,
+    "compute_target": 100
+  },
+  "overseer_intro_key": "day1_intro_friendly",
+  "overseer_outro_keys": {
+    "excellent": "day1_outro_praise",
+    "passing": "day1_outro_measured",
+    "poor": "day1_outro_warning",
+    "failed": "day1_outro_failed"
+  }
+}

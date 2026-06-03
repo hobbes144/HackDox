@@ -1,0 +1,364 @@
+/* HackDox Terminal — TUI stylesheet.
+ *
+ * Dark hacker aesthetic. Green/cyan on near-black.
+ * Severity: yellow (minor) → orange (major) → red (critical).
+ */
+
+/* ── Global ──────────────────────────────────────────────────────────── */
+
+Screen {
+    background: #0b0e10;
+    color: #c8d4e1;
+}
+
+.panel {
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #0f1419;
+    padding: 0 1;
+    margin: 0;
+}
+
+.panel:focus-within {
+    border: tall #00ff9f;
+    border-title-color: #00ff9f;
+}
+
+.panel:focus {
+    border: tall #00ff9f;
+    border-title-color: #00ff9f;
+}
+
+/* ── Status / tab strip ──────────────────────────────────────────────── */
+
+#status-header {
+    height: 1;
+    background: #11161c;
+    color: #7dd3c0;
+    padding: 0 1;
+}
+
+/* ── Content switcher (page host) ────────────────────────────────────── */
+
+ContentSwitcher {
+    height: 1fr;
+    overflow: hidden;
+}
+
+/* ── Candidate page ──────────────────────────────────────────────────── */
+
+#page-candidate {
+    layout: vertical;
+    height: 100%;
+    overflow: hidden;
+}
+
+#candidate-top {
+    layout: horizontal;
+    height: 40%;
+}
+
+#candidate-mid {
+    height: 30%;
+}
+
+#candidate-bot {
+    layout: horizontal;
+    height: 30%;
+}
+
+#dossier   { width: 40%; }
+#chat      { width: 60%; }
+
+#evidence-board {
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #0d1117;
+    padding: 0 1;
+}
+
+#evidence-board:focus {
+    border: tall #00ff9f;
+    border-title-color: #00ff9f;
+}
+
+#overseer-side  { width: 40%; }
+#reference-side { width: 60%; }
+
+/* ── Tool pages (shared) ─────────────────────────────────────────────── */
+
+.tool-page {
+    layout: horizontal;
+    height: 100%;
+    overflow: hidden;
+}
+
+.tool-left {
+    layout: vertical;
+    width: 32%;
+}
+
+.tool-right {
+    width: 68%;
+}
+
+/* ── Ghostscan page — 3-column override ─────────────────────────────── */
+/* sidebar (28%) | terminal (40%) | breach lists (32%) */
+
+#page-ghostscan #gs-left {
+    width: 28%;
+}
+
+#terminal-gs {
+    width: 40%;
+}
+
+#breach-list-panel {
+    width: 32%;
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #080c10;
+    padding: 0 1;
+}
+
+#breach-content {
+    width: 100%;
+}
+
+/* ── Condensed dossiers ──────────────────────────────────────────────── */
+
+#condensed-dossier-gs,
+#condensed-dossier-hc,
+#condensed-dossier-lw,
+#condensed-dossier-st {
+    height: 50%;
+}
+
+#ref-gs, #ref-hc, #ref-lw, #ref-st {
+    height: 50%;
+}
+
+#terminal-hc,
+#terminal-lw,
+#terminal-st {
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #080c10;
+    padding: 0 1;
+}
+
+/* terminal-gs shares the above style but has explicit width from 3-col override */
+#terminal-gs {
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #080c10;
+    padding: 0 1;
+}
+
+.terminal-empty { color: #3d4f5e; text-style: italic; }
+.terminal-row   { padding: 0 0 1 0; }
+.terminal-filtered { color: #c084fc; text-style: italic; }
+
+/* ── Dossier ─────────────────────────────────────────────────────────── */
+
+#dossier .label { color: #6b7785; }
+#dossier .value { color: #c8d4e1; }
+
+/* ── Condensed dossier (tool page sidebar) ───────────────────────────── */
+
+.condensed-dossier .label { color: #6b7785; }
+
+/* ── Chat ────────────────────────────────────────────────────────────── */
+
+#chat .ts           { color: #6b7785; }
+#chat .line-warm    { color: #c8d4e1; }
+#chat .line-neutral { color: #c8d4e1; }
+#chat .line-hostile { color: #ff5470; text-style: bold; }
+#chat .line-flippant { color: #c084fc; text-style: italic; }
+#chat .line-earnest { color: #7dd3c0; }
+
+/* ── Evidence board ──────────────────────────────────────────────────── */
+
+.eb-group   { color: #3d6478; text-style: bold; }
+.eb-flagged { color: #ffb454; }
+.eb-cursor  { color: #0b0e10; background: #00ff9f; text-style: bold; }
+.eb-normal  { color: #c8d4e1; }
+
+/* ── Overseer panel ──────────────────────────────────────────────────── */
+
+#overseer-side {
+    border: tall #c084fc;
+    border-title-color: #c084fc;
+    border-title-style: bold;
+    background: #100c18;
+    padding: 0 1;
+}
+
+.overseer-line   { color: #c8d4e1; text-style: italic; }
+.overseer-stats  { color: #6b7785; }
+.overseer-stat-v { color: #7dd3c0; }
+
+/* ── Reference panel ─────────────────────────────────────────────────── */
+
+.ref-accept { color: #00ff9f; }
+.ref-reject { color: #ff5470; }
+.ref-note   { color: #6b7785; text-style: italic; }
+.ref-header { color: #7dd3c0; text-style: bold; }
+
+/* ── Severity colours (findings / tool terminals) ────────────────────── */
+
+.sev-minor    { color: #ffd93d; }
+.sev-major    { color: #ff8c42; }
+.sev-critical { color: #ff5470; text-style: bold; }
+
+/* ── Rulebook ────────────────────────────────────────────────────────── */
+
+#rulebook { width: 30%; }
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+
+#footer {
+    height: 1;
+    background: #11161c;
+    color: #7dd3c0;
+    padding: 0 1;
+}
+
+/* ── Command bar ─────────────────────────────────────────────────────── */
+
+#command-bar {
+    height: 3;
+    background: #040608;
+    color: #c8d4e1;
+    padding: 0 1;
+    border-top: tall #1a4a2a;
+}
+
+/* ── Dev / ground-truth panel ────────────────────────────────────────── */
+
+#debug-panel {
+    height: auto;
+    min-height: 7;
+    border: tall #ffb454;
+    border-title-color: #ffb454;
+    border-title-style: bold;
+    background: #130f00;
+    padding: 0 1;
+    color: #c8d4e1;
+}
+
+/* ── Splashes ────────────────────────────────────────────────────────── */
+
+#splash {
+    align: center middle;
+    height: 1fr;
+}
+
+#splash .title    { color: #00ff9f; text-style: bold; }
+#splash .subtitle { color: #7dd3c0; }
+#splash .hint     { color: #6b7785; margin: 2 0 0 0; }
+
+.screen-title {
+    height: 1;
+    color: #7dd3c0;
+    text-style: bold;
+    padding: 0 2;
+    margin: 1 0 0 0;
+}
+
+.hint {
+    color: #6b7785;
+    padding: 0 2;
+    margin: 1 0;
+}
+
+#overseer-panel {
+    border: tall #c084fc;
+    background: #14101c;
+    padding: 1 2;
+    margin: 2 4;
+    color: #c8d4e1;
+}
+
+#overseer-panel .speaker {
+    color: #c084fc;
+    text-style: bold;
+}
+
+#eod-summary {
+    border: tall #7dd3c0;
+    background: #0f1419;
+    padding: 1 2;
+    margin: 1 4;
+}
+
+#eod-summary .verdict-correct { color: #00ff9f; }
+#eod-summary .verdict-wrong   { color: #ff5470; }
+
+/* ── Rules overlay (modal) ───────────────────────────────────────────── */
+
+RulesScreen {
+    align: center middle;
+}
+
+#rules-modal {
+    width: 84%;
+    height: 85%;
+    background: #0d1117;
+    border: double #7dd3c0;
+    padding: 1 2;
+    layout: vertical;
+}
+
+#rules-title {
+    color: #7dd3c0;
+    text-style: bold;
+    height: 1;
+    margin: 0 0 1 0;
+}
+
+#rules-tabs {
+    height: 1fr;
+}
+
+#rules-tabs ContentPane {
+    background: #080c10;
+    padding: 0 1;
+}
+
+.rules-section {
+    color: #c8d4e1;
+    padding: 1 0;
+}
+
+#rules-hint {
+    height: 1;
+    color: #3d4f5e;
+    text-align: right;
+    margin: 1 0 0 0;
+}
+
+/* Tab strip styling */
+RulesScreen TabPane {
+    background: #080c10;
+    padding: 0 1;
+}
+
+RulesScreen Tabs {
+    background: #0d1117;
+    border-bottom: tall #2a3038;
+}
+
+RulesScreen Tab {
+    color: #6b7785;
+}
+
+RulesScreen Tab.-active {
+    color: #7dd3c0;
+    text-style: bold;
+}
