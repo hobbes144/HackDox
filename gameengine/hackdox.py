@@ -42,13 +42,13 @@ def new_game(seed: int = typer.Option(0xC0FFEE, help="RNG seed for the run.")) -
     state = GameState(
         seed=seed,
         current_day=1,
-        currency=config.STARTING_CURRENCY,
+        compute_hours=config.STARTING_COMPUTE,
         alignment=config.STARTING_ALIGNMENT,
         lives=config.STARTING_LIVES,
     )
     # Persistence module is TODO — for now just announce.
     console.print(Panel.fit(
-        f"[bold green]New game ready.[/]\nSeed: [cyan]{state.seed:#x}[/]  Currency: ${state.currency}  Lives: {state.lives}",
+        f"[bold green]New game ready.[/]\nSeed: [cyan]{state.seed:#x}[/]  Compute: {state.compute_hours}⏱  Lives: {state.lives}",
         title="HackDox",
     ))
 
@@ -102,7 +102,7 @@ def simulate(
 
     console.print(table)
     console.print(Panel.fit(
-        f"Currency: ${state.currency}    Lives: {state.lives}    Alignment: {state.alignment:+d}",
+        f"Compute: {state.compute_hours}⏱    Lives: {state.lives}    Alignment: {state.alignment:+d}",
         title="End of simulation",
     ))
 
