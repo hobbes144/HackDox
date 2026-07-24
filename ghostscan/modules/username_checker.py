@@ -1,7 +1,7 @@
 """
 Username checker module
 -----------------------
-Checks 25+ platforms for a given username in parallel.
+Checks 26+ platforms for a given username in parallel.
 Uses a combination of HTTP status codes and response body checks
 to determine if an account exists.
 """
@@ -45,6 +45,7 @@ PLATFORMS = [
     ("Kaggle",            "https://www.kaggle.com/{}",                 "status_code",   404),
     ("itch.io",           "https://itch.io/profile/{}",                "status_code",   404),
     ("Linktree",          "https://linktr.ee/{}",                      "status_code",   404),
+    ("Venmo",             "https://account.venmo.com/u/{}",            "status_code",   404),
 ]
 
 HEADERS = {

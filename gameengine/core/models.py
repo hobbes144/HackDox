@@ -85,6 +85,23 @@ class DiscrepancyKind(str, Enum):
     STEGO_PAYLOAD_PRESENT  = "stego_payload_present"
     COVERT_C2_CHANNEL      = "covert_c2_channel"
 
+    # ── v2 additions (2026-06-18) ──────────────────────────────────────
+    # Ghostscan-revealed
+    BURNER_IDENTITY        = "burner_identity"        # accounts all created within days
+    THREAT_FORUM_MATCH     = "threat_forum_match"     # handle on a known threat forum
+    TYPOSQUAT_HANDLE       = "typosquat_handle"       # lookalike of a trusted org/person
+    # Logwatch-revealed
+    CREDENTIAL_STUFFING    = "credential_stuffing"    # one IP, many accounts, few tries each
+    AFTER_HOURS_ACCESS     = "after_hours_access"     # activity outside business hours
+    LOW_AND_SLOW           = "low_and_slow"           # attack spread thin to evade thresholds
+    # Hashcrack-revealed
+    CROSS_BREACH_REUSE     = "cross_breach_reuse"     # cracked plaintext recurs across breaches
+    UNSALTED_STORAGE       = "unsalted_storage"       # unsalted / plaintext-equivalent storage
+    # Stegotool-revealed
+    ENCRYPTED_PAYLOAD      = "encrypted_payload"      # XOR/encrypted hidden payload
+    # Dossier-level (prompts Logwatch/Stego)
+    CLAIMED_IP_MISMATCH    = "claimed_ip_mismatch"    # claimed IP != IP in submitted logs
+
 
 class Performance(str, Enum):
     """Bucketed end-of-day rating used to select Overseer outro dialogue."""
@@ -145,10 +162,15 @@ class Dossier:
     claimed_github:        str | None = None
     claimed_breaches:      tuple[str, ...] = ()
     submitted_image_path:  str | None = None
-    submitted_hash:        str | None = None
+    submitted_hash:        str | None = None   # issue #29: EVERY candidate submits one
     notes:                 str = ""
     commit_email:          str | None = None   # actual GitHub commit author email
     claimed_ip:            str | None = None   # IP the candidate claims to connect from
+    # Issue #29 — the plaintext behind submitted_hash. ENGINE-ONLY ground
+    # truth: never rendered until Hashcrack cracks it (and never for bcrypt).
+    # Encryption strength is derived from the hash shape:
+    #   $2b$… bcrypt = STRONG (uncrackable) · 64-hex SHA256 = MEDIUM · 32-hex MD5 = WEAK
+    password_plain:        str | None = None
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────
@@ -221,11 +243,14 @@ class RuleEvaluation:
 
 @dataclass(frozen=True)
 class Quotas:
-    """Day-level pass/fail criteria."""
+    """Day-level pass/fail criteria.
+
+    (compute_target removed by issue #27 — ⏱ is a spend-only daily budget
+    now, so an end-of-day balance target no longer makes sense.)
+    """
 
     min_correct_admits: int = 2
     max_false_admits: int = 1
-    compute_target: int = 100   # ⏱ minimum balance to pass the day
 
 
 @dataclass(frozen=True)
@@ -249,10 +274,10 @@ class CandidateResult:
     archetype: Archetype
     player_verdict: Verdict
     correct: bool
-    compute_delta: int       # ⏱ earned this candidate (verdict reward + board bonus)
-    board_bonus: int         # ⏱ portion of compute_delta from evidence board accuracy
+    board_bonus: int          # HD$ earned from evidence-board accuracy (issue #27)
     alignment_delta: int
-    lives_delta: int
+    site_health_delta: float  # % change to Site Health (admits apply archetype weight)
+    hackdollar_delta: int     # HD$ earned on this verdict (incl. board bonus)
 
 
 @dataclass(frozen=True)
@@ -278,9 +303,12 @@ class GameState:
 
     seed: int
     current_day: int = 1
-    compute_hours: int = 50   # ⏱ — the player's computing hour balance
+    compute_hours: int = 60       # ⏱ — finite daily tool budget (issue #27)
+    compute_capacity: int = 60    # ⏱ base of the daily-budget formula (upgradable)
     alignment: int = 0
-    lives: int = 3
+    site_health: float = 100.0    # persistent % loss condition (issues #18/#20)
+    hackdollars: int = 0          # persistent between-day currency (issue #21)
+    hackdox_credits: int = 1      # ground-truth reveal consumable (issue #25)
     upgrades: set[UpgradeId] = field(default_factory=set)
     completed_days: list[DayResult] = field(default_factory=list)
     # In-progress-day fields -- populated only mid-day:

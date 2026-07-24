@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from .. import config
 from .models import Candidate, Discrepancy, DiscrepancyKind, ToolName
+from .candidate_gen import stable_hash as _stable_hash
 
 
 class InsufficientCompute(RuntimeError):
@@ -43,8 +44,18 @@ class ToolResult:
     filtered: bool = False            # True if a filter was applied
 
 
+def tool_cost(state, tool_name: str) -> int:
+    """Effective base ⏱ cost for a tool — honours the toolcost_* upgrades
+    (issue #23): each owned "toolcost_<tool>" upgrade knocks
+    config.TOOLCOST_REDUCTION off the base cost, floored at 1 ⏱."""
+    base = config.TOOL_COSTS[tool_name]
+    if f"toolcost_{tool_name}" in getattr(state, "upgrades", ()):
+        base = max(1, base - config.TOOLCOST_REDUCTION)
+    return base
+
+
 def _charge(state, tool_name: str, *, filter: bool = False) -> None:
-    base   = config.TOOL_COSTS[tool_name]
+    base   = tool_cost(state, tool_name)
     extra  = config.FILTER_COSTS[tool_name] if filter else 0
     total  = base + extra
     if state.compute_hours < total:
@@ -57,6 +68,63 @@ def _charge(state, tool_name: str, *, filter: bool = False) -> None:
 
 def _findings_from(candidate: Candidate, tool: ToolName) -> tuple[Discrepancy, ...]:
     return tuple(d for d in candidate.truth.discrepancies if d.revealed_by == tool)
+
+
+# ─── Dossier classification helpers (issue #23 auto-highlight upgrades) ──────
+# Expose the ghostscan domain/affiliation lists so the dossier panels can
+# colour-code emails and orgs once the matching upgrade is owned.
+
+def classify_email_domain(email: str) -> str:
+    """Classify an email's domain: 'approved' | 'prohibited' | 'privacy' | 'unknown'."""
+    domain = email.split("@")[-1].lower() if "@" in email else ""
+    if domain in _GS_SUSPICIOUS_DOMAINS:
+        return "prohibited"
+    if domain in _GS_PRIVACY_DOMAINS:
+        return "privacy"
+    if domain in _GS_TRUSTED_DOMAINS or domain.endswith((".edu", ".ac.uk", ".gov", ".mil")):
+        return "approved"
+    return "unknown"
+
+
+def password_strength(hash_value: str | None) -> str | None:
+    """Encryption-strength tier of a submitted password hash (issue #29).
+
+    Derived purely from the hash shape, so it's free dossier information:
+      'strong' — bcrypt ($2b$…): uncrackable in-game, always safe
+      'medium' — SHA256 (64 hex): crackable with effort
+      'weak'   — MD5 (32 hex): cracks instantly
+    Returns None when no hash was submitted.
+    """
+    if not hash_value:
+        return None
+    if hash_value.startswith("$2b$"):
+        return "strong"
+    if len(hash_value) == 64:
+        return "medium"
+    return "weak"
+
+
+def crack_password(candidate: Candidate) -> str | None:
+    """The plaintext Hashcrack recovers for this candidate's password.
+
+    Returns None when the credential is strong-tier (bcrypt) — the in-game
+    cracker abandons the attempt, so strongest encryption is always safe.
+    """
+    if password_strength(candidate.dossier.submitted_hash) == "strong":
+        return None
+    return candidate.dossier.password_plain
+
+
+def classify_affiliation(affiliation: str) -> str:
+    """Classify a claimed affiliation: 'approved' | 'prohibited' | 'unverifiable' | 'unknown'."""
+    affil = (affiliation or "").lower()
+    if any(kw in affil for kw in _GS_SUSPECT_AFFIL_KW):
+        return "prohibited"
+    if any(kw in affil for kw in _GS_TRUSTED_AFFIL_KW):
+        return "approved"
+    if affil in ("independent", "freelance", "self-employed", "consultant", ""):
+        return "unverifiable"
+    return "unknown"
 
 
 # ─── Ghostscan — per-candidate platform sweep ───────────────────────────────
@@ -166,13 +234,30 @@ _GS_NOISE_ORGS = [
 ]
 
 
+# ─── Report section bands (issue #28) ───────────────────────────────────────
+# Each major report section opens with a filled colour band + underline so
+# Platform Sweep and Breach Detection are visually distinct at a glance.
+
+_GS_BAND_W = 58
+
+
+def _gs_band(title: str, accent: str, note: str = "") -> list[str]:
+    pad = " " * max(1, _GS_BAND_W - len(title) - 4)
+    out = [f"[b {accent} on #0d1b2a] ▌ {title}{pad}[/]"]
+    if note:
+        out.append(f"[dim]{note}[/]")
+    out.append(f"[{accent}]{'━' * _GS_BAND_W}[/]")
+    return out
+
+
 def get_ghostscan_identity(candidate: Candidate) -> tuple[str, ...]:
     """Free passive identity check — always visible in the ghostscan terminal."""
     return tuple(_ghostscan_identity_lines(candidate))
 
 
-def _ghostscan_identity_lines(candidate: Candidate) -> list[str]:
+def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[str]:
     d = candidate.dossier
+    has_typo = any(k.kind == DiscrepancyKind.TYPOSQUAT_HANDLE for k in candidate.truth.discrepancies)  # v2
     email_domain = candidate.email.split("@")[-1].lower() if "@" in candidate.email else ""
 
     if email_domain in _GS_SUSPICIOUS_DOMAINS:
@@ -201,19 +286,22 @@ def _ghostscan_identity_lines(candidate: Candidate) -> list[str]:
     )
 
     return [
-        f"[#6b7785]target[/]  [b]{candidate.display_name}[/]"
-        f"  [#6b7785]handle[/] {candidate.handle}",
+        *_gs_band("IDENTITY CHECK", "#7dd3c0", "passive — no ⏱ spent"),
+        f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]"
+        f"  [#6b7785]handle[/] [#c8d4e1]{candidate.handle}[/]",
+        *(["  [#ffd93d]?  handle resembles a trusted org/person -- possible typosquat[/]"]
+          if has_typo else []),
         "",
-        "[#3d6478]── passive identity check ─────────────────────────────────[/]",
-        f"  [#6b7785]email[/]        {candidate.email}",
+        f"  [#6b7785]email[/]        [#c8d4e1]{candidate.email}[/]",
         f"               {email_flag}",
         "",
-        f"  [#6b7785]affiliation[/]  {candidate.claimed_affiliation}",
+        f"  [#6b7785]affiliation[/]  [#c8d4e1]{candidate.claimed_affiliation}[/]",
         f"               {affil_flag}",
         "",
         f"  [#6b7785]github[/]       {gh_flag}",
-        "",
-        "[dim]Run [b]G[/] for full platform sweep (5 ⏱) — verify claimed org + threat forum check[/]",
+        *(["",
+           "[dim]Run [b]G[/] for the full report (platform sweep + breach detection) — verify claimed org[/]"]
+          if hint else []),
     ]
 
 
@@ -239,6 +327,8 @@ def _ghostscan_sweep_lines(
     has_missing  = any(d.kind == DiscrepancyKind.MISSING_PUBLIC_PROFILE for d in candidate.truth.discrepancies)
     has_sock     = any(d.kind == DiscrepancyKind.SOCK_PUPPET_ACCOUNTS   for d in candidate.truth.discrepancies)
     has_breach   = any(d.kind == DiscrepancyKind.BREACH_HIT             for d in candidate.truth.discrepancies)
+    has_forum    = any(d.kind == DiscrepancyKind.THREAT_FORUM_MATCH     for d in candidate.truth.discrepancies)  # v2
+    has_burner   = any(d.kind == DiscrepancyKind.BURNER_IDENTITY        for d in candidate.truth.discrepancies)  # v2
 
     claimed_affil  = candidate.claimed_affiliation
     claimed_handle = candidate.handle
@@ -250,12 +340,13 @@ def _ghostscan_sweep_lines(
     cand_platforms = set(rng.sample(_GS_LEGIT_PLATFORMS, min(n_appear, len(_GS_LEGIT_PLATFORMS))))
 
     lines: list[str] = [
-        f"[#6b7785]target[/]  [b]{candidate.display_name}[/]  "
-        f"[#6b7785]handle[/] {claimed_handle}  "
-        f"[#6b7785]claimed org[/] {claimed_affil}",
+        f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]  "
+        f"[#6b7785]handle[/] [#c8d4e1]{claimed_handle}[/]  "
+        f"[#6b7785]claimed org[/] [#c8d4e1]{claimed_affil}[/]",
         "",
-        "[#3d6478]── platform sweep ───────────────────────────────────────────[/]",
-        "[dim](fixed list — same platforms every day · locate your target handle)[/]",
+        # ── SECTION 1 — PLATFORM SWEEP (issue #28: distinct cyan band) ───
+        *_gs_band("PLATFORM SWEEP", "#6ad4ff",
+                  "fixed list — same platforms every day · locate your target handle"),
         "",
     ]
 
@@ -282,7 +373,7 @@ def _ghostscan_sweep_lines(
                 else:
                     commit_str = f"  [dim]commits:[/] [#6b7785]{commit_email}[/]"
 
-            row = f"    [b]{claimed_handle}[/]  {org_str}{commit_str}"
+            row = f"    [b #e8f0f8]{claimed_handle}[/]  [#c8d4e1]{org_str}[/]{commit_str}"
 
             # Suspicious signals — only highlight and annotate on filter run.
             # Base run: entry shown plain so the player must spot it themselves.
@@ -307,15 +398,37 @@ def _ghostscan_sweep_lines(
             org_s        = f"  [[{noise_org}]" if noise_org else ""
             lines.append(f"[#2e3d4f]    {noise_handle}{org_s}[/]")
 
-    # ── Threat forums — always rendered in full ──────────────────────────
+    lines.append("")
+    lines.append("[#6ad4ff]-- account registry ----------------------------------------[/]")
+    lines.append("[dim](creation dates per platform — clusters suggest a burner identity)[/]")
+    _reg_plats = sorted(cand_platforms) if cand_platforms else ["GitHub", "Reddit", "Twitter/X"]
+    if has_burner:
+        _bd = rng.randint(10, 22)
+        for _i, _p in enumerate(_reg_plats[:4]):
+            _created = f"2024-03-{_bd + (_i % 3):02d}"
+            _col = "#ffd93d" if show_forums else "#2e3d4f"
+            lines.append(f"[{_col}]  {_p:<14} created {_created}[/]")
+        if show_forums:
+            lines.append("  [#ff8c42]▲ all accounts created within days -- burner identity[/]")
+    else:
+        for _i, _p in enumerate(_reg_plats[:4]):
+            _yr = 2017 + (_i * 2) % 7
+            lines.append(f"[#2e3d4f]  {_p:<14} created {_yr}-0{1 + _i % 8}-{12 + _i:02d}[/]")
+    lines.append("")
+
+    # ── SECTION 2 — BREACH DETECTION (issue #28: distinct orange band) ────
+    # Threat forums + breach dumps live under one clearly separated section.
     # Base run:   candidate handle blended as dim entry — player must spot it
     # Filter run: candidate handle highlighted with tier colour + explicit label
     lines.append("")
-    lines.append("[#3d6478]── threat forums ────────────────────────────────────────────[/]")
-    if show_forums:
-        lines.append("[dim](CRITICAL → immediate deny · ADVISORY → investigate further)[/]")
-    else:
-        lines.append("[dim](locate your target handle in these lists)[/]")
+    lines.extend(_gs_band(
+        "BREACH DETECTION", "#ff8c42",
+        ("CRITICAL → immediate deny · ADVISORY → investigate further"
+         if show_forums else
+         "threat forums + breach dumps · locate your target handle"),
+    ))
+    lines.append("")
+    lines.append("[#ff8c42]-- threat forums --------------------------------------------[/]")
     lines.append("")
 
     # Determine which single advisory forum the candidate appears in (if any).
@@ -329,7 +442,7 @@ def _ghostscan_sweep_lines(
     for forum in _GS_CRITICAL_FORUMS:
         noise_h = rng.choice(_GS_NOISE_HANDLES)
         lines.append(f"[#2e3d4f]  {forum:<20}  {noise_h}[/]")
-        if has_sock:
+        if has_sock or has_forum:
             if show_forums:
                 lines.append(f"[#ff5470]  {forum:<20}  {claimed_handle}  [CRITICAL][/]")
                 if first_crit_ann:
@@ -352,7 +465,8 @@ def _ghostscan_sweep_lines(
 
     # Breach dump summary — delegate detail to the breach list panel (right column)
     lines.append("")
-    lines.append(f"  [#2e3d4f]▌ BREACH DUMPS[/]  [dim]see breach databases panel →[/]")
+    lines.append("[#ff8c42]-- breach dumps ---------------------------------------------[/]")
+    lines.append(f"  [dim]full databases in the breach panel →[/]")
     for _ in range(3):
         noise_email = f"{rng.choice(_GS_NOISE_HANDLES)}@{rng.choice(['corp.net', 'internal.io', 'hackdox.local'])}"
         dump_name   = rng.choice(_GS_BREACH_DUMPS)
@@ -366,13 +480,26 @@ def _ghostscan_sweep_lines(
 
 
 def _ghostscan_filter_summary_lines(candidate: Candidate) -> list[str]:
-    has_sock     = any(d.kind == DiscrepancyKind.SOCK_PUPPET_ACCOUNTS  for d in candidate.truth.discrepancies)
-    has_breach   = any(d.kind == DiscrepancyKind.BREACH_HIT            for d in candidate.truth.discrepancies)
-    has_affil    = any(d.kind == DiscrepancyKind.AFFILIATION_UNVERIFIED for d in candidate.truth.discrepancies)
-    has_mismatch = any(d.kind == DiscrepancyKind.EMAIL_GITHUB_MISMATCH  for d in candidate.truth.discrepancies)
+    _ks = {d.kind for d in candidate.truth.discrepancies}
+    has_sock     = DiscrepancyKind.SOCK_PUPPET_ACCOUNTS  in _ks
+    has_breach   = DiscrepancyKind.BREACH_HIT            in _ks
+    has_affil    = DiscrepancyKind.AFFILIATION_UNVERIFIED in _ks
+    has_mismatch = DiscrepancyKind.EMAIL_GITHUB_MISMATCH  in _ks
+    has_forum    = DiscrepancyKind.THREAT_FORUM_MATCH     in _ks   # v2
+    has_burner   = DiscrepancyKind.BURNER_IDENTITY        in _ks   # v2
+    has_typo     = DiscrepancyKind.TYPOSQUAT_HANDLE       in _ks   # v2
 
     lines = ["", "[#c084fc]── [FILTER] violation summary ────────────────────────────[/]"]
     found = False
+    if has_forum:
+        lines.append("  [#ff5470][b]▲ THREAT_FORUM_MATCH[/][/]  -- handle on a known threat / dark-web forum")
+        found = True
+    if has_burner:
+        lines.append("  [#ff8c42][b]▲ BURNER_IDENTITY[/][/]  -- accounts all created within days")
+        found = True
+    if has_typo:
+        lines.append("  [#ff8c42][b]▲ TYPOSQUAT_HANDLE[/][/]  -- handle mimics a trusted org/person")
+        found = True
     if has_sock:
         lines.append("  [#ff5470][b]▲ SOCK_PUPPET_ACCOUNTS[/][/]  — handle on critical threat forum")
         found = True
@@ -394,7 +521,13 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
     """Base run: full platform sweep, threat forum candidate entries gated."""
     _charge(state, "ghostscan")
     rng = _random.Random(int(candidate.id, 16) ^ 0x6057CAD1)
-    raw_lines  = tuple(_ghostscan_sweep_lines(candidate, rng, show_forums=False))
+    # Issue #28: the report REPLACES the terminal content (no stacked
+    # reports), so the free identity block is folded in at the top.
+    raw_lines  = tuple(
+        _ghostscan_identity_lines(candidate, hint=False)
+        + [""]
+        + _ghostscan_sweep_lines(candidate, rng, show_forums=False)
+    )
     n_findings = len(_findings_from(candidate, ToolName.GHOSTSCAN))
     summary = (
         f"{n_findings} signal(s) in sweep — review carefully, run filter (F) to check threat forums."
@@ -409,8 +542,12 @@ def run_ghostscan_filtered_shared(candidate: Candidate, state) -> ToolResult:
     _charge(state, "ghostscan", filter=True)
     rng      = _random.Random(int(candidate.id, 16) ^ 0x6057CAD1)
     findings = _findings_from(candidate, ToolName.GHOSTSCAN)
+    # Issue #28: the filtered report REPLACES the base report in-place —
+    # same layout, annotations lit — rather than printing a second copy.
     raw_lines = tuple(
-        _ghostscan_sweep_lines(candidate, rng, show_forums=True)
+        _ghostscan_identity_lines(candidate, hint=False)
+        + [""]
+        + _ghostscan_sweep_lines(candidate, rng, show_forums=True)
         + _ghostscan_filter_summary_lines(candidate)
     )
     summary = (
@@ -520,7 +657,10 @@ def _hc_algo(h: str | None) -> str:
 def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
     has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
     has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
+    has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)  # v2
+    has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)  # v2
     has_cred   = has_leaked or has_weak
+    has_hashbad = has_leaked or has_weak or has_reuse or has_unsalt
 
     account    = candidate.email
     claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
@@ -559,25 +699,38 @@ def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
     if h_val:
         algo    = _hc_algo(h_val)
         snippet = h_val[:16] + ".."
-        vk      = "weak" if has_weak else ("leaked" if has_leaked else None)
+        vk      = ("weak" if has_weak else "leaked" if has_leaked
+                   else "reuse" if has_reuse else "unsalted" if has_unsalt else None)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
             event="HASH_SUBMIT", ip=ext_ip if has_cred else claimed_ip,
             account=account, detail=f"{algo}:{snippet}",
-            owner_id=candidate.id, is_suspicious=has_cred,
+            owner_id=candidate.id, is_suspicious=has_hashbad,
             violation_kind=vk,
         ))
         t += rng.randint(5, 30)
 
     # Breach match for leaked passwords — use the shared selector so this names
     # the SAME database the player will find the email in on the GhostScan page.
-    if has_leaked:
+    if has_leaked or has_reuse:
         _, breach = _breach_db_for_candidate(candidate.id)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
             event="BREACH_MATCH", ip="--", account=account, detail=breach,
-            owner_id=candidate.id, is_suspicious=True, violation_kind="leaked",
+            owner_id=candidate.id, is_suspicious=True,
+            violation_kind=("leaked" if has_leaked else "reuse"),
         ))
+        if has_reuse:
+            t += rng.randint(5, 20)
+            _idx = (int(candidate.id, 16) >> 8) % len(_HC_BREACH_NAMES)
+            _alt = _HC_BREACH_NAMES[_idx]
+            if _alt == breach:
+                _alt = _HC_BREACH_NAMES[_idx - 1]
+            entries.append(_HCLogEntry(
+                ts_secs=t, ts_str=_hc_ts_str(t),
+                event="BREACH_MATCH", ip="--", account=account, detail=_alt,
+                owner_id=candidate.id, is_suspicious=True, violation_kind="reuse",
+            ))
 
     return entries
 
@@ -612,12 +765,12 @@ def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
     """Shared credential audit log for the full day. Deterministic."""
     from .candidate_gen import generate as _gen_candidate
 
-    rng     = _random.Random(hash((game_seed, day.number, "hc_day")) & 0xFFFFFFFF)
+    rng     = _random.Random(_stable_hash(game_seed, day.number, "hc_day") & 0xFFFFFFFF)
     entries: list[_HCLogEntry] = []
 
     for slot in range(day.candidate_count):
         cand  = _gen_candidate(game_seed, day, slot)
-        crng  = _random.Random(hash((game_seed, day.number, slot, "hc_entries")) & 0xFFFFFFFF)
+        crng  = _random.Random(_stable_hash(game_seed, day.number, slot, "hc_entries") & 0xFFFFFFFF)
         entries.extend(_hc_candidate_entries(cand, crng))
 
     n_noise = max(80, 160 - len(entries))
@@ -632,6 +785,9 @@ def _render_hc_log(
     candidate,
     annotate:      bool = False,
     explicit_tags: bool = False,
+    upgrade_highlight: bool = False,   # hash_highlight upgrade (issue #23):
+                                       # free tier colours suspicious lines,
+                                       # WITHOUT the ▲ annotations of a base run
 ) -> tuple[str, ...]:
     """Render the credential audit log to Rich markup lines."""
     lines: list[str] = [
@@ -640,17 +796,18 @@ def _render_hc_log(
         "",
     ]
 
-    # Derive crack result for annotation
+    # Derive crack result for annotation. Issue #29: the plaintext is the
+    # generator's ground truth (dossier.password_plain), so the crack always
+    # matches the dossier hash. bcrypt (strong tier) never cracks.
     crack_plaintext: str | None = None
+    neutral_crack = False   # clean candidate — crack succeeds, no violation
     if annotate and target_id and candidate is not None:
-        has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
-        has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
-        if has_leaked or has_weak:
-            crng = _random.Random(int(candidate.id, 16) ^ 0xDEADC0DE)
-            crack_plaintext = (
-                crng.choice(_HC_LEAKED_PASSWORDS) if has_leaked
-                else crng.choice(_HC_WEAK_PASSWORDS)
-            )
+        has_credkind = any(d.kind in (
+            DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
+            DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE,
+        ) for d in candidate.truth.discrepancies)
+        crack_plaintext = crack_password(candidate)
+        neutral_crack = crack_plaintext is not None and not has_credkind
 
     evt_col = {
         "AUTH_OK":      "#00ff9f",
@@ -668,7 +825,7 @@ def _render_hc_log(
         det_str = f"  {e.detail}" if e.detail else ""
         raw     = f"{e.ts_str}  [{ec}]{e.event:<12}[/]  {e.ip:<18}  {e.account}{det_str}"
 
-        if is_mine and e.is_suspicious and (annotate or explicit_tags):
+        if is_mine and e.is_suspicious and (annotate or explicit_tags or upgrade_highlight):
             col = "#ff5470" if explicit_tags else "#ff8c42"
             lines.append(f"[{col}]{raw}[/]")
 
@@ -683,6 +840,13 @@ def _render_hc_log(
                         emitted_crack = True
                 elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
                     lines.append(f"  [#ff8c42]▲ email confirmed in breach corpus[/]")
+                elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
+                    if crack_plaintext:
+                        _note = "reused across breaches" if e.violation_kind == "reuse" else "unsalted -- cracks instantly"
+                        lines.append(f"  [#ff8c42]▲ crack result  ->  [b]{crack_plaintext}[/]  ({_note})[/]")
+                        emitted_crack = True
+                elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
+                    lines.append(f"  [#ff8c42]▲ same password seen in another breach corpus[/]")
 
             if explicit_tags:
                 if e.violation_kind == "stuffing" and prev_vk != "stuffing":
@@ -693,11 +857,30 @@ def _render_hc_log(
                         emitted_crack = True
                 elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
                     lines.append(f"  [#ff5470]▲ breach corpus confirmed: {e.detail}[/]")
+                elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
+                    if crack_plaintext:
+                        lines.append(f"  [#ff5470]▲ crack result  ->  [b]{crack_plaintext}[/][/]")
+                        emitted_crack = True
+                elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
+                    lines.append(f"  [#ff5470]▲ cross-breach reuse: {e.detail}[/]")
 
             prev_vk = e.violation_kind
 
         elif is_mine:
             lines.append(f"[#ffd93d]{raw}[/]")
+            # Issue #29 — clean candidates get an honest crack verdict too.
+            if (annotate and e.event == "HASH_SUBMIT" and not emitted_crack
+                    and candidate is not None):
+                _strength = password_strength(candidate.dossier.submitted_hash)
+                if _strength == "strong":
+                    lines.append("  [#00ff9f]✓ crack abandoned — bcrypt "
+                                 "(~100 H/s) · strong encryption, always safe[/]")
+                    emitted_crack = True
+                elif neutral_crack and crack_plaintext:
+                    lines.append(f"  [#00ff9f]✓ crack result  →  "
+                                 f"[b]{crack_plaintext}[/]  "
+                                 f"(strong password — no concern)[/]")
+                    emitted_crack = True
             prev_vk = None
         else:
             lines.append(f"[#2e3d4f]{raw}[/]")
@@ -708,23 +891,33 @@ def _render_hc_log(
     if explicit_tags and target_id and candidate is not None:
         has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
         has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
+        has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)
+        has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)
         lines += [
             "[#c084fc]── [FILTER] credential analysis ─────────────────────────────[/]",
         ]
+        _any = False
         if has_leaked:
-            lines.append("  [#ff5470][b]▲ LEAKED_PASSWORD[/][/]  — plaintext confirmed in breach corpus")
-        elif has_weak:
-            lines.append("  [#ff5470][b]▲ WEAK_CREDENTIAL[/][/]  — hash cracked in < 100 attempts")
-        else:
+            lines.append("  [#ff5470][b]▲ LEAKED_PASSWORD[/][/]  -- plaintext confirmed in breach corpus"); _any = True
+        if has_weak:
+            lines.append("  [#ff5470][b]▲ WEAK_CREDENTIAL[/][/]  -- hash cracked in < 100 attempts"); _any = True
+        if has_reuse:
+            lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  -- reused password recurs across breach corpora"); _any = True
+        if has_unsalt:
+            lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  -- unsalted hash cracked instantly"); _any = True
+        if not _any:
             lines.append("  [#00ff9f]✓ credential appears secure[/]")
 
     lines.append(f"[dim]{len(entries)} entries  ·  highlighted = current target account[/]")
     return tuple(lines)
 
 
-def get_hashcrack_shared(entries: list[_HCLogEntry], candidate) -> tuple[str, ...]:
-    """Free shared log — always visible on hashcrack page, no cost."""
-    return _render_hc_log(entries, target_id=candidate.id, candidate=candidate)
+def get_hashcrack_shared(entries: list[_HCLogEntry], candidate,
+                         upgrade_highlight: bool = False) -> tuple[str, ...]:
+    """Free shared log — always visible on hashcrack page, no cost.
+    With the hash_highlight upgrade, suspicious lines are pre-coloured."""
+    return _render_hc_log(entries, target_id=candidate.id, candidate=candidate,
+                          upgrade_highlight=upgrade_highlight)
 
 
 def run_hashcrack_shared(entries: list[_HCLogEntry], candidate, state) -> ToolResult:
@@ -732,13 +925,19 @@ def run_hashcrack_shared(entries: list[_HCLogEntry], candidate, state) -> ToolRe
     _charge(state, "hashcrack")
     raw_lines = _render_hc_log(entries, target_id=candidate.id,
                                 candidate=candidate, annotate=True)
-    cracked = any(d.kind in (DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL)
-                  for d in candidate.truth.discrepancies)
-    summary = (
-        "Hash cracked — review inline result. Run filter (F) to name the violation."
-        if cracked else
-        "No match found in common wordlist."
-    )
+    strength = password_strength(candidate.dossier.submitted_hash)
+    cracked = any(d.kind in (
+        DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
+        DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE,
+    ) for d in candidate.truth.discrepancies)
+    if cracked:
+        summary = "Hash cracked — review inline result. Run filter (F) to name the violation."
+    elif strength == "strong":
+        summary = "bcrypt credential — attempt abandoned. Strong encryption is always safe."
+    elif crack_password(candidate):
+        summary = "Hash cracked — plaintext revealed inline. Assess its strength yourself."
+    else:
+        summary = "No match found in common wordlist."
     return ToolResult(tool=ToolName.HASHCRACK, findings=(), raw_lines=raw_lines, summary=summary)
 
 
@@ -864,65 +1063,78 @@ class _LogEntry:
 
 
 def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
-    has_brute   = any(d.kind == DiscrepancyKind.BRUTE_FORCE_IN_LOG for d in candidate.truth.discrepancies)
-    has_travel  = any(d.kind == DiscrepancyKind.IMPOSSIBLE_TRAVEL   for d in candidate.truth.discrepancies)
-    has_insider = any(d.kind == DiscrepancyKind.INSIDER_BEHAVIOR    for d in candidate.truth.discrepancies)
+    kinds = {d.kind for d in candidate.truth.discrepancies}
+    has_brute    = DiscrepancyKind.BRUTE_FORCE_IN_LOG  in kinds
+    has_travel   = DiscrepancyKind.IMPOSSIBLE_TRAVEL   in kinds
+    has_insider  = DiscrepancyKind.INSIDER_BEHAVIOR    in kinds
+    has_stuffing = DiscrepancyKind.CREDENTIAL_STUFFING in kinds   # v2
+    has_after    = DiscrepancyKind.AFTER_HOURS_ACCESS  in kinds   # v2
+    has_slow     = DiscrepancyKind.LOW_AND_SLOW        in kinds   # v2
+    has_ipmis    = DiscrepancyKind.CLAIMED_IP_MISMATCH in kinds   # v2
 
     claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
     account    = candidate.email
     entries: list[_LogEntry] = []
     t = rng.randint(25200, 54000)   # 7am–3pm spread
 
-    # Normal logins from claimed IP (city=None for internal IPs)
+    # The candidate's real login origin. v2: when the claimed IP doesn't match,
+    # their logins come from an external address (≠ the dossier claim), which
+    # the free-tier renderer already highlights in orange.
+    if has_ipmis:
+        login_ip, login_city = _lw_ext_ip(rng)
+    else:
+        login_ip, login_city = claimed_ip, _lw_city(claimed_ip)
+
+    # Normal logins from the candidate's login IP
     for _ in range(rng.randint(2, 3)):
         entries.append(_LogEntry(
             ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
-            ip=claimed_ip, account=account, extra="",
+            ip=login_ip, account=account, extra="",
             owner_id=candidate.id, is_suspicious=False, violation_kind=None,
-            city=_lw_city(claimed_ip),
+            city=login_city,
         ))
         t += rng.randint(1800, 7200)
 
     if has_brute:
-        # Choose pattern: brute force (same account) vs credential stuffing (multiple accounts)
-        use_stuffing = (int(candidate.id, 16) & 1) == 0   # deterministic from candidate ID
+        # Brute force: rapid AUTH_FAIL on the SAME account, then AUTH_OK.
         ext_ip, ext_city = _lw_ext_ip(rng, "185.220.")
         burst = rng.randint(4, 7)
-
-        if use_stuffing:
-            # Credential stuffing: AUTH_FAIL on different fake accounts, then AUTH_OK on candidate
-            for i in range(burst):
-                fake_user   = rng.choice(_LW_NOISE_USERS)
-                fake_domain = rng.choice(_LW_NOISE_DOMAINS)
-                entries.append(_LogEntry(
-                    ts_secs=t+i, ts_str=_lw_ts(t+i), event="AUTH_FAIL",
-                    ip=ext_ip, account=f"{fake_user}@{fake_domain}", extra="",
-                    owner_id=None, is_suspicious=False, violation_kind=None,
-                    city=None,
-                ))
-            t += burst + rng.randint(1, 3)
+        for i in range(burst):
             entries.append(_LogEntry(
-                ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
-                ip=ext_ip, account=account, extra="",
-                owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
-                city=ext_city,
-            ))
-        else:
-            # Brute force: rapid AUTH_FAIL on same account, then AUTH_OK
-            for i in range(burst):
-                entries.append(_LogEntry(
-                    ts_secs=t+i, ts_str=_lw_ts(t+i), event="AUTH_FAIL",
-                    ip=ext_ip, account=account, extra="",
-                    owner_id=candidate.id, is_suspicious=True, violation_kind="brute_force",
-                    city=None,
-                ))
-            t += burst + rng.randint(1, 3)
-            entries.append(_LogEntry(
-                ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
+                ts_secs=t+i, ts_str=_lw_ts(t+i), event="AUTH_FAIL",
                 ip=ext_ip, account=account, extra="",
                 owner_id=candidate.id, is_suspicious=True, violation_kind="brute_force",
-                city=ext_city,
+                city=None,
             ))
+        t += burst + rng.randint(1, 3)
+        entries.append(_LogEntry(
+            ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
+            ip=ext_ip, account=account, extra="",
+            owner_id=candidate.id, is_suspicious=True, violation_kind="brute_force",
+            city=ext_city,
+        ))
+        t += rng.randint(1800, 3600)
+
+    if has_stuffing:
+        # v2 Credential stuffing: one external IP sprays AUTH_FAIL across many
+        # *other* accounts (few tries each), then lands AUTH_OK on the candidate.
+        ext_ip, ext_city = _lw_ext_ip(rng, "45.131.")
+        sprayed = rng.sample(_LW_NOISE_USERS, min(5, len(_LW_NOISE_USERS)))
+        for i, fake_user in enumerate(sprayed):
+            fake_domain = rng.choice(_LW_NOISE_DOMAINS)
+            entries.append(_LogEntry(
+                ts_secs=t+i*2, ts_str=_lw_ts(t+i*2), event="AUTH_FAIL",
+                ip=ext_ip, account=f"{fake_user}@{fake_domain}", extra="",
+                owner_id=None, is_suspicious=False, violation_kind=None,
+                city=None,
+            ))
+        t += len(sprayed)*2 + rng.randint(1, 3)
+        entries.append(_LogEntry(
+            ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
+            ip=ext_ip, account=account, extra="",
+            owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
+            city=ext_city,
+        ))
         t += rng.randint(1800, 3600)
 
     if has_travel:
@@ -969,15 +1181,49 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             city=None,
         ))
 
-    if not (has_brute or has_travel or has_insider):
+    if has_after:
+        # v2 After-hours: benign-looking activity outside business hours on
+        # NORMAL paths (not sensitive). Minor — the player must weigh it, not
+        # auto-deny. is_suspicious=True so base/filter call it out.
+        t_pm = 79200 + rng.randint(0, 9000)   # ~22:00 onward
+        entries.append(_LogEntry(
+            ts_secs=t_pm, ts_str=_lw_ts(t_pm), event="AUTH_OK",
+            ip=login_ip, account=account, extra="",
+            owner_id=candidate.id, is_suspicious=True, violation_kind="after_hours",
+            city=login_city,
+        ))
+        t2 = t_pm + rng.randint(120, 900)
+        entries.append(_LogEntry(
+            ts_secs=t2, ts_str=_lw_ts(t2), event="FILE_READ",
+            ip=login_ip, account=account, extra=rng.choice(_LW_NORMAL_PATHS),
+            owner_id=candidate.id, is_suspicious=True, violation_kind="after_hours",
+            city=None,
+        ))
+
+    if has_slow:
+        # v2 Low-and-slow: a few AUTH_FAIL scattered hours apart so no burst
+        # window trips. is_suspicious=False → base run does NOT flag it; only the
+        # filter's cross-day correlation (see _lw_render) surfaces it.
+        ext_ip, _c = _lw_ext_ip(rng, "91.219.")
+        ts0 = rng.randint(3600, 10800)
+        for i in range(rng.randint(3, 4)):
+            tt = (ts0 + i * rng.randint(9000, 16000)) % 86400
+            entries.append(_LogEntry(
+                ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_FAIL",
+                ip=ext_ip, account=account, extra="",
+                owner_id=candidate.id, is_suspicious=False, violation_kind="low_and_slow",
+                city=None,
+            ))
+
+    if not (has_brute or has_travel or has_insider or has_stuffing or has_after or has_slow):
         for _ in range(rng.randint(3, 5)):
             evt  = rng.choice(["AUTH_OK", "FILE_READ", "AUTH_OK", "SESSION_END"])
             path = rng.choice(_LW_NORMAL_PATHS) if evt == "FILE_READ" else ""
             entries.append(_LogEntry(
                 ts_secs=t, ts_str=_lw_ts(t), event=evt,
-                ip=claimed_ip, account=account, extra=path,
+                ip=login_ip, account=account, extra=path,
                 owner_id=candidate.id, is_suspicious=False, violation_kind=None,
-                city=(_lw_city(claimed_ip) if evt == "AUTH_OK" else None),
+                city=(login_city if evt == "AUTH_OK" else None),
             ))
             t += rng.randint(900, 3600)
 
@@ -1008,12 +1254,12 @@ def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
     from .candidate_gen import generate as _gen_candidate
     from .. import config as _cfg
 
-    rng = _random.Random(hash((game_seed, day.number, "day_log")) & 0xFFFFFFFF)
+    rng = _random.Random(_stable_hash(game_seed, day.number, "day_log") & 0xFFFFFFFF)
     all_entries: list[_LogEntry] = []
 
     for slot in range(day.candidate_count):
         cand = _gen_candidate(game_seed, day, slot)
-        crng = _random.Random(hash((game_seed, day.number, slot, "lw_entries")) & 0xFFFFFFFF)
+        crng = _random.Random(_stable_hash(game_seed, day.number, slot, "lw_entries") & 0xFFFFFFFF)
         all_entries.extend(_lw_candidate_entries(cand, crng))
 
     # Noise count from config — scaled per day
@@ -1036,6 +1282,9 @@ def _lw_render(
     annotate:         bool = False,
     explicit_tags:    bool = False,
     group_by_session: bool = False,
+    upgrade_highlight: bool = False,   # log_highlight upgrade (issue #23):
+                                       # free tier colours suspicious lines,
+                                       # WITHOUT the ▲ annotations of a base run
 ) -> tuple[str, ...]:
     """Render the shared day log to Rich markup lines.
 
@@ -1082,7 +1331,7 @@ def _lw_render(
         nonlocal prev_vk
         for e in entries_list:
             is_mine = (e.owner_id == target_id)
-            if is_mine and e.is_suspicious and (annotate or explicit_tags):
+            if is_mine and e.is_suspicious and (annotate or explicit_tags or upgrade_highlight):
                 col = "#ff5470" if explicit_tags else "#ff8c42"
                 lines.append(_format_entry(e, True, True, col))
                 if annotate and not explicit_tags:
@@ -1094,14 +1343,19 @@ def _lw_render(
                         lines.append(f"  [#ff8c42]▲ login from geographically distant IP  [{e.city}][/]")
                     elif e.violation_kind == "insider" and prev_vk != "insider":
                         lines.append("  [#ff8c42]▲ after-hours privileged access[/]")
+                    elif e.violation_kind == "after_hours" and prev_vk != "after_hours":
+                        lines.append("  [#ff8c42]▲ activity outside business hours[/]")
                 if explicit_tags:
-                    if e.violation_kind in ("brute_force", "stuffing") and e.event in ("AUTH_FAIL", "AUTH_OK") and prev_vk not in ("brute_force", "stuffing"):
-                        vk_label = "BRUTE_FORCE_IN_LOG"
-                        lines.append(f"  [#ff5470][b]▲ {vk_label}[/][/]")
+                    if e.violation_kind == "brute_force" and prev_vk != "brute_force":
+                        lines.append("  [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]")
+                    elif e.violation_kind == "stuffing" and prev_vk != "stuffing":
+                        lines.append("  [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]  — one source IP, many accounts")
                     elif e.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
                         lines.append(f"  [#ff5470][b]▲ IMPOSSIBLE_TRAVEL[/][/]  [{e.city}]")
                     elif e.violation_kind == "insider" and prev_vk != "insider":
                         lines.append("  [#ff5470][b]▲ INSIDER_BEHAVIOR[/][/]  — after-hours + priv escalation")
+                    elif e.violation_kind == "after_hours" and prev_vk != "after_hours":
+                        lines.append("  [#ff8c42][b]▲ AFTER_HOURS_ACCESS[/][/]  — minor, corroborate")
                 prev_vk = e.violation_kind
             elif is_mine:
                 prev_vk = None
@@ -1151,7 +1405,7 @@ def _lw_render(
             )
             for ge in group:
                 ge_mine = (ge.owner_id == target_id)
-                if ge_mine and ge.is_suspicious and (annotate or explicit_tags):
+                if ge_mine and ge.is_suspicious and (annotate or explicit_tags or upgrade_highlight):
                     col = "#ff5470" if explicit_tags else "#ff8c42"
                     lines.append("  " + _format_entry(ge, True, True, col))
                     if annotate and not explicit_tags:
@@ -1163,13 +1417,19 @@ def _lw_render(
                             lines.append(f"    [#ff8c42]▲ geographically impossible login  [{ge.city}][/]")
                         elif ge.violation_kind == "insider" and prev_vk != "insider":
                             lines.append("    [#ff8c42]▲ after-hours privileged access[/]")
+                        elif ge.violation_kind == "after_hours" and prev_vk != "after_hours":
+                            lines.append("    [#ff8c42]▲ activity outside business hours[/]")
                     if explicit_tags:
-                        if ge.violation_kind in ("brute_force", "stuffing") and prev_vk not in ("brute_force", "stuffing"):
+                        if ge.violation_kind == "brute_force" and prev_vk != "brute_force":
                             lines.append("    [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]")
+                        elif ge.violation_kind == "stuffing" and prev_vk != "stuffing":
+                            lines.append("    [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]")
                         elif ge.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
                             lines.append(f"    [#ff5470][b]▲ IMPOSSIBLE_TRAVEL[/][/]  [{ge.city}]")
                         elif ge.violation_kind == "insider" and prev_vk != "insider":
                             lines.append("    [#ff5470][b]▲ INSIDER_BEHAVIOR[/][/]")
+                        elif ge.violation_kind == "after_hours" and prev_vk != "after_hours":
+                            lines.append("    [#ff8c42][b]▲ AFTER_HOURS_ACCESS[/][/]")
                     prev_vk = ge.violation_kind
                 elif ge_mine:
                     prev_vk = None
@@ -1189,16 +1449,31 @@ def _lw_render(
     else:
         _render_flat(entries)
 
+    # v2 Low-and-slow only surfaces under the filter's cross-day correlation —
+    # the individual failures are sub-threshold and unflagged in the base run.
+    if explicit_tags and target_id:
+        slow = [e for e in entries
+                if e.owner_id == target_id and e.violation_kind == "low_and_slow"]
+        if slow:
+            lines.append("")
+            lines.append(
+                f"  [#ff5470][b]▲ LOW_AND_SLOW[/][/]  — {len(slow)} auth failures from "
+                f"{slow[0].ip} scattered across the day (each sub-threshold)"
+            )
+
     lines.append("")
     lines.append(f"[dim]{len(entries)} entries  ·  highlighted = current target account[/]")
     return tuple(lines)
 
 
 def get_logwatch_shared(entries: list[_LogEntry], candidate,
-                        group_by_session: bool = False) -> tuple[str, ...]:
-    """Free full log — candidate highlighted, claimed-IP mismatches in orange."""
+                        group_by_session: bool = False,
+                        upgrade_highlight: bool = False) -> tuple[str, ...]:
+    """Free full log — candidate highlighted, claimed-IP mismatches in orange.
+    With the log_highlight upgrade, suspicious lines are pre-coloured."""
     return _lw_render(entries, candidate.id, candidate,
-                      group_by_session=group_by_session)
+                      group_by_session=group_by_session,
+                      upgrade_highlight=upgrade_highlight)
 
 
 def run_logwatch_shared(entries: list[_LogEntry], candidate, state,
@@ -1285,7 +1560,9 @@ def _stego_pixel_grid(candidate: Candidate, tier: str) -> list[str]:
                       for d in candidate.truth.discrepancies)
     has_c2      = any(d.kind == DiscrepancyKind.COVERT_C2_CHANNEL
                       for d in candidate.truth.discrepancies)
-    suspicious  = has_payload or has_c2
+    has_enc     = any(d.kind == DiscrepancyKind.ENCRYPTED_PAYLOAD
+                      for d in candidate.truth.discrepancies)  # v2
+    suspicious  = has_payload or has_c2 or has_enc
 
     # Grid dimensions
     if has_c2:
@@ -1408,7 +1685,9 @@ def _stego_image_lines(candidate: Candidate) -> list[str]:
                       for d in candidate.truth.discrepancies)
     has_c2      = any(d.kind == DiscrepancyKind.COVERT_C2_CHANNEL
                       for d in candidate.truth.discrepancies)
-    suspicious  = has_payload or has_c2
+    has_enc     = any(d.kind == DiscrepancyKind.ENCRYPTED_PAYLOAD
+                      for d in candidate.truth.discrepancies)  # v2
+    suspicious  = has_payload or has_c2 or has_enc
 
     img_file    = candidate.dossier.submitted_image_path or "image.png"
     img_type    = "PNG" if img_file.endswith(".png") else "JPEG"
@@ -1483,10 +1762,12 @@ def _stego_scan_lines(candidate: Candidate) -> list[str]:
                       for d in candidate.truth.discrepancies)
     has_c2      = any(d.kind == DiscrepancyKind.COVERT_C2_CHANNEL
                       for d in candidate.truth.discrepancies)
-    suspicious  = has_payload or has_c2
+    has_enc     = any(d.kind == DiscrepancyKind.ENCRYPTED_PAYLOAD
+                      for d in candidate.truth.discrepancies)  # v2
+    suspicious  = has_payload or has_c2 or has_enc
 
     if suspicious:
-        score = rng.randint(63, 91) if has_c2 else rng.randint(48, 72)
+        score = rng.randint(63, 91) if (has_c2 or has_enc) else rng.randint(48, 72)
     else:
         score = rng.randint(4, 28)
 
@@ -1531,7 +1812,9 @@ def _stego_filter_lines(candidate: Candidate) -> list[str]:
                       for d in candidate.truth.discrepancies)
     has_c2      = any(d.kind == DiscrepancyKind.COVERT_C2_CHANNEL
                       for d in candidate.truth.discrepancies)
-    suspicious  = has_payload or has_c2
+    has_enc     = any(d.kind == DiscrepancyKind.ENCRYPTED_PAYLOAD
+                      for d in candidate.truth.discrepancies)  # v2
+    suspicious  = has_payload or has_c2 or has_enc
 
     lines: list[str] = ["", "[#c084fc]-- [FILTER] per-channel LSB breakdown -------------------[/]"]
 
@@ -1542,7 +1825,13 @@ def _stego_filter_lines(candidate: Candidate) -> list[str]:
         lines.append("")
 
     # -- Explicit violation + detail --
-    if has_c2:
+    if has_enc:
+        lines += [
+            "  [#ff5470][b]^ ENCRYPTED_PAYLOAD[/][/]",
+            "  [#6b7785]detail:[/]  payload extracted but XOR/encrypted -- not plaintext",
+            "  [#6b7785]decode:[/]  high-entropy blob (deliberate obfuscation)",
+        ]
+    elif has_c2:
         payload_hint = rng.choice(_ST_C2_PAYLOADS)
         lines += [
             "  [#ff5470][b]^ COVERT_C2_CHANNEL[/][/]",
@@ -1618,3 +1907,326 @@ def run_stegotool_filtered(candidate: Candidate, state) -> ToolResult:
         tool=ToolName.STEGOTOOL, findings=findings,
         raw_lines=raw_lines, summary=summary, filtered=True,
     )
+
+
+# ─── Stegotool stamp mechanic ────────────────────────────────────────────────
+#
+# The stego page's interactive rework. Instead of the scan/filter tiers the
+# player moves a square stamp over the pixel grid and pays STEGO_STAMP_COST ⏱
+# per stamp to reveal what the pixels underneath actually carry.
+#
+# Visual language of a revealed region:
+#   color   → payload TYPE   amber = plaintext LSB payload
+#                            red   = encrypted payload (XOR/obfuscated)
+#                            purple= covert C2 channel (multi-channel)
+#   density → carrier fill   dense block vs sparse scatter inside the zone
+#   size    → zone area      how much of the image the payload occupies
+#
+# Once cumulative revealed coverage of the zone crosses
+# config.STEGO_STAMP_RESOLVE_COVERAGE the signature "resolves" and the
+# explicit ▲ violation label prints — the stamp equivalent of the old filter.
+
+_STAMP_KIND_META: dict[DiscrepancyKind, tuple[str, str, str]] = {
+    # kind → (signature name, hex color, carrier description)
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT: (
+        "AMBER", "#ff8c42", "plaintext-type LSB carrier — dense single-channel block"),
+    DiscrepancyKind.ENCRYPTED_PAYLOAD: (
+        "CRIMSON", "#ff5470", "high-entropy carrier — XOR/encrypted payload"),
+    DiscrepancyKind.COVERT_C2_CHANNEL: (
+        "VIOLET", "#c084fc", "sparse multi-channel scatter — covert C2 beacon pattern"),
+}
+
+
+@dataclass(frozen=True)
+class StegoImageData:
+    """Deterministic, structured render model for one candidate's image."""
+    cols: int
+    rows: int
+    style: int                                   # 0..4 visual style
+    base_rgb: tuple                              # rows × cols of (r, g, b)
+    zone: tuple[int, int, int, int] | None       # (x, y, w, h) — None if clean
+    carrier: frozenset                           # {(x, y)} cells that carry data
+    kind: DiscrepancyKind | None                 # payload type, None if clean
+    density: float                               # carrier fill fraction of zone
+    filename: str
+    width: int
+    height: int
+    file_kb: int
+    img_type: str
+
+
+@dataclass(frozen=True)
+class StampResult:
+    """Outcome of one stamp placement."""
+    total_cells: int
+    anomalous_cells: int          # carrier cells inside the stamp
+    zone_cells_hit: int           # zone cells (carrier or not) inside the stamp
+    signature: str | None         # "AMBER" / "CRIMSON" / "VIOLET" — None if clean miss
+    signature_color: str | None
+    coverage: float               # cumulative zone coverage AFTER this stamp (0..1)
+    resolved: bool                # True the moment coverage crosses the threshold
+
+
+def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
+    """Build the structured pixel-grid model for the stamp minigame.
+
+    Deterministic per candidate (same RNG seeds as the legacy grid renderer,
+    so free-tier visuals stay consistent). Grid size scales with payload
+    severity AND with `day` — bigger, later-day images are harder to sweep
+    (per the Notion design note: 'higher resolution → more pixels'). All the
+    size knobs live in config.STEGO_GRID_* so this can be rebalanced without
+    touching code.
+    """
+    rng = _random.Random(int(candidate.id, 16) ^ 0xB10CA0DE)
+
+    has_payload = any(d.kind == DiscrepancyKind.STEGO_PAYLOAD_PRESENT
+                      for d in candidate.truth.discrepancies)
+    has_c2      = any(d.kind == DiscrepancyKind.COVERT_C2_CHANNEL
+                      for d in candidate.truth.discrepancies)
+    has_enc     = any(d.kind == DiscrepancyKind.ENCRYPTED_PAYLOAD
+                      for d in candidate.truth.discrepancies)
+    suspicious  = has_payload or has_c2 or has_enc
+
+    def _sized(kind_key: str) -> tuple[int, int]:
+        """Base grid for this payload type, grown by day and capped."""
+        base_c, base_r = config.STEGO_GRID_BASE[kind_key]
+        extra = max(0, day - 1)
+        cols = base_c + extra * config.STEGO_GRID_GROWTH_COLS_PER_DAY
+        rows = base_r + extra * config.STEGO_GRID_GROWTH_ROWS_PER_DAY
+        max_c, max_r = config.STEGO_GRID_MAX
+        return (min(cols, max_c), min(rows, max_r))
+
+    # Payload type → grid size, carrier density band
+    if has_c2:
+        kind, (cols, rows) = DiscrepancyKind.COVERT_C2_CHANNEL, _sized("c2")
+        density = rng.uniform(0.25, 0.45)     # sparse scatter, wide zone
+    elif has_enc:
+        kind, (cols, rows) = DiscrepancyKind.ENCRYPTED_PAYLOAD, _sized("encrypted")
+        density = rng.uniform(0.55, 0.72)     # structured mid-density
+    elif has_payload:
+        kind, (cols, rows) = DiscrepancyKind.STEGO_PAYLOAD_PRESENT, _sized("plaintext")
+        density = rng.uniform(0.80, 0.95)     # dense solid block
+    else:
+        kind, (cols, rows) = None, _sized("clean")
+        density = 0.0
+
+    style = rng.randint(0, 4)
+
+    noise_grid = [[rng.randint(-12, 12) for _ in range(cols)] for _ in range(rows)]
+
+    # Hot zone — same placement approach as the legacy renderer
+    if suspicious:
+        hz_x = rng.randint(0, max(0, cols // 2 - 1))
+        hz_y = rng.randint(0, max(0, rows // 2 - 1))
+        # C2 zones sprawl; plaintext payloads sit in a tighter block
+        w_lo = cols // 3 if has_c2 else max(4, cols // 5)
+        hz_w = rng.randint(w_lo, cols // 2)
+        hz_h = rng.randint(max(3, rows // 4), rows // 2)
+        zone = (hz_x, hz_y, hz_w, hz_h)
+        carrier_rng = _random.Random(int(candidate.id, 16) ^ 0x57A3B007)
+        carrier = frozenset(
+            (x, y)
+            for y in range(hz_y, hz_y + hz_h)
+            for x in range(hz_x, hz_x + hz_w)
+            if carrier_rng.random() < density
+        )
+    else:
+        zone, carrier = None, frozenset()
+
+    def _base_rgb(x: int, y: int) -> tuple[int, int, int]:
+        fx = x / max(1, cols - 1)
+        fy = y / max(1, rows - 1)
+        n  = noise_grid[y][x]
+        if style == 0:   # gradient
+            r = int(40  + fx * 150 + n); g = int(50 + fy * 110 + n); b = int(140 + (1 - fx) * 80 + n)
+        elif style == 1: # thermal
+            dist = ((fx - 0.5) ** 2 + (fy - 0.5) ** 2) ** 0.5
+            heat = max(0.0, 1.0 - dist * 1.8)
+            r = int(80 + heat * 160 + n); g = int(20 + heat * 110 + n); b = int(5 + heat * 50 + n)
+        elif style == 2: # photo
+            blob = max(0.0, 0.9 - ((fx - 0.4) ** 2 + (fy - 0.35) ** 2))
+            r = int(110 + blob * 100 + n); g = int(90 + blob * 80 + n); b = int(70 + blob * 60 + n)
+        elif style == 3: # blueprint
+            r = int(8 + abs(n) // 4); g = int(18 + abs(n) // 4); b = int(55 + fx * 45 + fy * 25 + n)
+        else:            # terminal
+            r = int(4 + abs(n) // 4); g = int(35 + fy * 55 + fx * 30 + n); b = int(4 + abs(n) // 4)
+        return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+
+    base_rgb = tuple(
+        tuple(_base_rgb(x, y) for x in range(cols))
+        for y in range(rows)
+    )
+
+    meta_rng  = _random.Random(int(candidate.id, 16) ^ 0x57E60001)
+    img_file  = candidate.dossier.submitted_image_path or "image.png"
+    img_type  = "PNG" if img_file.endswith(".png") else "JPEG"
+    width     = meta_rng.choice([640, 800, 1024, 1280])
+    height    = meta_rng.choice([480, 600, 768, 960])
+    file_kb   = meta_rng.randint(180, 820)
+
+    return StegoImageData(
+        cols=cols, rows=rows, style=style, base_rgb=base_rgb,
+        zone=zone, carrier=carrier, kind=kind, density=density,
+        filename=img_file, width=width, height=height,
+        file_kb=file_kb, img_type=img_type,
+    )
+
+
+def charge_stamp(state) -> int:
+    """Deduct one stamp's cost. Raises InsufficientCompute if unaffordable."""
+    cost = config.STEGO_STAMP_COST
+    if state.compute_hours < cost:
+        raise InsufficientCompute(
+            f"Need {cost} ⏱ per stamp, have {state.compute_hours} ⏱"
+        )
+    state.compute_hours -= cost
+    return cost
+
+
+def evaluate_stamp(img: StegoImageData, x: int, y: int, w: int, h: int,
+                   revealed: set) -> StampResult:
+    """Evaluate a stamp at rect (x, y, w, h). Mutates `revealed` (the caller's
+    cumulative set of revealed cells) and reports what this stamp uncovered.
+    """
+    cells = [
+        (cx, cy)
+        for cy in range(y, min(y + h, img.rows))
+        for cx in range(x, min(x + w, img.cols))
+    ]
+    revealed.update(cells)
+
+    if img.zone is None:
+        return StampResult(
+            total_cells=len(cells), anomalous_cells=0, zone_cells_hit=0,
+            signature=None, signature_color=None, coverage=0.0, resolved=False,
+        )
+
+    zx, zy, zw, zh = img.zone
+    zone_cells = zw * zh
+    hit_zone   = sum(1 for (cx, cy) in cells
+                     if zx <= cx < zx + zw and zy <= cy < zy + zh)
+    hit_anom   = sum(1 for c in cells if c in img.carrier)
+
+    covered = sum(1 for (cx, cy) in revealed
+                  if zx <= cx < zx + zw and zy <= cy < zy + zh)
+    coverage = covered / max(1, zone_cells)
+
+    sig_name = sig_col = None
+    if hit_anom and img.kind is not None:
+        sig_name, sig_col, _ = _STAMP_KIND_META[img.kind]
+
+    return StampResult(
+        total_cells=len(cells), anomalous_cells=hit_anom, zone_cells_hit=hit_zone,
+        signature=sig_name, signature_color=sig_col,
+        coverage=coverage,
+        resolved=coverage >= config.STEGO_STAMP_RESOLVE_COVERAGE,
+    )
+
+
+def stamp_log_lines(img: StegoImageData, res: StampResult,
+                    stamp_no: int, x: int, y: int,
+                    reveal_type: bool = False) -> list[str]:
+    """Terminal log block for one stamp placement.
+
+    `reveal_type` gates the payload CLASSIFICATION. Without the filter the
+    player sees that a carrier is present and its density, but must read the
+    stamp's COLOUR on the image to judge the payload type themselves. With the
+    filter active, the named signature (AMBER/CRIMSON/VIOLET) is printed.
+    """
+    head = (f"[#7dd3c0][b]STAMP {stamp_no:02d}[/][/] "
+            f"[dim]@ ({x:>2},{y:>2})  −{config.STEGO_STAMP_COST} ⏱[/]")
+    if res.anomalous_cells == 0:
+        if res.zone_cells_hit:
+            body = (f"  [#ff8c42]{res.zone_cells_hit}[/] cells of disturbed noise "
+                    f"— no carrier bits here, but you're close")
+        else:
+            body = (f"  [#00ff9f]region clean[/] — "
+                    f"0 / {res.total_cells} cells carry LSB data")
+        return [head, body]
+
+    dens = round(100 * res.anomalous_cells / max(1, res.total_cells))
+    _, col, _desc = _STAMP_KIND_META[img.kind]
+    lines = [head]
+    if reveal_type:
+        lines += [
+            f"  [{col}][b]▲ carrier detected[/][/]  "
+            f"{res.anomalous_cells} / {res.total_cells} cells  [dim]({dens}% density)[/]",
+            f"  signature: [{col}][b]{res.signature}[/][/]",
+        ]
+    else:
+        # No filter — report the carrier, but not its type. The revealed
+        # cells are painted in the payload colour on the image; the player
+        # classifies by eye (or spends ⏱ on the filter, F).
+        lines += [
+            f"  [#c8d4e1][b]▲ carrier detected[/][/]  "
+            f"{res.anomalous_cells} / {res.total_cells} cells  [dim]({dens}% density)[/]",
+            f"  signature: [dim]unclassified — read the stamp colour, "
+            f"or run filter (F) to name it[/]",
+        ]
+    lines.append(
+        f"  zone coverage: [b]{round(res.coverage * 100)}%[/]"
+        + ("" if res.resolved else "  [dim]— keep stamping to resolve[/]")
+    )
+    return lines
+
+
+def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> list[str]:
+    """Block printed once when coverage resolves.
+
+    Without the filter (`reveal_type=False`) the zone is confirmed as carrying
+    a payload, but it is NOT named — the player must classify by the stamp
+    colour. With the filter active, the explicit ▲ violation label prints
+    (the stamp-mechanic equivalent of the old filter tier)."""
+    if img.kind is None or img.zone is None:
+        return []
+    sig, col, desc = _STAMP_KIND_META[img.kind]
+    _, _, zw, zh = img.zone
+    dens = round(img.density * 100)
+    size_word = ("sprawling" if zw * zh >= img.cols * img.rows // 4
+                 else "moderate" if zw * zh >= img.cols * img.rows // 8
+                 else "compact")
+    if not reveal_type:
+        return [
+            "",
+            "[#c8d4e1][b]▲ PAYLOAD ZONE MAPPED — carrier confirmed[/][/]",
+            f"  [#6b7785]density:[/]  {dens}% fill",
+            f"  [#6b7785]extent:[/]   {zw}×{zh} px zone ({size_word})",
+            "  [#6b7785]type:[/]     [dim]unclassified — inspect the stamp colour, or run filter (F) to classify[/]",
+        ]
+    return [
+        "",
+        f"[{col}][b]▲ {img.kind.value.upper()} — SIGNATURE RESOLVED[/][/]",
+        f"  [#6b7785]carrier:[/]  {desc}",
+        f"  [#6b7785]density:[/]  {dens}% fill",
+        f"  [#6b7785]extent:[/]   {zw}×{zh} px zone ({size_word})",
+        "  [dim]flag it on the Evidence Board (Tab)[/]",
+    ]
+
+
+def get_stego_stats(candidate: Candidate) -> tuple[str, ...]:
+    """Free-tier statistics block for the stego findings terminal.
+    Same numbers as the legacy free tier, but WITHOUT the pixel grid —
+    the grid now lives in the dedicated image panel."""
+    lines = _stego_image_lines(candidate)
+
+    out: list[str] = []
+    skipping = False
+    for ln in lines:
+        plain = ln
+        if plain.startswith("[#3d6478]┌─"):
+            skipping = True
+            continue
+        if skipping:
+            if plain.startswith("[#3d6478]└"):
+                skipping = False
+            continue
+        out.append(ln)
+    while out and out[0] == "":
+        out.pop(0)
+
+    header = [
+        "[#7dd3c0][b]STAMP ANALYSIS[/][/]  [dim]X to enter stamp mode[/]",
+        f"[dim]arrows move · Space stamp (−{config.STEGO_STAMP_COST} ⏱) · Esc exit[/]",
+        "",
+    ]
+    return tuple(header + out)

@@ -194,7 +194,12 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         correct_verdict=Verdict.ADMIT,
         moral_modifier=0,
         budget=DiscrepancyBudget(minor=1),
-        eligible_kinds=(DiscrepancyKind.AFFILIATION_UNVERIFIED,),
+        eligible_kinds=(
+            DiscrepancyKind.AFFILIATION_UNVERIFIED,
+            DiscrepancyKind.AFTER_HOURS_ACCESS,   # v2: benign minor noise
+            DiscrepancyKind.CLAIMED_IP_MISMATCH,  # v2: benign minor noise
+            DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
+        ),
         handle_style="casual",
         affiliation_pool="legit",
         purpose_pool="legit",
@@ -223,6 +228,12 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.AFFILIATION_UNVERIFIED,
             DiscrepancyKind.MISSING_PUBLIC_PROFILE,
             DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
+            # v2: competence / hygiene failures, not malice
+            DiscrepancyKind.UNSALTED_STORAGE,
+            DiscrepancyKind.CROSS_BREACH_REUSE,
+            DiscrepancyKind.AFTER_HOURS_ACCESS,
+            DiscrepancyKind.CLAIMED_IP_MISMATCH,
+            DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
         ),
         handle_style="casual",
         affiliation_pool="thin",
@@ -241,6 +252,12 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.BRUTE_FORCE_IN_LOG,
             DiscrepancyKind.IMPOSSIBLE_TRAVEL,
             DiscrepancyKind.LEAKED_PASSWORD,
+            # v2: loud, obvious, damning
+            DiscrepancyKind.THREAT_FORUM_MATCH,
+            DiscrepancyKind.CREDENTIAL_STUFFING,
+            DiscrepancyKind.BURNER_IDENTITY,
+            DiscrepancyKind.TYPOSQUAT_HANDLE,
+            DiscrepancyKind.CROSS_BREACH_REUSE,
         ),
         handle_style="noisy",
         affiliation_pool="thin",
@@ -262,6 +279,15 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.INSIDER_BEHAVIOR,
             DiscrepancyKind.IMPOSSIBLE_TRAVEL,
             DiscrepancyKind.AFFILIATION_MISMATCH,
+            # v2: subtle, tool-only evasion craft + optional breadcrumbs
+            # (budget has no minor slot, so the minor breadcrumbs only appear
+            #  if the budget is later widened — kept eligible for variety)
+            DiscrepancyKind.LOW_AND_SLOW,
+            DiscrepancyKind.ENCRYPTED_PAYLOAD,
+            DiscrepancyKind.BURNER_IDENTITY,
+            DiscrepancyKind.TYPOSQUAT_HANDLE,
+            DiscrepancyKind.AFTER_HOURS_ACCESS,
+            DiscrepancyKind.CLAIMED_IP_MISMATCH,
         ),
         handle_style="academic",
         affiliation_pool="elite",       # the camouflage — faked prestigious affiliation
@@ -277,6 +303,10 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         eligible_kinds=(
             DiscrepancyKind.MISSING_PUBLIC_PROFILE,
             DiscrepancyKind.AFFILIATION_UNVERIFIED,
+            # v2: the same evasion craft as the Sneaky Bugger, in service of the cause
+            DiscrepancyKind.LOW_AND_SLOW,
+            DiscrepancyKind.ENCRYPTED_PAYLOAD,
+            DiscrepancyKind.BURNER_IDENTITY,
         ),
         handle_style="elite",
         affiliation_pool="thin",
@@ -327,9 +357,22 @@ _SEVERITY_REVEAL = {
     DiscrepancyKind.IMPOSSIBLE_TRAVEL:      (ToolName.LOGWATCH,   "major"),
     DiscrepancyKind.INSIDER_BEHAVIOR:       (ToolName.LOGWATCH,   "major"),
     DiscrepancyKind.LEAKED_PASSWORD:        (ToolName.HASHCRACK,  "critical"),
-    DiscrepancyKind.WEAK_CREDENTIAL:        (ToolName.HASHCRACK,  "major"),
+    # Issue #29 rework: weak encryption + weak plaintext = MINOR violation —
+    # a hygiene signal, not immediate grounds for denial.
+    DiscrepancyKind.WEAK_CREDENTIAL:        (ToolName.HASHCRACK,  "minor"),
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  (ToolName.STEGOTOOL,  "major"),
     DiscrepancyKind.COVERT_C2_CHANNEL:      (ToolName.STEGOTOOL,  "critical"),
+    # ── v2 additions ──────────────────────────────────────────────────
+    DiscrepancyKind.BURNER_IDENTITY:        (ToolName.GHOSTSCAN,  "major"),
+    DiscrepancyKind.THREAT_FORUM_MATCH:     (ToolName.GHOSTSCAN,  "critical"),
+    DiscrepancyKind.TYPOSQUAT_HANDLE:       (ToolName.GHOSTSCAN,  "major"),
+    DiscrepancyKind.CREDENTIAL_STUFFING:    (ToolName.LOGWATCH,   "critical"),
+    DiscrepancyKind.AFTER_HOURS_ACCESS:     (ToolName.LOGWATCH,   "minor"),
+    DiscrepancyKind.LOW_AND_SLOW:           (ToolName.LOGWATCH,   "critical"),
+    DiscrepancyKind.CROSS_BREACH_REUSE:     (ToolName.HASHCRACK,  "major"),
+    DiscrepancyKind.UNSALTED_STORAGE:       (ToolName.HASHCRACK,  "major"),
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:      (ToolName.STEGOTOOL,  "critical"),
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    (ToolName.DOSSIER,    "minor"),
 }
 
 
@@ -346,9 +389,20 @@ _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "Logins from geographically impossible locations.",
     DiscrepancyKind.INSIDER_BEHAVIOR:       "After-hours access pattern consistent with insider misuse.",
     DiscrepancyKind.LEAKED_PASSWORD:        "Password hash cracked from leaked credential — confirms compromise.",
-    DiscrepancyKind.WEAK_CREDENTIAL:        "Credential cracked in under 100 attempts.",
+    DiscrepancyKind.WEAK_CREDENTIAL:        "Weakly-encrypted password cracked to a weak plaintext (poor hygiene).",
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "Submitted image contains an embedded payload.",
     DiscrepancyKind.COVERT_C2_CHANNEL:      "Image embeds a command-and-control payload pattern.",
+    # ── v2 additions ──────────────────────────────────────────────────
+    DiscrepancyKind.BURNER_IDENTITY:        "Public accounts all created within days of each other — burner identity.",
+    DiscrepancyKind.THREAT_FORUM_MATCH:     "Handle matches an account on a known threat / dark-web forum.",
+    DiscrepancyKind.TYPOSQUAT_HANDLE:       "Handle is a lookalike of a trusted org or person (typosquat).",
+    DiscrepancyKind.CREDENTIAL_STUFFING:    "Log shows one IP hitting many accounts with few tries each — credential stuffing.",
+    DiscrepancyKind.AFTER_HOURS_ACCESS:     "Account activity outside business hours.",
+    DiscrepancyKind.LOW_AND_SLOW:           "Attack activity spread thin over time to evade detection thresholds.",
+    DiscrepancyKind.CROSS_BREACH_REUSE:     "Cracked password recurs across multiple breach corpora — reused credential.",
+    DiscrepancyKind.UNSALTED_STORAGE:       "Submitted credential is unsalted / plaintext-equivalent and cracks instantly.",
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:      "Hidden image payload is XOR/encrypted — deliberate obfuscation.",
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "Claimed connection IP does not match the IP in the submitted logs.",
 }
 
 
@@ -366,13 +420,44 @@ _HC_LEAKED_PASSWORDS = [
     "monkey123!", "sunshine2018", "iloveyou01", "admin2022",
 ]
 
+# Issue #29: obviously-strong plaintexts for clean candidates. When cracked
+# (medium-tier SHA256), the reveal should read as clearly safe.
+_HC_STRONG_PASSWORDS = [
+    "drawkcab16445$&", "Tr0ub4dor&3x9!", "x9#Vq2mLp8@Rz", "qN7!fWc$4kZt2",
+    "K3y$tone-9vXq!", "8Rl@zP4x#mQ7w", "vE5&dHu9!Tc3s", "J6w#bN2q$Yf8z",
+]
+
+_BCRYPT_ALPHABET = ("./ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    "abcdefghijklmnopqrstuvwxyz0123456789")
+
+
+def _fake_bcrypt(rng: random.Random) -> str:
+    """A display-realistic bcrypt hash ($2b$12$ + 53 radix-64 chars).
+
+    Strong-tier encryption (issue #29): never crackable in-game — the
+    plaintext behind it is irrelevant, so none is stored.
+    """
+    return "$2b$12$" + "".join(rng.choice(_BCRYPT_ALPHABET) for _ in range(53))
+
+def stable_hash(*parts) -> int:
+    """Process-independent hash for seeding RNGs.
+
+    Python's builtin hash() salts strings per process (PYTHONHASHSEED), so
+    seeding with hash(tuple-with-string) silently made generation differ
+    between runs — breaking save replay and making tests flaky. SHA-256 of
+    the repr is stable everywhere.
+    """
+    digest = _hashlib.sha256(repr(parts).encode()).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
 def _seeded_rng(game_seed: int, day_number: int, slot_index: int, salt: str) -> random.Random:
     """Per-slot deterministic RNG.
 
     Salting by purpose keeps the name roll independent from the discrepancy
     roll — so swapping one mechanic later doesn't shift the other.
     """
-    return random.Random(hash((game_seed, day_number, slot_index, salt)) & 0xFFFFFFFF)
+    return random.Random(stable_hash(game_seed, day_number, slot_index, salt) & 0xFFFFFFFF)
 
 
 def _make_handle(rng: random.Random, first: str, last: str, style: str) -> str:
@@ -527,7 +612,7 @@ def _pick_archetype_for_slot(
     walk is consistent across slots; the slot index is just an index
     into the shared ordering.
     """
-    day_rng = random.Random(hash((game_seed, day_number, "archetype_bag")) & 0xFFFFFFFF)
+    day_rng = random.Random(stable_hash(game_seed, day_number, "archetype_bag") & 0xFFFFFFFF)
     bag = _shuffled_archetype_bag(day_rng, archetype_mix)
     return bag[slot_index % len(bag)]
 
@@ -579,28 +664,54 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
             commit_email = email   # consistent — nothing to spot
 
     # Compute candidate id early so hash derivation matches tools_bridge
-    cand_id = uuid.UUID(int=hash((game_seed, day.number, slot_index)) & ((1 << 128) - 1)).hex[:12]
+    # 12 hex chars straight from a stable digest. (The old
+    # uuid.UUID(int=hash & …).hex[:12] took the TOP hex digits, which were
+    # all zeros whenever the hash was non-negative — colliding ids.)
+    cand_id = _hashlib.sha256(
+        repr((game_seed, day.number, slot_index, "id")).encode()).hexdigest()[:12]
 
     # Generate submitted_image_path for candidates with stego discrepancies
     _st_images = ["profile.png", "avatar.jpg", "header.png", "screenshot.png"]
     _has_st = any(d.kind in (
         DiscrepancyKind.STEGO_PAYLOAD_PRESENT, DiscrepancyKind.COVERT_C2_CHANNEL,
+        DiscrepancyKind.ENCRYPTED_PAYLOAD,   # v2: also ships a suspect image
     ) for d in discrepancies)
     _rng_st = random.Random(int(cand_id, 16) ^ 0xDE4DC0DE)
     submitted_image_path: str | None = _rng_st.choice(_st_images) if _has_st else None
 
-    # Generate submitted hash for candidates with hash-crackable discrepancies
+    # Generate the submitted credential — issue #29: EVERY candidate now
+    # submits a password in encrypted form. The hash shape encodes the
+    # encryption-strength tier the dossier displays:
+    #   bcrypt  = STRONG (always safe — uncrackable, plaintext irrelevant)
+    #   SHA256  = MEDIUM (crackable with effort)
+    #   MD5     = WEAK   (cracks instantly)
+    # Violation carriers keep their v2 semantics: CROSS_BREACH_REUSE behaves
+    # like a leaked credential (sha256 of a reused leaked password);
+    # UNSALTED_STORAGE behaves like a weak credential (instant-crack md5).
+    # WEAK_CREDENTIAL (#29 rework) = weak encryption + weak plaintext.
     submitted_hash: str | None = None
+    password_plain: str | None = None
     _has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in discrepancies)
     _has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in discrepancies)
-    if _has_leaked or _has_weak:
-        rng_hc = random.Random(int(cand_id, 16) ^ 0xDEAD_C0DE)
-        if _has_leaked:
-            _pw = rng_hc.choice(_HC_LEAKED_PASSWORDS)
-            submitted_hash = _hashlib.sha256(_pw.encode()).hexdigest()
-        else:
-            _pw = rng_hc.choice(_HC_WEAK_PASSWORDS)
-            submitted_hash = _hashlib.md5(_pw.encode()).hexdigest()
+    _has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in discrepancies)
+    _has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in discrepancies)
+    rng_hc = random.Random(int(cand_id, 16) ^ 0xDEAD_C0DE)
+    if _has_leaked or _has_reuse:
+        password_plain = rng_hc.choice(_HC_LEAKED_PASSWORDS)
+        submitted_hash = _hashlib.sha256(password_plain.encode()).hexdigest()
+    elif _has_weak or _has_unsalt:
+        password_plain = rng_hc.choice(_HC_WEAK_PASSWORDS)
+        submitted_hash = _hashlib.md5(password_plain.encode()).hexdigest()
+    elif rng_hc.random() < 0.6:
+        # Clean candidate, strong-tier encryption: bcrypt — no violation
+        # possible, and no ⏱ worth spending on a crack attempt.
+        submitted_hash = _fake_bcrypt(rng_hc)
+        password_plain = None   # uncrackable — plaintext never revealed
+    else:
+        # Clean candidate, medium-tier encryption of an obviously strong
+        # password: crackable, and the reveal confirms there's no issue.
+        password_plain = rng_hc.choice(_HC_STRONG_PASSWORDS)
+        submitted_hash = _hashlib.sha256(password_plain.encode()).hexdigest()
 
     # Generate claimed_ip — what the candidate says they connect from.
     _rng_ip = random.Random(int(cand_id, 16) ^ 0xFACEB00C)
@@ -615,6 +726,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
         submitted_hash=submitted_hash,
         submitted_image_path=submitted_image_path,
         claimed_ip=claimed_ip,
+        password_plain=password_plain,
     )
 
     truth = GroundTruth(

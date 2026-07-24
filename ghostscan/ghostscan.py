@@ -94,7 +94,7 @@ async def _run_scan(target: str, no_save: bool) -> None:
 
         # ── Username across platforms ─────────────────────────────────────────
         _section("Username — Platform Check", "🌐")
-        console.print(f"  Checking [cyan]{username}[/cyan] across 25 platforms...\n")
+        console.print(f"  Checking [cyan]{username}[/cyan] across 26 platforms...\n")
         username_results = await check_username(username, client)
         render_username_summary(username_results)
         all_results["username_check"] = username_results

@@ -167,7 +167,10 @@ class GameState:
     current_day: int
     currency: int
     alignment: int                   # -10 (Dark Web) ... +10 (White Hat)
-    lives: int                       # false-admit strikes remaining
+    site_health: float               # persistent % loss condition (replaces lives, #20)
+    hackdollars: int                 # persistent between-day currency (#21)
+    hackdox_credits: int             # ground-truth reveal consumables (#25)
+    compute_capacity: int            # per-shift ⏱ reset target
     upgrades: set[UpgradeId]
     completed_days: list[DayResult]
     rng_state: tuple                 # so saves resume mid-day reproducibly
@@ -247,7 +250,7 @@ The asymmetric matrix from CLAUDE.md, encoded:
 | DENY  | DENY  | 0 | +2 (advancement) | 0 | -moral_modifier |
 | DENY  | ADMIT | -penalty | 0 | -1 | -moral_modifier |
 
-The moral-modifier line is what gives Dark Web denials and White Hat admits their teeth. A correct *procedural* call against a morally-loaded candidate awards alignment in the opposite direction; a *deliberately wrong* call sacrifices currency/lives to gain alignment.
+The moral-modifier line is what gives Dark Web denials and White Hat admits their teeth. A correct *procedural* call against a morally-loaded candidate awards alignment in the opposite direction; a *deliberately wrong* call sacrifices currency/Site Health to gain alignment.
 
 ---
 
@@ -340,7 +343,7 @@ Five screens total for v1:
 - `intake.py` — the layout above; the heart of the game
 - `tool_result.py` — modal/inline panel when a tool finishes
 - `eod.py` — end-of-day stats, Overseer outro, save & continue
-- `game_over.py` — loss screen (out of lives or quota failed)
+- `game_over.py` — loss screen (Site Health below threshold or quota failed)
 
 Textual widgets are kept thin — they read `core` data and dispatch events. No business logic in widgets.
 
@@ -381,7 +384,7 @@ Textual widgets are kept thin — they read `core` data and dispatch events. No 
 
 - `test_candidate_gen.py` — given fixed seeds, each archetype produces the expected discrepancy budget and `moral_modifier`. Snapshot a handful of candidates and assert they don't drift.
 - `test_rules_engine.py` — for each archetype × Day 1 ruleset, the right rules trigger. White Hat triggers disqualifying rules; Dark Web triggers none.
-- `test_scoring.py` — the asymmetric matrix is enforced. Currency/lives/alignment changes match the table in §6.
+- `test_scoring.py` — the asymmetric matrix is enforced. Currency/Site-Health/alignment changes match the table in §6.
 - `test_day_cycle.py` — phase transitions are valid; saving mid-day and reloading produces the same next state.
 
 The Textual app gets a manual smoke test in v1 (Textual's testing tools exist but the cost isn't worth it for the vertical slice).

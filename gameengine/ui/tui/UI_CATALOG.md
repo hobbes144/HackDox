@@ -20,7 +20,7 @@ HackDoxApp
            └── IntakeScreen  (main play loop — five pages)
                 └── RulesScreen (modal overlay, 0 key)
            └── EODScreen   (end-of-day summary)
-      └── GameOverScreen  (lives depleted)
+      └── GameOverScreen  (Site Health collapsed)
 ```
 
 ---
@@ -112,7 +112,7 @@ HackDoxApp
 ## Widgets
 
 ### StatusHeader
-- One-line strip: game title · day title · candidate slot · compute hours · lives · alignment bar · page tabs
+- One-line strip: game title · day title · candidate slot · compute hours · site health · HD$ · credits · alignment bar · page tabs
 - Updates on every page switch and verdict
 
 ### DossierPanel
@@ -242,7 +242,7 @@ Unrecognised input: random in-universe error message (PERMISSION DENIED / ACCESS
 | Logwatch filter | −3⏱ additional |
 | Stegotool filter | −2⏱ additional |
 
-Starting compute: 50⏱ · Starting lives: 3
+Starting compute: 50⏱ · Site Health: 100% · HackDox Credits: 1
 
 ---
 

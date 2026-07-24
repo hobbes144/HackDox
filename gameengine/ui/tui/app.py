@@ -33,7 +33,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import ContentSwitcher, Footer, Static, TabbedContent, TabPane
 
 from gameengine import config
-from gameengine.core import candidate_gen, scoring, tools_bridge
+from gameengine.core import candidate_gen, persistence, scoring, tools_bridge
 
 # Shortcut so BINDINGS class attributes can be built from config at import time.
 _B = config.KEY_BINDINGS
@@ -51,24 +51,54 @@ from gameengine.core.models import (
 )
 
 # ─── Evidence board item catalog ─────────────────────────────────────────────
+# Single-sourced from rules_content (issue #30): the Evidence Board and the
+# Rules Pages tables render from the SAME catalog, so changing a violation
+# there updates labels, colours, and sorting everywhere at once.
 
-# (group_label, DiscrepancyKind, display_label)
-EVIDENCE_ITEMS: list[tuple[str, DiscrepancyKind, str]] = [
-    ("DOSSIER",     DiscrepancyKind.MISSING_PUBLIC_PROFILE, "Missing public profile"),
-    ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
-    ("DOSSIER",     DiscrepancyKind.AFFILIATION_UNVERIFIED, "Unverified affiliation"),
-    ("OSINT",       DiscrepancyKind.EMAIL_GITHUB_MISMATCH,  "Email / GitHub mismatch"),
-    ("OSINT",       DiscrepancyKind.BREACH_HIT,             "Breach hit"),
-    ("OSINT",       DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,   "Sock puppet accounts"),
-    ("FORENSICS",   DiscrepancyKind.BRUTE_FORCE_IN_LOG,     "Brute force in log"),
-    ("FORENSICS",   DiscrepancyKind.IMPOSSIBLE_TRAVEL,      "Impossible travel"),
-    ("FORENSICS",   DiscrepancyKind.INSIDER_BEHAVIOR,       "Insider behavior"),
-    ("CREDENTIAL",  DiscrepancyKind.LEAKED_PASSWORD,        "Leaked password"),
-    ("CREDENTIAL",  DiscrepancyKind.WEAK_CREDENTIAL,        "Weak credential"),
-    ("STEGO",       DiscrepancyKind.STEGO_PAYLOAD_PRESENT,  "Stego payload"),
-    ("STEGO",       DiscrepancyKind.COVERT_C2_CHANNEL,      "Covert C2 channel"),
-]
+from gameengine.ui.tui import rules_content
+
+EVIDENCE_ITEMS: list[tuple[str, DiscrepancyKind, str]] = list(
+    rules_content.VIOLATION_CATALOG)
 _ITEM_COUNT = len(EVIDENCE_ITEMS)
+
+# ─── Severity → colour, sourced from the generator's single source of truth ──
+# Each violation's text is coloured by its severity so the board reads at a
+# glance: yellow = minor, orange = major, red = critical.
+_SEVERITY: dict[DiscrepancyKind, str] = {
+    kind: sev for kind, (_tool, sev) in candidate_gen._SEVERITY_REVEAL.items()
+}
+_SEV_COLOR = {"minor": "#ffd93d", "major": "#ff8c42", "critical": "#ff5470"}
+
+
+def _sev_color(kind: DiscrepancyKind) -> str:
+    return _SEV_COLOR.get(_SEVERITY.get(kind, "minor"), "#c8d4e1")
+
+
+# Board group order + per-group display metadata: (accent colour, tool hotkey).
+# The hotkey is the tool page each group is investigated on (blank = dossier).
+_GROUP_ORDER = ["DOSSIER", "OSINT", "FORENSICS", "CREDENTIAL", "STEGO"]
+_GROUP_META: dict[str, tuple[str, str]] = {
+    "DOSSIER":    ("#7dd3c0", ""),
+    "OSINT":      ("#6ad4ff", "G"),
+    "FORENSICS":  ("#ffb454", "L"),
+    "CREDENTIAL": ("#c084fc", "H"),
+    "STEGO":      ("#ff8cc8", "S"),
+}
+# Which group a given tool page's board should scroll to when toggled open.
+_BOARD_HOME_GROUP: dict[str, str] = {
+    "evidence-gs": "OSINT",
+    "evidence-hc": "CREDENTIAL",
+    "evidence-lw": "FORENSICS",
+    "evidence-st": "STEGO",
+}
+
+# Order the catalog: groups in _GROUP_ORDER, and within each group by severity
+# ascending (minor → major → critical) so the board reads calm-to-alarming.
+_SEV_RANK = {"minor": 0, "major": 1, "critical": 2}
+EVIDENCE_ITEMS.sort(key=lambda it: (
+    _GROUP_ORDER.index(it[0]),
+    _SEV_RANK.get(_SEVERITY.get(it[1], "minor"), 0),
+))
 
 # Reference data shown on the candidate page and tool sidebars
 _REF_CANDIDATE = """[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
@@ -86,9 +116,11 @@ _REF_CANDIDATE = """[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
 [#00ff9f]recon[/]   run ghostscan  [dim](page 2)[/]
 [#00ff9f]crack[/]   run hashcrack  [dim](page 3)[/]
 [#00ff9f]analyze[/] run logwatch   [dim](page 4)[/]
-[#00ff9f]extract[/] run stegotool  [dim](page 5)[/]
+[#00ff9f]extract[/] stego stamp mode [dim](page 5)[/]
 
 [dim]── other ──────────────────────────[/]
+[#c084fc]reveal[/] spend a HackDox Credit —
+  shows this candidate's ground truth
 [#6b7785]rules[/]  open rulebook
 [#6b7785]help[/]   show command list
 [#6b7785]quit[/]   exit game"""
@@ -129,11 +161,13 @@ _REF_HASHCRACK = """[#7dd3c0][b]COMMANDS — HASHCRACK[/][/]
   WEAK_CREDENTIAL · LEAKED_PASSWORD
   [dim]cost: +4 ⏱[/]
 
-[dim]── hash types ────────────────────[/]
-[dim]MD5    32 hex  = weak[/]
-[dim]SHA1   40 hex  = deprecated[/]
-[dim]SHA256 64 hex  = stronger[/]
-[dim]bcrypt $2b$    = strong[/]
+[dim]── encryption strength ───────────[/]
+[#ff5470]WEAK[/]    [dim]MD5 32 hex — cracks instantly[/]
+[#ffd93d]MEDIUM[/]  [dim]SHA256 64 hex — crackable[/]
+[#00ff9f]STRONG[/]  [dim]bcrypt $2b$ — always safe,
+        don't waste ⏱ cracking it[/]
+[dim]weak enc + weak password
+= WEAK_CREDENTIAL (minor)[/]
 
 [dim]── log events ────────────────────[/]
 [dim]AUTH_FAIL/OK  login attempts[/]
@@ -159,19 +193,36 @@ _REF_LOGWATCH = """[#7dd3c0][b]COMMANDS — LOGWATCH[/][/]
 [dim]── verdict ─────────────────────────[/]
 [#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
 
-_REF_STEGOTOOL = """[#7dd3c0][b]COMMANDS — STEGOTOOL[/][/]
+_REF_STEGOTOOL = """[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]
 
-[#00ff9f]extract[/]  [dim]or[/] [#00ff9f]stegotool[/]  [dim]or[/] [#00ff9f]s[/]
-  composite suspicion score —
-  chi-square, RS analysis,
-  LSB autocorrelation
-  [dim]cost: 2 ⏱[/]
+[#00ff9f]X[/]  [dim]or[/] [#00ff9f]extract[/] [dim]/[/] [#00ff9f]s[/]
+  enter stamp mode on the
+  image viewer (right panel)
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
-  per-channel LSB breakdown —
-  explicit STEGO_PAYLOAD /
-  COVERT_C2_CHANNEL flag
-  [dim]cost: +2 ⏱[/]
+[#00ff9f]arrows[/]  move the stamp
+[#00ff9f]Space[/]   stamp the region
+  [dim]cost: 1 ⏱ per stamp[/]
+[#00ff9f]Esc[/]     exit stamp mode
+
+[#00ff9f]F[/]  [dim]or[/] [#00ff9f]filter[/]  classify payload
+  [dim]cost: 2 ⏱ — names the payload
+  type in the stamp log. Without it,
+  read the stamp COLOUR yourself.[/]
+
+[dim]── signature colors ────────────────[/]
+[#ff8c42]AMBER[/]    plaintext LSB payload
+  [dim]dense solid block[/]
+[#ff5470]CRIMSON[/]  encrypted payload
+  [dim]mid-density, structured[/]
+[#c084fc]VIOLET[/]   covert C2 channel
+  [dim]sparse scatter, wide zone[/]
+[#00ff9f]GREEN[/]    region clean
+
+[dim]── reading the image ───────────────[/]
+[dim]hot zones carry a faint blue tint
+before any ⏱ is spent — stamp where
+the noise looks wrong. reveal ~60%
+of a zone to resolve its ▲ signature[/]
 
 [dim]── verdict ─────────────────────────[/]
 [#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
@@ -194,11 +245,13 @@ _COMMAND_ALIASES: dict[str, tuple[str, object]] = {
     "analyze":    ("tool",    ToolName.LOGWATCH),
     "logwatch":   ("tool",    ToolName.LOGWATCH),
     "l":          ("tool",    ToolName.LOGWATCH),
-    # Stegotool
-    "extract":    ("tool",    ToolName.STEGOTOOL),
-    "stegotool":  ("tool",    ToolName.STEGOTOOL),
-    "stego":      ("tool",    ToolName.STEGOTOOL),
-    "s":          ("tool",    ToolName.STEGOTOOL),
+    # Stegotool — jumps to page 5 and enters stamp mode (no flat tool run)
+    "extract":    ("stamp",   None),
+    "stegotool":  ("stamp",   None),
+    "stego":      ("stamp",   None),
+    "s":          ("stamp",   None),
+    "stamp":      ("stamp",   None),
+    "x":          ("stamp",   None),
     # Filter (enhanced analysis pass)
     "filter":     ("filter",  None),
     "f":          ("filter",  None),
@@ -212,8 +265,14 @@ _COMMAND_ALIASES: dict[str, tuple[str, object]] = {
     "n":          ("next",    None),
     # Overlays / help
     "rules":      ("rules",   None),
+    "evidence":   ("evidence", None),
+    "board":      ("evidence", None),
     "help":       ("help",    None),
     "?":          ("help",    None),
+    # HackDox Credit — ground-truth reveal (issue #25). Works on every page.
+    "reveal":     ("reveal",  None),
+    "credit":     ("reveal",  None),
+    "truth":      ("reveal",  None),
     # Quit
     "quit":       ("quit",    None),
     "exit":       ("quit",    None),
@@ -238,6 +297,62 @@ _PAGE_IDS   = ["page-candidate", "page-ghostscan", "page-hashcrack",
 # ─── Widgets ─────────────────────────────────────────────────────────────────
 
 
+def _hl_email(email: str, upgrades: set) -> str:
+    """Auto-highlight upgrade (issue #23): colour-code the email domain when
+    the matching whitelist/blacklist HUD upgrade is owned. No-op otherwise."""
+    cls = tools_bridge.classify_email_domain(email)
+    if cls == "approved" and config.UPGRADE_EMAIL_APPROVED in upgrades:
+        return f"[#00ff9f]{email}  ✓[/]"
+    if cls == "prohibited" and config.UPGRADE_EMAIL_PROHIBITED in upgrades:
+        return f"[#ff5470]{email}  ✗ prohibited[/]"
+    return email
+
+
+def _hl_affil(affil: str, upgrades: set) -> str:
+    """Auto-highlight upgrade (issue #23): colour-code the claimed org when
+    the matching whitelist/blacklist HUD upgrade is owned. No-op otherwise."""
+    cls = tools_bridge.classify_affiliation(affil)
+    if cls == "approved" and config.UPGRADE_AFFIL_APPROVED in upgrades:
+        return f"[#00ff9f]{affil}  ✓[/]"
+    if cls == "prohibited" and config.UPGRADE_AFFIL_PROHIBITED in upgrades:
+        return f"[#ff5470]{affil}  ✗ prohibited[/]"
+    return affil
+
+
+# ─── Dossier password field (issue #29) ──────────────────────────────────────
+# Every dossier shows the submitted password in encrypted form plus its
+# encryption-strength tier (derived from the hash shape). After Hashcrack
+# runs, the cracked plaintext is shown in place across all pages.
+#
+# Panel convention for `cracked_password`:
+#   None → not attempted yet   ·   "" → attempted, bcrypt held (uncracked)
+#   str  → cracked plaintext
+
+_PW_STRENGTH_META: dict[str, tuple[str, str, str]] = {
+    "weak":   ("#ff5470", "WEAK ENC",   "MD5"),
+    "medium": ("#ffd93d", "MEDIUM ENC", "SHA256"),
+    "strong": ("#00ff9f", "STRONG ENC", "bcrypt"),
+}
+
+
+def _password_markup(dossier, cracked_password: str | None,
+                     prefix_len: int = 14) -> tuple[str, str]:
+    """(hash line, state line) for the dossier password field."""
+    strength = tools_bridge.password_strength(dossier.submitted_hash)
+    if strength is None:
+        return "[dim](none)[/]", ""
+    col, label, algo = _PW_STRENGTH_META[strength]
+    head = (f"{dossier.submitted_hash[:prefix_len]}…  "
+            f"[{col}][b]{label}[/][/] [#6b7785]{algo}[/]")
+    if cracked_password is None:
+        state = "[dim]encrypted — run hashcrack (H) to attempt crack[/]"
+    elif cracked_password == "":
+        state = "[#00ff9f]✓ uncracked — strongest tier is always safe[/]"
+    else:
+        state = f"[#c084fc]cracked →[/]  [b #e8f0f8]{cracked_password}[/]"
+    return head, state
+
+
 class StatusHeader(Static):
     """One-line status + page-tab strip."""
 
@@ -252,7 +367,25 @@ class StatusHeader(Static):
         self.page_index  = page_index
 
     def render(self) -> str:
-        hearts = "♥" * self.state.lives + "·" * (config.STARTING_LIVES - self.state.lives)
+        h    = self.state.site_health
+        hcol = ("#00ff9f" if h >= config.SITE_HEALTH_REWARD_THRESHOLD else
+                "#ffd93d" if h >= config.SITE_HEALTH_LOSS_THRESHOLD + 15 else
+                "#ff5470")
+        # ⏱ is a finite daily pool now (issue #27) — colour the balance by
+        # scarcity and keep every tool's effective cost in view.
+        cp   = self.state.compute_hours
+        ccol = "#ffb454" if cp >= 15 else "#ff8c42" if cp >= 6 else "#ff5470"
+        costs = "·".join(
+            f"{k}{tools_bridge.tool_cost(self.state, t)}"
+            for k, t in (("G", "ghostscan"), ("H", "hashcrack"),
+                         ("L", "logwatch"),  ("S", "stegotool"))
+        )
+        creds = ("▮" * self.state.hackdox_credits
+                 + "▯" * max(0, config.HACKDOX_CREDIT_MAX - self.state.hackdox_credits))
+        # Health only moves at end of day (#20 rework) — show the pending
+        # delta accumulated by today's verdicts so the player can track it.
+        pend = sum(r.site_health_delta for r in self.state.pending_results)
+        pend_s = f" [dim]({pend:+.1f} eod)[/]" if pend else ""
         align  = self.state.alignment
         bar    = ""
         for v in range(-4, 5):
@@ -261,13 +394,17 @@ class StatusHeader(Static):
             f"[b]◉ [{i+1}]{n}[/]" if i == self.page_index else f"[dim]○ [{i+1}]{n}[/]"
             for i, n in enumerate(_PAGE_NAMES)
         )
+        # Two-line layout: player resources & standings up top, the page
+        # tab strip on its own line beneath.
         return (
             f"[#00ff9f][b]HACKDOX[/][/]  [dim]│[/]  [b]{self.day.title}[/]  "
             f"[dim]│[/]  [{self.slot_index + 1}/{self.day.candidate_count}]  "
-            f"[dim]│[/]  [#ffb454]{self.state.compute_hours} ⏱[/]  "
-            f"[#ff5470]{hearts}[/]  "
+            f"[dim]│[/]  [{ccol}]{cp} ⏱[/] [dim]{costs}[/]  "
+            f"[{hcol}]⛨{h:.0f}%[/]{pend_s}  "
+            f"[#00ff9f]{self.state.hackdollars}$[/]  "
+            f"[#c084fc]{creds}[/]  "
             f"[{'#ff5470' if align < 0 else '#00ff9f'}]{bar}[/]"
-            f"  [dim]│[/]  {tabs}"
+            f"\n{tabs}"
         )
 
     def refresh_status(self, state: GameState, slot_index: int,
@@ -287,6 +424,8 @@ class DossierPanel(Static):
         super().__init__(id="dossier", classes="panel")
         self.border_title = " Dossier "
         self._candidate: Candidate | None = None
+        self.upgrades: set = set()   # auto-highlight upgrades (issue #23)
+        self.cracked_password: str | None = None   # issue #29 password state
 
     def set_candidate(self, candidate: Candidate) -> None:
         self._candidate = candidate
@@ -299,22 +438,20 @@ class DossierPanel(Static):
         gh   = d.claimed_github       or "[dim](none)[/]"
         ip   = d.claimed_ip           or "[dim](none)[/]"
         img  = d.submitted_image_path or "[dim](none)[/]"
-        if d.submitted_hash:
-            htype = "MD5" if len(d.submitted_hash) == 32 else "SHA256"
-            h_str = f"{d.submitted_hash[:20]}...  [#6b7785]{htype}[/]"
-        else:
-            h_str = "[dim](none)[/]"
+        pw_head, pw_state = _password_markup(d, self.cracked_password,
+                                             prefix_len=20)
         rows = [
             "[#3d6478]-- identity ------------------------------------------[/]",
             f"  [#6b7785]Name[/]         [b]{c.display_name}[/]",
             f"  [#6b7785]Handle[/]       {c.handle}",
-            f"  [#6b7785]Email[/]        {c.email}",
-            f"  [#6b7785]Affiliation[/]  {c.claimed_affiliation}",
+            f"  [#6b7785]Email[/]        {_hl_email(c.email, self.upgrades)}",
+            f"  [#6b7785]Affiliation[/]  {_hl_affil(c.claimed_affiliation, self.upgrades)}",
             f"  [#6b7785]GitHub[/]       {gh}",
             "",
             "[#3d6478]-- submitted artifacts --------------------------------[/]",
             f"  [#6b7785]IP[/]           {ip}",
-            f"  [#6b7785]Hash[/]         {h_str}",
+            f"  [#6b7785]Password[/]     {pw_head}",
+            *( [f"               {pw_state}"] if pw_state else [] ),
             f"  [#6b7785]Image[/]        {img}",
             "",
             "[#3d6478]-- stated purpose ------------------------------------[/]",
@@ -334,6 +471,8 @@ class CondensedDossier(Static):
         super().__init__(id=widget_id, classes="panel condensed-dossier")
         self.border_title = " Dossier "
         self._candidate: Candidate | None = None
+        self.upgrades: set = set()   # auto-highlight upgrades (issue #23)
+        self.cracked_password: str | None = None   # issue #29 password state
 
     def set_candidate(self, candidate: Candidate) -> None:
         self._candidate = candidate
@@ -343,15 +482,25 @@ class CondensedDossier(Static):
         if self._candidate is None:
             return "[dim]—[/]"
         c  = self._candidate
-        gh = c.dossier.claimed_github or "[dim](none)[/]"
-        ip = c.dossier.claimed_ip     or "[dim](none)[/]"
+        d   = c.dossier
+        gh  = d.claimed_github or "[dim](none)[/]"
+        ip  = d.claimed_ip     or "[dim](none)[/]"
+        img = d.submitted_image_path or "[dim](none)[/]"
+        pw_head, pw_state = _password_markup(d, self.cracked_password,
+                                             prefix_len=10)
         return "\n".join([
             f"[#6b7785]Name[/]   [b]{c.display_name}[/]",
             f"[#6b7785]Handle[/] {c.handle}",
-            f"[#6b7785]Email[/]  {c.email}",
-            f"[#6b7785]IP[/]     {ip}",
-            f"[#6b7785]Org[/]    {c.claimed_affiliation}",
+            f"[#6b7785]Email[/]  {_hl_email(c.email, self.upgrades)}",
+            f"[#6b7785]Org[/]    {_hl_affil(c.claimed_affiliation, self.upgrades)}",
             f"[#6b7785]GitHub[/] {gh}",
+            "[#3d6478]-- submitted --[/]",
+            f"[#6b7785]IP[/]     {ip}",
+            f"[#6b7785]Passwd[/] {pw_head}",
+            *( [f"       {pw_state}"] if pw_state else [] ),
+            f"[#6b7785]Image[/]  {img}",
+            "[#3d6478]-- purpose --[/]",
+            f"[italic]{c.claimed_purpose}[/]",
         ])
 
 
@@ -361,6 +510,7 @@ class ChatPanel(VerticalScroll):
     def __init__(self) -> None:
         super().__init__(id="chat", classes="panel")
         self.border_title = " Chat "
+        self.upgrades: set = set()   # Sentiment Scanner upgrade (issue #23)
 
     _TAG_STYLE: dict[str, tuple[str, str]] = {
         "neutral":  ("#c8d4e1", ""),
@@ -381,96 +531,262 @@ class ChatPanel(VerticalScroll):
             else:
                 col, sty = self._TAG_STYLE.get(tag, ("#c8d4e1", ""))
             markup = f"[{col} {sty}]{line.text}[/]" if sty else f"[{col}]{line.text}[/]"
-            self.mount(Static(f"[#6b7785]{line.timestamp}[/]  [b]{first}:[/]  {markup}"))
+            # Sentiment Scanner upgrade (issue #23): ⚠-mark hostile text.
+            warn = ("[#ff5470][b]⚠ [/][/]"
+                    if tag == "hostile" and config.UPGRADE_CHAT_HOSTILE in self.upgrades
+                    else "")
+            self.mount(Static(f"[#6b7785]{line.timestamp}[/]  [b]{first}:[/]  {warn}{markup}"))
         self.mount(Static(""))
 
 
-class EvidenceBoard(Static):
-    """Player-controlled evidence checklist.
+class EvidenceState:
+    """Shared evidence record for the current candidate.
 
-    Nothing is ever written here automatically. The player uses ↑↓ to
-    move the cursor and Space to toggle a flag. ← / → are NOT consumed
-    here — they bubble up to the screen for page navigation.
+    The state lives here, not in the widget, so a single record can be
+    displayed by several `EvidenceBoard` views at once — the inline board on
+    the Candidate page plus the toggleable board on each tool page — and they
+    all stay in sync.
+
+    Each violation has one of three states, cycled with Space:
+        "unknown" (default, not recorded) → "marked" (present) → "absent"
+        (ruled out) → "unknown" …
+    Only "marked" kinds feed scoring, so the contract is unchanged:
+    `get_flags()` still returns the `set[DiscrepancyKind]` the player asserts
+    are present.
+    """
+
+    STATES = ("unknown", "marked", "absent")
+
+    def __init__(self) -> None:
+        # kind → "marked" | "absent"; unknown kinds are simply absent from dict.
+        self._states: dict[DiscrepancyKind, str] = {}
+
+    def clear(self) -> None:
+        self._states.clear()
+
+    def cycle(self, kind: DiscrepancyKind) -> None:
+        """Advance a violation through unknown → marked → absent → unknown."""
+        cur = self._states.get(kind)          # None == unknown
+        if cur is None:
+            self._states[kind] = "marked"
+        elif cur == "marked":
+            self._states[kind] = "absent"
+        else:                                  # "absent" → unknown
+            self._states.pop(kind, None)
+
+    def state_of(self, kind: DiscrepancyKind) -> str:
+        return self._states.get(kind, "unknown")
+
+    def is_flagged(self, kind: DiscrepancyKind) -> bool:
+        return self._states.get(kind) == "marked"
+
+    def get_flags(self) -> set[DiscrepancyKind]:
+        # Scoring contract: only "marked" kinds count as player-asserted.
+        return {k for k, v in self._states.items() if v == "marked"}
+
+
+class EvidenceBoard(VerticalScroll):
+    """Player-controlled evidence checklist (a *view* over EvidenceState).
+
+    A scrollable container so all 25 items stay reachable regardless of
+    terminal height. Nothing is ever written here automatically. The player
+    uses ↑↓ to move the cursor and Space to toggle a flag. ← / → are NOT
+    consumed here — they bubble up to the screen for page navigation.
+
+    Several boards share one `EvidenceState`, so flagging a finding on a tool
+    page is immediately reflected on the Candidate page board and vice versa.
+    Each view keeps its own cursor. Content lives in an inner `Static`
+    (`self._content`) so the container can scroll it.
     """
 
     can_focus = True
 
-    def __init__(self) -> None:
-        super().__init__(id="evidence-board")
-        self.border_title = " Evidence Board  [dim](Tab to focus · ↑↓ cursor · Space flag)[/] "
+    def __init__(self, state: "EvidenceState", widget_id: str = "evidence-board",
+                 classes: str | None = None, summary: bool = False,
+                 home_group: str | None = None) -> None:
+        super().__init__(id=widget_id, classes=classes)
+        # Summary mode (Candidate page): read-only — lists only the violations
+        # the player has flagged. Editable mode (tool pages): full checklist.
+        self._summary = summary
+        self._home_group = home_group
+        if summary:
+            self.can_focus = False
+            self.border_title = " FLAGGED EVIDENCE "
+        else:
+            self.border_title = " EVIDENCE BOARD  [dim](↑↓ move · Space flag)[/] "
+        self._state = state
         self._cursor: int = 0
-        self._flags: set[DiscrepancyKind] = set()
         self._focused: bool = False
+        self._cursor_line: int = 0
+        self._content = Static(id=f"{widget_id}-content")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def on_mount(self) -> None:
+        self.repaint()
 
     # ── State management ──────────────────────────────────────────────
 
-    def clear(self) -> None:
+    def repaint(self) -> None:
+        """Rebuild the inner Static and keep the cursor row in view."""
+        self._content.update(self._render_text())
+        if not self._summary and self._focused:
+            try:
+                self.scroll_to(y=max(0, self._cursor_line - 3), animate=False)
+            except Exception:
+                pass
+
+    def reset_cursor(self) -> None:
+        """Reset this view's cursor and repaint (flags are cleared on the
+        shared state separately, then all views are repainted)."""
         self._cursor = 0
-        self._flags.clear()
-        self.refresh()
+        self.repaint()
+        try:
+            self.scroll_home(animate=False)
+        except Exception:
+            pass
+
+    def focus_home_group(self) -> None:
+        """Jump the cursor to this board's home group and scroll to it — used
+        when the board is toggled open on a tool page so the relevant group is
+        visible immediately."""
+        if self._home_group:
+            for idx, (group, _k, _l) in enumerate(EVIDENCE_ITEMS):
+                if group == self._home_group:
+                    self._cursor = idx
+                    break
+        self.repaint()
 
     def get_flags(self) -> set[DiscrepancyKind]:
-        return set(self._flags)
+        return self._state.get_flags()
 
     # ── Focus tracking ────────────────────────────────────────────────
 
     def on_focus(self) -> None:
         self._focused = True
-        self.refresh()
+        self.repaint()
 
     def on_blur(self) -> None:
         self._focused = False
-        self.refresh()
+        self.repaint()
 
     # ── Key handling ──────────────────────────────────────────────────
 
     def on_key(self, event: Key) -> None:
+        if self._summary:
+            return   # read-only summary — editing happens on tool pages
         if event.key == "up":
             self._cursor = max(0, self._cursor - 1)
             event.stop()
-            self.refresh()
+            self.repaint()
         elif event.key == "down":
             self._cursor = min(_ITEM_COUNT - 1, self._cursor + 1)
             event.stop()
-            self.refresh()
+            self.repaint()
         elif event.key == "space":
             kind = EVIDENCE_ITEMS[self._cursor][1]
-            if kind in self._flags:
-                self._flags.discard(kind)
-            else:
-                self._flags.add(kind)
+            # Cycle: unknown → marked → absent → unknown.
+            self._state.cycle(kind)
             event.stop()
-            self.refresh()
+            self.repaint()  # immediate repaint for this board
+            # Repaint other board views so shared state stays in sync.
+            for board in self.app.query(EvidenceBoard):
+                if board is not self:
+                    board.repaint()
         # ← / → are NOT stopped — they bubble to IntakeScreen for page nav.
 
     # ── Rendering ─────────────────────────────────────────────────────
 
-    def render(self) -> str:
+    def _render_text(self) -> str:
+        if self._summary:
+            return self._render_summary()
         lines: list[str] = []
         current_group = ""
+        # Left gutter reserved for a prominent flag indicator; text is then
+        # indented so it sits nearer the centre of the panel.
+        INDENT = "   "
         for idx, (group, kind, label) in enumerate(EVIDENCE_ITEMS):
             if group != current_group:
-                _hints = {"OSINT": "[dim] G[/]", "FORENSICS": "[dim] L[/]",
-                           "CREDENTIAL": "[dim] H[/]", "STEGO": "[dim] S[/]"}
-                hint = _hints.get(group, "")
-                sep = "─" * max(1, 22 - len(group))
-                lines.append(f"[#2e3d4f]── {group}[/]{hint}[#2e3d4f] {sep}[/]")
+                gcolor, hotkey = _GROUP_META.get(group, ("#7dd3c0", ""))
+                hint = f"  [dim on #10161d] {hotkey} [/]" if hotkey else ""
+                if current_group:
+                    lines.append("")  # spacer between groups
+                lines.append(f"  [{gcolor}][b]▎ {group}[/][/]{hint}")
                 current_group = group
 
-            flagged  = kind in self._flags
+            state     = self._state.state_of(kind)
             at_cursor = idx == self._cursor and self._focused
-            flag_str = "[#ffb454]✓[/]" if flagged else " "
+            sev       = _sev_color(kind)
+
+            # 4-column gutter carries the state indicator:
+            #   marked  → bold severity bar  (present)
+            #   absent  → muted ✗ marker     (ruled out)
+            #   unknown → blank              (no icon)
+            if state == "marked":
+                gutter = f"[{sev}][b]▐██▌[/][/]"
+            elif state == "absent":
+                gutter = "[#6b7785] ✗  [/]"
+            else:
+                gutter = "    "
 
             if at_cursor:
-                lines.append(f"  {flag_str} [reverse] {label} [/]")
-            elif flagged:
-                lines.append(f"  {flag_str} [#ffb454]{label}[/]")
+                self._cursor_line = len(lines)
+                lines.append(f"{gutter}{INDENT}[reverse] {label} [/]")
+            elif state == "marked":
+                lines.append(f"{gutter}{INDENT}[{sev}][b]{label}[/][/]")
+            elif state == "absent":
+                lines.append(f"{gutter}{INDENT}[#6b7785][strike]{label}[/][/]")
             else:
-                lines.append(f"  {flag_str} [#c8d4e1]{label}[/]")
+                lines.append(f"{gutter}{INDENT}[{sev}]{label}[/]")
 
         if not self._focused:
             lines.append("")
-            lines.append("[dim]Tab to focus · ↑↓ move · Space flag[/]")
+            lines.append("  [dim]Tab to focus · ↑↓ move · Space cycles unknown/marked/absent[/]")
+        return "\n".join(lines)
+
+    def _render_summary(self) -> str:
+        """Candidate-page view: a horizontal category strip across the top,
+        then the violations the player has recorded — marked (present) in
+        severity colour, absent (ruled out) muted and struck through."""
+        marked = self._state.get_flags()
+        recorded = [(g, k, l) for g, k, l in EVIDENCE_ITEMS
+                    if self._state.state_of(k) != "unknown"]
+        marked_groups = {g for g, k, _l in EVIDENCE_ITEMS if k in marked}
+
+        # Category strip — all groups across the top; those with a marked
+        # (present) violation are lit.
+        chips: list[str] = []
+        for g in _GROUP_ORDER:
+            gcolor, _hk = _GROUP_META[g]
+            if g in marked_groups:
+                chips.append(f"[{gcolor}][b] {g} [/][/]")
+            else:
+                chips.append(f"[#3a4a58] {g} [/]")
+        lines: list[str] = ["  ".join(chips),
+                            "[#1c2733]" + "─" * 46 + "[/]", ""]
+
+        if not recorded:
+            lines.append("[dim]No evidence recorded for this candidate.[/]")
+            lines.append("")
+            lines.append("[dim]Open a tool page and press [b]Tab[/] to record evidence.[/]")
+            return "\n".join(lines)
+
+        current_group = ""
+        for group, kind, label in recorded:
+            if group != current_group:
+                gcolor, _hk = _GROUP_META.get(group, ("#7dd3c0", ""))
+                lines.append(f"[{gcolor}][b]▎ {group}[/][/]")
+                current_group = group
+            if self._state.state_of(kind) == "marked":
+                sev = _sev_color(kind)
+                lines.append(f"    [{sev}][b]▲ {label}[/][/]")
+            else:  # absent — ruled out
+                lines.append(f"    [#6b7785]✗ [strike]{label}[/][/]")
+        n_m = len(marked)
+        n_a = len(recorded) - n_m
+        lines.append("")
+        lines.append(f"[dim]{n_m} marked · {n_a} ruled out[/]")
         return "\n".join(lines)
 
 
@@ -498,7 +814,8 @@ class OverseerPanel(Static):
         if result.correct:
             self._correct += 1
         self._total += 1
-        self._compute_spent += max(0, compute_before - compute_after + result.compute_delta)
+        # Issue #27: verdicts never grant ⏱, so spend is a simple difference.
+        self._compute_spent += max(0, compute_before - compute_after)
         self.refresh()
 
     def reset(self) -> None:
@@ -631,6 +948,24 @@ class ToolTerminal(VerticalScroll):
         rows.append("")
         self.mount(Static("\n".join(rows), classes="terminal-row"))
 
+    def set_result(self, result: tools_bridge.ToolResult) -> None:
+        """REPLACE the terminal content with one result (issue #28 — the
+        ghostscan filter re-renders the report in place instead of stacking
+        a second copy below the first)."""
+        self.remove_children()
+        self._empty_label = None
+        self.add_result(result)
+        self.scroll_home(animate=False)
+
+    def add_lines(self, lines: list[str] | tuple[str, ...]) -> None:
+        """Append a raw markup block (used by the stego stamp log)."""
+        if self._empty_label is not None:
+            self._empty_label.remove()
+            self._empty_label = None
+        block = Static("\n".join(lines) + "\n", classes="terminal-row")
+        self.mount(block)
+        self.scroll_end(animate=False)
+
     def add_no_submission(self, label: str) -> None:
         if self._empty_label is not None:
             self._empty_label.remove()
@@ -728,6 +1063,164 @@ class BreachListPanel(VerticalScroll):
 
         self._content.update("\n".join(lines))
         self.scroll_home(animate=False)
+
+
+class StegoImagePanel(VerticalScroll):
+    """Right column of the Stegotool page — the interactive image viewer.
+
+    Renders the candidate's submitted image as a colored pixel grid
+    (tools_bridge.StegoImageData) and hosts the STAMP minigame:
+
+      X       enter/exit stamp mode (handled by IntakeScreen)
+      arrows  move the square stamp
+      Space   stamp — reveals the cells underneath (−STEGO_STAMP_COST ⏱)
+
+    Revealed cells re-render by what they carry:
+      carrier cells → payload-type color (amber/crimson/violet)
+      clean cells   → faint green wash
+    The subtle free-tier tint over the hot zone is preserved, so a sharp
+    eye can still pre-read the image before spending a single ⏱.
+    """
+
+    can_focus = False
+
+    _MOVES = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+
+    def __init__(self) -> None:
+        super().__init__(id="stego-image-panel", classes="panel")
+        self.border_title = " Image Viewer "
+        self._content: Static | None = None
+        self._img: "tools_bridge.StegoImageData | None" = None
+        self._revealed: set[tuple[int, int]] = set()
+        self._stamp_mode = False
+        self._cur_x = 0
+        self._cur_y = 0
+        self._stamps_used = 0
+        self.tint_boost = False   # Spectral Lens upgrade (issue #23)
+
+    def compose(self) -> ComposeResult:
+        self._content = Static("[dim italic]Awaiting candidate...[/]",
+                               id="stego-image-content")
+        yield self._content
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    @property
+    def image(self) -> "tools_bridge.StegoImageData | None":
+        return self._img
+
+    @property
+    def stamps_used(self) -> int:
+        return self._stamps_used
+
+    @property
+    def stamp_rect(self) -> tuple[int, int, int, int]:
+        return (self._cur_x, self._cur_y,
+                config.STEGO_STAMP_W, config.STEGO_STAMP_H)
+
+    def load_candidate(self, candidate: "Candidate", day: int = 1) -> None:
+        self._img = tools_bridge.build_stego_image(candidate, day)
+        self._revealed = set()
+        self._stamp_mode = False
+        self._stamps_used = 0
+        self._cur_x = self._cur_y = 0
+        img = self._img
+        self.border_title = (f" Image Viewer — {img.filename} "
+                             f"{img.width}×{img.height} {img.img_type} {img.file_kb}KB ")
+        self._rebuild_content()
+
+    def enter_stamp_mode(self) -> None:
+        self._stamp_mode = True
+        self._rebuild_content()
+
+    def exit_stamp_mode(self) -> None:
+        self._stamp_mode = False
+        self._rebuild_content()
+
+    def move_stamp(self, key: str) -> None:
+        if self._img is None or key not in self._MOVES:
+            return
+        dx, dy = self._MOVES[key]
+        self._cur_x = max(0, min(self._img.cols - config.STEGO_STAMP_W,
+                                 self._cur_x + dx))
+        self._cur_y = max(0, min(self._img.rows - config.STEGO_STAMP_H,
+                                 self._cur_y + dy))
+        self._rebuild_content()
+
+    def do_stamp(self) -> "tools_bridge.StampResult | None":
+        """Evaluate the stamp at the cursor. Caller charges ⏱ first."""
+        if self._img is None:
+            return None
+        x, y, w, h = self.stamp_rect
+        res = tools_bridge.evaluate_stamp(self._img, x, y, w, h, self._revealed)
+        self._stamps_used += 1
+        self._rebuild_content()
+        return res
+
+    # ── Content rendering ─────────────────────────────────────────────────
+    # NOTE: not named _render() — that's a Textual base-class method.
+
+    def _rebuild_content(self) -> None:
+        if self._content is None or self._img is None:
+            return
+        img = self._img
+        sx, sy, sw, sh = self.stamp_rect
+        in_zone = (lambda x, y: False) if img.zone is None else (
+            lambda x, y, z=img.zone: z[0] <= x < z[0] + z[2] and z[1] <= y < z[1] + z[3])
+
+        lines: list[str] = []
+        for y in range(img.rows):
+            row = ""
+            for x in range(img.cols):
+                r, g, b = img.base_rgb[y][x]
+                revealed = (x, y) in self._revealed
+                zone_cell = in_zone(x, y)
+
+                if revealed and (x, y) in img.carrier:
+                    # Payload-type color with deterministic jitter
+                    j = (x * 7 + y * 13) % 41
+                    if img.kind is DiscrepancyKind.COVERT_C2_CHANNEL:
+                        r, g, b = 150 + j // 2, 85 + j // 3, 235
+                    elif img.kind is DiscrepancyKind.ENCRYPTED_PAYLOAD:
+                        r, g, b = 210 + j // 2, 25 + j // 3, 10 + j // 4
+                    else:  # STEGO_PAYLOAD_PRESENT
+                        r, g, b = 185 + j, 75 + j // 2, 15 + j // 4
+                elif revealed and zone_cell:
+                    # Disturbed noise inside the zone but no carrier bit
+                    r = min(255, r + 20); b = min(255, b + 20)
+                elif revealed:
+                    # Confirmed clean — faint green wash
+                    g = min(255, g + 45); r = max(0, r - 10); b = max(0, b - 10)
+                elif zone_cell:
+                    # Free-tier tell: subtle blue push over the hot zone.
+                    # The Spectral Lens upgrade (issue #23) strengthens it.
+                    if self.tint_boost:
+                        b = min(255, b + 70); r = max(0, r - 30)
+                    else:
+                        b = min(255, b + 35); r = max(0, r - 15)
+
+                # Stamp cursor overlay
+                if self._stamp_mode and sx <= x < sx + sw and sy <= y < sy + sh:
+                    on_edge = (x in (sx, sx + sw - 1) or y in (sy, sy + sh - 1))
+                    if on_edge:
+                        row += "[#00ffd5]▒[/]"
+                        continue
+                    r = min(255, r + 45); g = min(255, g + 45); b = min(255, b + 45)
+
+                r = max(0, min(255, r)); g = max(0, min(255, g)); b = max(0, min(255, b))
+                row += f"[#{r:02x}{g:02x}{b:02x}]█[/]"
+            lines.append(row)
+
+        lines.append("")
+        spent = self._stamps_used * config.STEGO_STAMP_COST
+        if self._stamp_mode:
+            lines.append(f"[#00ffd5][b]STAMP MODE[/][/]  [dim]@ ({sx},{sy})[/]  "
+                         f"[dim]arrows move · Space stamp (−{config.STEGO_STAMP_COST} ⏱) · Esc exit[/]")
+        else:
+            lines.append(f"[dim]Press [b]X[/] to enter stamp mode[/]")
+        lines.append(f"[dim]stamps: {self._stamps_used} · spent: {spent} ⏱ · "
+                     f"revealed: {len(self._revealed)} px[/]")
+        self._content.update("\n".join(lines))
 
 
 class DebugPanel(Static):
@@ -852,9 +1345,16 @@ class RulesScreen(ModalScreen):
         Binding("escape",         "dismiss_rules", "Close"),
     ]
 
-    def __init__(self, day: Day) -> None:
+    def __init__(self, day: Day, evidence_state: "EvidenceState | None" = None) -> None:
         super().__init__()
         self._day = day
+        # Shared evidence record — lets the player flag evidence from the Rules
+        # overlay too, so the board is always within reach.
+        self._ev_board = (
+            EvidenceBoard(evidence_state, "evidence-rules", "rules-evidence",
+                          home_group="DOSSIER")
+            if evidence_state is not None else None
+        )
 
     def compose(self) -> ComposeResult:
         with Container(id="rules-modal"):
@@ -875,6 +1375,9 @@ class RulesScreen(ModalScreen):
                 with TabPane("Steganography", id="tab-stego"):
                     with VerticalScroll():
                         yield Static(self._build_stego_text(), classes="rules-section")
+                if self._ev_board is not None:
+                    with TabPane("Evidence", id="tab-evidence"):
+                        yield self._ev_board
             yield Static(
                 f"[dim]Tab/click to switch sections  ·  "
                 f"Press [b]{_B['page_rules'].upper()}[/] or Esc to close[/]",
@@ -883,268 +1386,75 @@ class RulesScreen(ModalScreen):
 
     # ── Tab content builders ──────────────────────────────────────────
 
+    # Issue #30: all tab content is generated by rules_content — a dynamic,
+    # engine-derived builder set. Nothing here can drift from the code.
+
     def _build_rules_text(self) -> str:
-        kb    = config.KEY_BINDINGS
-        costs = config.TOOL_COSTS
-        fcosts = config.FILTER_COSTS
-        rules = self._day.rules if self._day else []
-        lines = [f"[#6b7785]{self._day.title}[/]\n"]
-
-        disq  = [r for r in rules if r.severity == "disqualifying"]
-        minor = [r for r in rules if r.severity != "disqualifying"]
-
-        if disq:
-            lines.append("[#ff5470][b]DISQUALIFYING[/][/]  — any one of these → DENY")
-            for r in disq:
-                lines.append(f"  [#ff5470]✗[/]  {r.text}")
-            lines.append("")
-        if minor:
-            lines.append("[#ff8c42][b]MINOR DISCREPANCIES[/][/]  — flag on Evidence Board")
-            for r in minor:
-                lines.append(f"  [#ff8c42]△[/]  {r.text}")
-            lines.append("")
-        if not rules:
-            lines.append("[dim]No rules loaded for this day.[/]\n")
-
-        lines += [
-            "[#6b7785]── general principles ───────────────────────────────────────────[/]",
-            "  Multiple minor discrepancies may constitute grounds for denial.",
-            "  Flag everything you notice on the Evidence Board — accuracy earns ⏱.",
-            "  Moral alignment shifts on certain verdicts regardless of rule correctness.",
-            "",
-            "[#6b7785]── tool costs ───────────────────────────────────────────────────[/]",
-            f"  [b]{kb['tool_ghostscan'].upper()}[/] Ghostscan   {costs['ghostscan']}⏱   filter +{fcosts['ghostscan']}⏱",
-            f"  [b]{kb['tool_hashcrack'].upper()}[/] Hashcrack   {costs['hashcrack']}⏱   filter +{fcosts['hashcrack']}⏱",
-            f"  [b]{kb['tool_logwatch'].upper()}[/] Logwatch    {costs['logwatch']}⏱   filter +{fcosts['logwatch']}⏱",
-            f"  [b]{kb['tool_stegotool'].upper()}[/] Stegotool   {costs['stegotool']}⏱   filter +{fcosts['stegotool']}⏱",
-            "",
-            "[#6b7785]── economy ───────────────────────────────────────────────────────[/]",
-            "  Correct verdict:       +15⏱  +up to 10⏱ board accuracy bonus",
-            "  False admit (invalid): −1 life",
-            "  False deny (valid):    no penalty — just lost reward",
-            "",
-            "[#6b7785]── email domains ────────────────────────────────────────────────[/]",
-            "[#00ff9f]✓  TRUSTED[/]",
-            "   gmail.com · outlook.com · hotmail.com · yahoo.com · icloud.com",
-            "   .edu · .ac.uk · .gov · .mil · company addresses from verified employers",
-            "[#ff5470]✗  DISPOSABLE / THROWAWAY[/]",
-            "   mailinator.com · guerrillamail.com · tempmail.com · yopmail.com",
-            "   throwam.com · trashmail.com · maildrop.cc · fakeinbox.com",
-            "[#ff8c42]?  PRIVACY-FORWARD[/] (flag if other discrepancies present)",
-            "   protonmail.com · tutanota.com · pm.me",
-            "",
-            "[#6b7785]── affiliations ─────────────────────────────────────────────────[/]",
-            "[#00ff9f]✓  TRUSTED INSTITUTIONS[/]",
-            "   MIT · Stanford · CMU · Caltech · Harvard · Yale · Oxford",
-            "   Cambridge · ETH Zurich · Imperial College",
-            "   Google · Microsoft · Apple · Cloudflare · Stripe · GitHub",
-            "[#ff5470]✗  THREAT ACTOR COMMUNITIES[/]",
-            "   BreachForums · RaidForums · HackForums · XSS.is · CrackingKing",
-            "[#ff8c42]?  UNVERIFIABLE[/] (requires corroborating evidence)",
-            "   \"independent\" · \"freelance\" · \"self-employed\" · \"consultant\"",
-        ]
-        return "\n".join(lines)
+        return rules_content.build_rules_text(self._day)
 
     def _build_osint_text(self) -> str:
-        return """[#7dd3c0][b]GHOSTSCAN — OSINT REFERENCE[/][/]
-
-[#6b7785]── forum tiers — check the platform sweep against these ─────────[/]
-
-[#ff5470][b]CRITICAL — immediate deny[/][/]
-  Any confirmed handle on these forums is grounds for an always-deny verdict.
-  Cross-reference the handle in the candidate's platform sweep output.
-
-[#ff5470]✗[/]  BreachForums   primary stolen-data marketplace
-[#ff5470]✗[/]  RaidForums     predecessor to BreachForums, same community
-[#ff5470]✗[/]  HackForums     credential dumps, exploit trading
-[#ff5470]✗[/]  XSS.is         Russian-language exploit / malware forum
-
-[#ff8c42][b]ADVISORY — investigate further[/][/]
-  A single advisory hit is not sufficient to deny alone.
-  Combine with other signals (breach dump, affiliation gap, weak credential).
-
-[#ff8c42]?[/]  nulled.to      leaked databases, cracked software
-[#ff8c42]?[/]  CrackingKing   account cracking, combo list trading
-[#ff8c42]?[/]  Dread          dark-web Reddit equivalent
-[#ff8c42]?[/]  CrackingPro    account combo trading
-[#ff8c42]?[/]  Breach dumps   Collection #1 · LinkedIn 2016 · RockYou 2024
-               (email in dump = advisory, not standalone denial)
-
-[#6b7785]── violation signals ──────────────────────────────────────────[/]
-
-[#ff5470]SOCK_PUPPET_ACCOUNTS[/]
-   Handle appears on a critical forum in the platform sweep.
-   Rule GS-01: always-deny. Single hit settles the verdict.
-
-[#ff8c42]BREACH_HIT[/]
-   Candidate email found in a breach dump in the sweep.
-   Advisory — combine with credential findings for a deny.
-
-[#ff8c42]AFFILIATION_UNVERIFIED[/]
-   Claimed org (shown in yellow in dossier) absent from platform sweep.
-   Handle appears without org tag, or under a different org. Rule GS-05.
-
-[#ff8c42]EMAIL_GITHUB_MISMATCH[/]
-   GitHub sweep shows a commit email that differs from the dossier email.
-   Requires filter run to confirm. Rule GS-04.
-
-[#6b7785]── legitimate platforms (presence expected) ─────────────────────[/]
-[#00ff9f]✓[/]  GitHub       [#00ff9f]✓[/]  LinkedIn     [#00ff9f]✓[/]  Twitter/X
-[#00ff9f]✓[/]  HackerNews   [#00ff9f]✓[/]  Reddit       [#00ff9f]✓[/]  Keybase
-
-[#6b7785]── affiliation verification ─────────────────────────────────────[/]
-  The candidate's claimed org is shown in yellow in the condensed dossier.
-  Run G and check whether that org appears as a tag alongside their handle.
-  If absent on 2+ platforms → flag AFFILIATION_UNVERIFIED on Evidence Board.
-
-[#6b7785]── investigation tiers ──────────────────────────────────────────[/]
-  Free:   passive check — email domain, affiliation, GitHub claim
-  Run G:  platform sweep — handle on legit platforms + threat forum section
-  Filter: explicit ▲ VIOLATION_TYPE labels"""
+        return rules_content.build_osint_text(self._day)
 
     def _build_creds_text(self) -> str:
-        return """[#7dd3c0][b]HASHCRACK — CREDENTIAL REFERENCE[/][/]
-
-[#6b7785]── hash types ───────────────────────────────────────────────────[/]
-[#ff8c42]MD5[/]      32 hex chars   e.g. 5f4dcc3b5aa765d61d8327deb882cf99
-           Fast to crack (~5M attempts/sec). Considered broken.
-
-[#ff8c42]SHA-1[/]    40 hex chars   e.g. aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d
-           Faster than SHA-256. Deprecated for security use.
-
-[#ff8c42]SHA-256[/]  64 hex chars   e.g. 5e884898da28047151d0e56f...
-           Stronger, but still vulnerable to dictionary + rules attacks.
-
-[#00ff9f]bcrypt[/]   starts $2b$    e.g. $2b$12$...
-           Intentionally slow (~100 attempts/sec). Hard to crack.
-           Tool will attempt 200 candidates then stop — educational demo.
-
-[#6b7785]── violation types ──────────────────────────────────────────────[/]
-[#ff5470]LEAKED_PASSWORD[/]
-   The cracked plaintext appears in known breach databases.
-   Even a "strong-looking" password is disqualifying if it is leaked.
-
-[#ff8c42]WEAK_CREDENTIAL[/]
-   Hash cracked in fewer than 100 dictionary attempts.
-   Password is too simple — guessable without specialised tools.
-
-[#6b7785]── auth log reading ─────────────────────────────────────────────[/]
-   The free auth log shows login history: timestamp, IP, success/failure.
-   Look for: credential-stuffing bursts (many fails, then a success),
-   login IPs that don't match the claimed IP in the dossier.
-   A claimed-IP mismatch is not disqualifying alone — investigate further
-   with Logwatch and Stegotool before deciding.
-
-[#6b7785]── investigation tiers ──────────────────────────────────────────[/]
-  Free:   auth log with timestamps, IPs, login outcomes
-  Run H:  dictionary + mutation rules attack — reveals plaintext if cracked
-  Filter: breach corpus + complexity check — explicit violation named"""
+        return rules_content.build_creds_text(self._day)
 
     def _build_logs_text(self) -> str:
-        return """[#7dd3c0][b]LOGWATCH — LOG ANALYSIS REFERENCE[/][/]
-
-[#6b7785]── what is log analysis ────────────────────────────────────────[/]
-   Every server records a structured event log: each line captures who
-   connected, from where, at what time, and what they did. Individually,
-   entries are mundane. Analysed in aggregate, they reveal attack patterns
-   that no single event could expose.
-
-   Logwatch ingests these raw logs and applies pattern detectors — looking
-   for statistical anomalies in timing, geography, and event sequences.
-   The free terminal shows you the raw data; spending ⏱ runs the detectors;
-   the filter names the violation explicitly so it can be flagged.
-
-[#6b7785]── log entry format ─────────────────────────────────────────────[/]
-  TIMESTAMP  IP_ADDRESS  EVENT_TYPE  USERNAME  RESOURCE
-
-  Example:
-  2024-03-15 02:14:07  185.220.101.45  AUTH_FAIL  admin  /ssh
-  2024-03-15 02:14:09  185.220.101.45  AUTH_FAIL  admin  /ssh
-  2024-03-15 02:14:11  185.220.101.45  AUTH_SUCCESS  admin  /ssh
-
-[#6b7785]── event types ──────────────────────────────────────────────────[/]
-  AUTH_SUCCESS   Successful login
-  AUTH_FAIL      Failed login attempt
-  FILE_ACCESS    File read/write/delete
-  PRIV_ESCALATE  Privilege escalation (sudo / su / admin claim)
-  API_CALL       External API request
-
-[#6b7785]── attack patterns ───────────────────────────────────────────────[/]
-[#ff5470]BRUTE_FORCE[/]
-   Many AUTH_FAIL events in rapid succession from the same IP.
-   Look for: 5+ failures within a 60-second window.
-   Often followed by AUTH_SUCCESS once the correct password is found.
-
-[#ff5470]CREDENTIAL_STUFFING[/]
-   AUTH_FAIL events across many different usernames from the same IP.
-   Attacker is trying a list of stolen credentials systematically.
-
-[#ff8c42]IMPOSSIBLE_TRAVEL[/]
-   AUTH_SUCCESS events from two geographically distant IPs within a
-   timeframe that makes physical travel impossible.
-   e.g. London login at 09:00, Tokyo login at 09:45 — 9,000km in 45min.
-
-[#ff8c42]INSIDER_BEHAVIOR[/]
-   FILE_ACCESS or PRIV_ESCALATE events outside business hours (18:00–08:00)
-   combined with privilege escalation within a 5-minute window.
-   Indicates a legitimate account being misused after-hours.
-
-[#6b7785]── investigation tiers ──────────────────────────────────────────[/]
-  Free:   raw log — timestamps, IPs, event types (anomalies unlabelled)
-  Run L:  pattern detection — flags bursts, geo regions, after-hours events
-  Filter: geo timeline overlay — explicit violation type named and confirmed"""
+        return rules_content.build_logs_text(self._day)
 
     def _build_stego_text(self) -> str:
-        return """[#7dd3c0][b]STEGOTOOL — STEGANOGRAPHY REFERENCE[/][/]
-
-[#6b7785]── what is LSB steganography ────────────────────────────────────[/]
-   LSB (Least Significant Bit) steganography hides data by replacing the
-   lowest-order bit of each colour channel value in an image.
-   The visual change is imperceptible to the human eye, but statistical
-   analysis reveals the disruption to natural pixel noise patterns.
-
-[#6b7785]── suspicion score ───────────────────────────────────────────────[/]
-   [#00ff9f]0–30[/]    Likely clean — normal noise distribution
-   [#ff8c42]31–60[/]   Investigate further — borderline anomaly
-   [#ff5470]61–100[/]  Payload likely present — multiple signals triggered
-
-[#6b7785]── detection signals ─────────────────────────────────────────────[/]
-[#ff5470]Chi-square test[/]
-   Measures LSB parity distribution across pixel values.
-   Natural images have predictable parity; embedded data randomises it.
-   p-value < 0.05 flags the channel as suspicious.
-
-[#ff8c42]RS analysis[/]
-   Compares "regular" vs "singular" pixel groups before and after bit-flip.
-   Embedded data shifts the R/S ratio away from the natural baseline.
-   Reliable for detecting medium-to-high embedding density.
-
-[#ff8c42]LSB autocorrelation[/]
-   Measures structural similarity between adjacent pixel LSBs.
-   Natural images have correlated neighbouring pixels; random payload
-   injection breaks this correlation.
-
-[#6b7785]── difficulty channels ──────────────────────────────────────────[/]
-  Easy:    Blue channel only — single signal, easiest to detect
-  Medium:  Red + Blue channels — two signals, harder to isolate
-  Hard:    All RGB channels + encoded payload — highest capacity, best hidden
-
-[#6b7785]── violation types ──────────────────────────────────────────────[/]
-[#ff8c42]STEGO_PAYLOAD_PRESENT[/]
-   One or more channels show statistically significant anomalies.
-   Payload confirmed but encoding method not determined.
-
-[#ff5470]COVERT_C2_CHANNEL[/]
-   Multi-channel anomaly with encoded (base64/XOR) payload.
-   Indicates active command-and-control communication — high severity.
-
-[#6b7785]── investigation tiers ──────────────────────────────────────────[/]
-  Free:   image metadata + per-channel entropy scores + RS ratio
-  Run S:  composite suspicion score — chi-square, RS, autocorrelation
-  Filter: per-channel LSB breakdown — explicit violation named and confirmed"""
+        return rules_content.build_stego_text(self._day)
 
     def action_dismiss_rules(self) -> None:
         self.dismiss()
+
+class CreditRevealScreen(ModalScreen):
+    """HackDox Credit reveal (issue #25) — a read-only, spent-credit debug
+    window showing the candidate's ground truth: the correct verdict and the
+    planted violation KINDS. Deliberately excludes the evidence trail
+    (descriptions / which tool reveals what) per the issue AC. Distinct
+    violet styling marks it as a paid debug view, not normal tool output."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_reveal", "Close"),
+        Binding("enter",  "dismiss_reveal", "Close"),
+    ]
+
+    def __init__(self, candidate: Candidate, credits_left: int) -> None:
+        super().__init__()
+        self._candidate    = candidate
+        self._credits_left = credits_left
+
+    def compose(self) -> ComposeResult:
+        c, t = self._candidate, self._candidate.truth
+        sev  = {"minor": "#ffd93d", "major": "#ff8c42", "critical": "#ff5470"}
+        vcol = "#00ff9f" if t.correct_verdict == Verdict.ADMIT else "#ff5470"
+        rows = [
+            "[#c084fc][b]⬢ HACKDOX CREDIT SPENT — GROUND TRUTH REVEAL[/][/]",
+            "[dim]read-only · no verdict submitted · evidence trail not included[/]",
+            "",
+            f"[#6b7785]Candidate[/]        [b]{c.display_name}[/]  ({c.handle})",
+            f"[#6b7785]Correct verdict[/]  [{vcol}][b]{t.correct_verdict.value.upper()}[/][/]",
+            "",
+            f"[#6b7785]Planted violations ({len(t.discrepancies)}):[/]",
+        ]
+        if t.discrepancies:
+            for d in t.discrepancies:
+                col = sev.get(d.severity, "#c8d4e1")
+                rows.append(f"  [{col}]▲ {d.kind.value}[/]  [dim]({d.severity})[/]")
+        else:
+            rows.append("  [dim](clean — no violations planted)[/]")
+        rows += [
+            "",
+            f"[#c084fc]credits remaining: {self._credits_left}[/]",
+            "",
+            "[dim]Esc / Enter to close[/]",
+        ]
+        with Container(id="credit-modal"):
+            yield Static("\n".join(rows))
+
+    def action_dismiss_reveal(self) -> None:
+        self.dismiss()
+
 
 class IntroScreen(Screen):
     BINDINGS = [
@@ -1242,13 +1552,46 @@ class IntakeScreen(Screen):
         self._day_log: list = []   # shared log entries for the full day
         self._hc_log:  list = []   # shared credential audit log (hashcrack)
 
+        # ── Stegotool stamp minigame state ────────────────────────────
+        self._stamp_mode     = False   # arrows/Space captured while True
+        self._stego_resolved = False   # ▲ signature block printed once
+        self._stego_filter   = False   # payload type classified (filter paid)
+        self._credit_revealed = False  # HackDox Credit spent on this candidate (issue #25)
+
         # ── Widgets ───────────────────────────────────────────────────
         self.status   = StatusHeader(state, day, state.current_slot_index)
         self.dossier  = DossierPanel()
         self.chat     = ChatPanel()
-        self.board    = EvidenceBoard()
+        # Shared evidence record + the inline Candidate-page board (unchanged).
+        self.evidence_state = EvidenceState()
+        self.board    = EvidenceBoard(self.evidence_state, "evidence-board", summary=True)
+        # Full editable board on the Candidate/Dossier page too, so the player
+        # always has direct access. Hidden by default; Tab swaps it in for the
+        # read-only summary.
+        self.board_c0 = EvidenceBoard(self.evidence_state, "evidence-c0", "tool-evidence",
+                                      home_group="DOSSIER")
         self.overseer = OverseerPanel(overseer_intro)
         self.ref_main = ReferencePanel("candidate", "reference-side")
+
+        # Toggleable evidence boards for the tool pages — same shared state,
+        # mounted on the left, hidden until the player toggles them on.
+        self.board_gs = EvidenceBoard(self.evidence_state, "evidence-gs", "tool-evidence",
+                                      home_group=_BOARD_HOME_GROUP["evidence-gs"])
+        self.board_hc = EvidenceBoard(self.evidence_state, "evidence-hc", "tool-evidence",
+                                      home_group=_BOARD_HOME_GROUP["evidence-hc"])
+        self.board_lw = EvidenceBoard(self.evidence_state, "evidence-lw", "tool-evidence",
+                                      home_group=_BOARD_HOME_GROUP["evidence-lw"])
+        self.board_st = EvidenceBoard(self.evidence_state, "evidence-st", "tool-evidence",
+                                      home_group=_BOARD_HOME_GROUP["evidence-st"])
+        self._tool_boards = (self.board_gs, self.board_hc, self.board_lw, self.board_st)
+        # Each tool board is paired with the sidebar it replaces when shown.
+        self._evidence_pairs = [
+            (self.board_gs, "gs-left"),
+            (self.board_hc, "hc-left"),
+            (self.board_lw, "lw-left"),
+            (self.board_st, "st-left"),
+        ]
+        self._evidence_open = False   # shared visibility across tool pages
 
         # One condensed dossier + reference panel per tool page
         self.cdos_gs  = CondensedDossier("condensed-dossier-gs")
@@ -1270,6 +1613,9 @@ class IntakeScreen(Screen):
         # Breach list panel — right column of the Ghostscan page
         self.breach_lists = BreachListPanel()
 
+        # Interactive image viewer — right column of the Stegotool page
+        self.image_st = StegoImagePanel()
+
         self.debug        = DebugPanel()
         self.command_bar  = CommandBar()
         self._footer_widget: Static | None = None
@@ -1286,13 +1632,16 @@ class IntakeScreen(Screen):
                     yield self.chat
                 with Horizontal(id="candidate-mid"):
                     yield self.board
+                    yield self.board_c0
                 with Horizontal(id="candidate-bot"):
                     yield self.overseer
                     yield self.ref_main
 
             # ── Page 1: Ghostscan ─────────────────────────────────────
             # 3-column layout: sidebar | terminal | breach lists
+            # The evidence board (hidden) replaces the sidebar when toggled.
             with Horizontal(id="page-ghostscan", classes="tool-page"):
+                yield self.board_gs
                 with Vertical(classes="tool-left", id="gs-left"):
                     yield self.cdos_gs
                     yield self.ref_gs
@@ -1301,24 +1650,31 @@ class IntakeScreen(Screen):
 
             # ── Page 2: Hashcrack ─────────────────────────────────────
             with Horizontal(id="page-hashcrack", classes="tool-page"):
-                with Vertical(classes="tool-left"):
+                yield self.board_hc
+                with Vertical(classes="tool-left", id="hc-left"):
                     yield self.cdos_hc
                     yield self.ref_hc
                 yield self.term_hc
 
             # ── Page 3: Logwatch ──────────────────────────────────────
             with Horizontal(id="page-logwatch", classes="tool-page"):
-                with Vertical(classes="tool-left"):
+                yield self.board_lw
+                with Vertical(classes="tool-left", id="lw-left"):
                     yield self.cdos_lw
                     yield self.ref_lw
                 yield self.term_lw
 
             # ── Page 4: Stegotool ─────────────────────────────────────
+            # 3-column layout: sidebar | findings terminal | image viewer.
+            # The image viewer dominates the right side — it's the game
+            # canvas for the stamp minigame.
             with Horizontal(id="page-stegotool", classes="tool-page"):
-                with Vertical(classes="tool-left"):
+                yield self.board_st
+                with Vertical(classes="tool-left", id="st-left"):
                     yield self.cdos_st
                     yield self.ref_st
                 yield self.term_st
+                yield self.image_st
 
         yield self.debug
         yield self.command_bar
@@ -1329,6 +1685,7 @@ class IntakeScreen(Screen):
     def on_mount(self) -> None:
         self._day_log = tools_bridge.generate_day_log(self._state.seed, self._day)
         self._hc_log  = tools_bridge.generate_hashcrack_day_log(self._state.seed, self._day)
+        self._apply_evidence_visibility()   # tool boards start hidden
         self._load_current_candidate()
 
     # ── Internal helpers ──────────────────────────────────────────────
@@ -1348,10 +1705,27 @@ class IntakeScreen(Screen):
 
     def _footer_text(self) -> str:
         """Slim nav strip — tool/verdict/quit all go through the command bar now."""
+        on_tool = 1 <= self._page_index <= 4
+        if on_tool:
+            ev = ("[#ffb454][b]Tab[/][/] Hide Evidence"
+                  if self._evidence_open
+                  else "[#00ff9f][b]Tab[/][/] Evidence")
+        else:
+            ev = "[#00ff9f][b]Tab[/][/] Evidence"
+        if self._stamp_mode:
+            return (
+                "[#00ffd5][b]STAMP MODE[/][/]  "
+                "[dim]arrows Move[/]  "
+                f"[#00ffd5][b]Space[/][/] Stamp (−{config.STEGO_STAMP_COST} ⏱)  "
+                "[#ffb454][b]Esc[/][/] Exit"
+            )
+        stamp_hint = ("[#00ffd5][b]X[/][/] Stamp  " if self._page_index == 4 else "")
         return (
             "[#00ff9f][b]1-5[/][/] Pages  "
             "[#00ff9f][b]0[/][/] Rules  "
-            "[dim]↑↓←→ Focus  Tab→Board  ↑↓ Cursor  Space Flag[/]  "
+            f"{ev}  "
+            f"{stamp_hint}"
+            "[dim]↑↓ Cursor  Space Flag[/]  "
             "[#00ff9f][b]`[/][/] Dev"
         )
 
@@ -1359,11 +1733,67 @@ class IntakeScreen(Screen):
         if self._footer_widget:
             self._footer_widget.update(self._footer_text())
 
+    # ── Evidence board toggle (tool pages only) ──────────────────────────────
+
+    def _apply_evidence_visibility(self) -> None:
+        """Show/hide each tool board and the sidebar it replaces, plus the
+        Candidate-page editable board (which swaps in for the summary)."""
+        # Candidate page: editable board replaces the read-only summary.
+        self.board_c0.display = self._evidence_open
+        self.board.display    = not self._evidence_open
+        for board, side_id in self._evidence_pairs:
+            board.display = self._evidence_open
+            try:
+                self.query_one(f"#{side_id}").display = not self._evidence_open
+            except Exception:
+                pass
+
+    def _current_tool_board(self) -> "EvidenceBoard | None":
+        if 1 <= self._page_index <= 4:
+            return self._tool_boards[self._page_index - 1]
+        return None
+
+    def _active_editable_board(self) -> "EvidenceBoard | None":
+        """The editable board for the current page (Candidate or a tool page)."""
+        if self._page_index == 0:
+            return self.board_c0
+        return self._current_tool_board()
+
+    def _toggle_evidence(self) -> None:
+        """Toggle the editable evidence board on the current page.
+
+        Available on the Candidate/Dossier page (swaps in for the summary) and
+        on every tool page (replaces the sidebar).
+        """
+        self._evidence_open = not self._evidence_open
+        self._apply_evidence_visibility()
+        self._refresh_footer()
+        if self._evidence_open:
+            board = self._active_editable_board()
+            if board is not None:
+                board.focus()
+                # Reset scroll to the group this page focuses on.
+                board.focus_home_group()
+        else:
+            self.board.repaint()
+
     def _goto_page(self, index: int) -> None:
+        # Leaving the stego page (or arriving anywhere) drops stamp mode.
+        if self._stamp_mode and index != 4:
+            self._exit_stamp_mode(quiet=True)
         self._page_index = index
         self.query_one(ContentSwitcher).current = _PAGE_IDS[index]
         self.status.refresh_status(self._state, self._state.current_slot_index,
                                    self._page_index)
+        # Keep the evidence board focused when stepping between pages.
+        if self._evidence_open:
+            board = self._active_editable_board()
+            if board is not None:
+                board.focus()
+        # Always repaint the candidate-page summary so flagged violations
+        # show up immediately when the player returns to page 0.
+        if index == 0:
+            self.board.repaint()
         self._refresh_footer()
 
     def _load_current_candidate(self) -> None:
@@ -1379,10 +1809,20 @@ class IntakeScreen(Screen):
 
         # Update all panels
         c = self._candidate
+        ups = self._state.upgrades
+        # Auto-highlight upgrades (issue #23): wire ownership into the panels
+        # BEFORE set_candidate so the first render already honours them.
+        self.dossier.upgrades    = ups
+        self.chat.upgrades       = ups
+        self.image_st.tint_boost = config.UPGRADE_STEGO_TINT in ups
+        self._credit_revealed    = False   # fresh candidate — reveal unpaid (issue #25)
+        self.dossier.cracked_password = None   # issue #29 — fresh password state
         self.dossier.set_candidate(c)
         self.chat.set_candidate(c)
         self.debug.set_candidate(c)
         for cd in (self.cdos_gs, self.cdos_hc, self.cdos_lw, self.cdos_st):
+            cd.upgrades = ups
+            cd.cracked_password = None         # issue #29 — fresh password state
             cd.set_candidate(c)
 
         # The day's rulebook is shown on EVERY page's reference panel so the
@@ -1396,23 +1836,36 @@ class IntakeScreen(Screen):
         # Reference panel: target email + claimed IP + today's rules + violation guide
         self.ref_hc.update_content(_REF_HASHCRACK)
 
-        # Clear evidence board and all terminals
-        self.board.clear()
+        # Clear the shared evidence record and repaint every board view.
+        self.evidence_state.clear()
+        for b in (self.board, self.board_c0, *self._tool_boards):
+            b.reset_cursor()
         # All tool terminals cleared via set_initial_content
         # Ghostscan: passive identity check (free) + breach list pre-population
         self.term_gs.set_initial_content(tools_bridge.get_ghostscan_identity(c))
         self.ref_gs.update_content(_REF_GHOSTSCAN)
         self.breach_lists.load_candidate(c)
-        # Hashcrack terminal: shared credential audit log (free, candidate highlighted)
-        self.term_hc.set_initial_content(tools_bridge.get_hashcrack_shared(self._hc_log, c))
-        # Logwatch terminal: shared day log (session grouping if upgrade unlocked)
-        _gs = config.UPGRADE_SESSION_GROUPING in self._state.upgrades
-        self.term_lw.set_initial_content(tools_bridge.get_logwatch_shared(self._day_log, c, group_by_session=_gs))
+        # Hashcrack terminal: shared credential audit log (free, candidate highlighted;
+        # Credential HUD upgrade pre-colours suspicious lines — issue #23)
+        self.term_hc.set_initial_content(tools_bridge.get_hashcrack_shared(
+            self._hc_log, c,
+            upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in ups))
+        # Logwatch terminal: shared day log (session grouping / Log Analyzer HUD
+        # upgrades applied when owned — issue #23)
+        _gs = config.UPGRADE_SESSION_GROUPING in ups
+        self.term_lw.set_initial_content(tools_bridge.get_logwatch_shared(
+            self._day_log, c, group_by_session=_gs,
+            upgrade_highlight=config.UPGRADE_LOG_HIGHLIGHT in ups))
         # Logwatch reference: target info + today's rules + attack pattern guide
         self.ref_lw.update_content(_REF_LOGWATCH)
-        # Stegotool terminal: pre-populate with free image metadata
-        self.term_st.set_initial_content(tools_bridge.get_stego_image_info(c))
-        # Stegotool reference: target info + signal guide
+        # Stegotool: findings terminal gets the free stats block; the pixel
+        # grid lives in the image viewer where the stamp minigame runs.
+        self._stamp_mode     = False
+        self._stego_resolved = False
+        self._stego_filter   = False
+        self.term_st.set_initial_content(tools_bridge.get_stego_stats(c))
+        self.image_st.load_candidate(c, self._day.number if self._day else 1)
+        # Stegotool reference: stamp-mode controls + signature color legend
         self.ref_st.update_content(_REF_STEGOTOOL)
 
         self.status.refresh_status(self._state, slot, self._page_index)
@@ -1433,12 +1886,12 @@ class IntakeScreen(Screen):
         v_str   = "ADMITTED" if verdict == Verdict.ADMIT else "DENIED"
         parts   = [f"{v_str} {self._candidate.display_name}."]
         parts  += ["Correct." if result.correct else "Wrong call."]
-        if result.compute_delta:
-            parts.append(f"+{result.compute_delta} ⏱")
+        if result.site_health_delta:
+            parts.append(f"⛨ {result.site_health_delta:+.1f}% at EOD")
+        if result.hackdollar_delta:
+            parts.append(f"+{result.hackdollar_delta} HD$")
             if result.board_bonus:
-                parts.append(f"(+{result.board_bonus} ⏱ board bonus)")
-        if result.lives_delta:
-            parts.append(f"{result.lives_delta:+d} ♥")
+                parts.append(f"(+{result.board_bonus} HD$ board bonus)")
         if result.alignment_delta:
             arrow = "→ White Hat" if result.alignment_delta > 0 else "→ Dark Web"
             parts.append(f"Align {arrow}")
@@ -1448,8 +1901,9 @@ class IntakeScreen(Screen):
                                    self._page_index)
         self._refresh_footer()
 
-        if self._state.lives <= 0:
-            self.app.game_over()
+        # Site Health deltas are only recorded here — they apply in one
+        # batch at end of day (finish_day), so the loss condition can only
+        # trip at shift end (#20 rework).
 
     def _run_tool(self, tool: ToolName, *, filtered: bool = False) -> None:
         if self._candidate is None or self._verdict_locked:
@@ -1472,8 +1926,8 @@ class IntakeScreen(Screen):
                                      group_by_session=config.UPGRADE_SESSION_GROUPING in self._state.upgrades)),
             ToolName.HASHCRACK: (lambda c, s: tools_bridge.run_hashcrack_shared(self._hc_log, c, s),
                                  lambda c, s: tools_bridge.run_hashcrack_filtered_shared(self._hc_log, c, s)),
-            ToolName.STEGOTOOL: (tools_bridge.run_stegotool,
-                                 tools_bridge.run_stegotool_filtered),
+            # STEGOTOOL intentionally absent — the stego page uses the
+            # interactive stamp minigame instead of a flat tool run.
         }
         base_fn, filter_fn = runners[tool]
         try:
@@ -1484,12 +1938,16 @@ class IntakeScreen(Screen):
             return
 
         # Get the right terminal and display the result.
-        # Logwatch replaces the terminal content in-place (annotates the shared log).
-        # All other tools append below the existing free data.
+        # Logwatch/Hashcrack replace the terminal content in-place (annotate
+        # the shared log). Ghostscan also replaces (issue #28): the filtered
+        # report re-renders the same report with annotations lit, never
+        # stacking a second copy.
         term_id = self._TOOL_TERM[tool]
         term = self.query_one(f"#{term_id}", ToolTerminal)
         if tool in (ToolName.LOGWATCH, ToolName.HASHCRACK):
             term.set_initial_content(result.raw_lines)
+        elif tool == ToolName.GHOSTSCAN:
+            term.set_result(result)
         else:
             term.add_result(result)
 
@@ -1500,10 +1958,20 @@ class IntakeScreen(Screen):
             else:
                 self.breach_lists.highlight_match()
 
+        # Issue #29: a hashcrack run resolves the dossier password field —
+        # cracked plaintext (or a held bcrypt) is reflected on every page.
+        if tool == ToolName.HASHCRACK:
+            plain = tools_bridge.crack_password(self._candidate)
+            resolved = plain if plain is not None else ""
+            for panel in (self.dossier, self.cdos_gs, self.cdos_hc,
+                          self.cdos_lw, self.cdos_st):
+                panel.cracked_password = resolved
+                panel.refresh()
+
         self._spent.add(tool)
         self.status.refresh_status(self._state, self._state.current_slot_index,
                                    self._page_index)
-        cost = config.TOOL_COSTS[tool.value]
+        cost = tools_bridge.tool_cost(self._state, tool.value)
         if filtered:
             cost += config.FILTER_COSTS[tool.value]
         self.command_bar.set_response(
@@ -1512,6 +1980,116 @@ class IntakeScreen(Screen):
             f"flag findings on the Evidence Board (page 1)",
             error=False,
         )
+
+    # ── Stegotool stamp minigame ──────────────────────────────────────────
+
+    def _enter_stamp_mode(self) -> None:
+        if self._candidate is None or self._verdict_locked:
+            self.command_bar.set_response(
+                "Verdict locked — stamping disabled", error=True)
+            return
+        self._stamp_mode = True
+        self.image_st.enter_stamp_mode()
+        self.command_bar.set_response(
+            f"STAMP MODE — arrows move · Space stamp "
+            f"(−{config.STEGO_STAMP_COST} ⏱) · Esc exit")
+        self._refresh_footer()
+
+    def _exit_stamp_mode(self, quiet: bool = False) -> None:
+        self._stamp_mode = False
+        self.image_st.exit_stamp_mode()
+        if not quiet:
+            self.command_bar.set_response("stamp mode off")
+        self._refresh_footer()
+
+    def _do_stamp(self) -> None:
+        if self._candidate is None or self._verdict_locked:
+            return
+        try:
+            tools_bridge.charge_stamp(self._state)
+        except tools_bridge.InsufficientCompute as e:
+            self.command_bar.set_response(str(e), error=True)
+            return
+        res = self.image_st.do_stamp()
+        if res is None:
+            return
+        x, y, _w, _h = self.image_st.stamp_rect
+        img   = self.image_st.image
+        lines = tools_bridge.stamp_log_lines(img, res, self.image_st.stamps_used, x, y,
+                                             reveal_type=self._stego_filter)
+        if res.resolved and not self._stego_resolved:
+            self._stego_resolved = True
+            lines = lines + tools_bridge.stamp_signature_lines(
+                img, reveal_type=self._stego_filter)
+        self.term_st.add_lines(lines)
+        self.status.refresh_status(self._state, self._state.current_slot_index,
+                                   self._page_index)
+
+    def _activate_stego_filter(self) -> None:
+        """Pay to classify the stego payload type. Until this runs, stamp logs
+        report a carrier but not its type — the player reads the stamp colour."""
+        if self._candidate is None or self._verdict_locked:
+            self.command_bar.set_response(
+                "Verdict locked — filter disabled", error=True)
+            return
+        if self._stego_filter:
+            self.command_bar.set_response("Filter already active — payload type is classified")
+            return
+        cost = config.STEGO_FILTER_COST
+        if config.UPGRADE_TOOLCOST_STEGOTOOL in self._state.upgrades:
+            cost = max(1, cost - config.TOOLCOST_REDUCTION)
+        if self._state.compute_hours < cost:
+            self.command_bar.set_response(
+                f"Need {cost} ⏱ for the classification filter, "
+                f"have {self._state.compute_hours} ⏱", error=True)
+            return
+        self._state.compute_hours -= cost
+        self._stego_filter = True
+        img = self.image_st.image
+        lines = [
+            "",
+            f"[#7dd3c0][b]CLASSIFICATION FILTER[/][/]  [dim]−{cost} ⏱[/]",
+            "  [dim]carrier signatures will now be named on each stamp[/]",
+        ]
+        # If the zone was already resolved before paying, print the named block now.
+        if self._stego_resolved and img is not None:
+            lines += tools_bridge.stamp_signature_lines(img, reveal_type=True)
+        self.term_st.add_lines(lines)
+        self.command_bar.set_response("Classification filter active — payload type will be named")
+        self.status.refresh_status(self._state, self._state.current_slot_index,
+                                   self._page_index)
+
+    # ── HackDox Credit — ground-truth reveal (issue #25) ──────────────────
+
+    def _credit_reveal(self) -> None:
+        """Spend one HackDox Credit to reveal the current candidate's ground
+        truth (correct verdict + planted violation kinds — NOT the evidence
+        trail). Read-only; never submits a verdict. Works on every page since
+        it reads engine state, not page-local data. Refused at 0 credits.
+        Re-opening for the same candidate is free once paid."""
+        if self._candidate is None:
+            self.command_bar.set_response("No candidate loaded", error=True)
+            return
+        if self._credit_revealed:
+            self.command_bar.set_response(
+                "Ground truth already revealed for this candidate — no charge")
+            self.app.push_screen(
+                CreditRevealScreen(self._candidate, self._state.hackdox_credits))
+            return
+        if self._state.hackdox_credits <= 0:
+            self.command_bar.set_response(
+                "ACCESS DENIED — no HackDox Credits remaining. "
+                "Buy more in the between-day shop.", error=True)
+            return
+        self._state.hackdox_credits -= 1
+        self._credit_revealed = True
+        self.status.refresh_status(self._state, self._state.current_slot_index,
+                                   self._page_index)
+        self.command_bar.set_response(
+            f"HackDox Credit spent — ground truth revealed  "
+            f"({self._state.hackdox_credits} remaining)")
+        self.app.push_screen(
+            CreditRevealScreen(self._candidate, self._state.hackdox_credits))
 
     # ── Action bindings ───────────────────────────────────────────────────
 
@@ -1526,7 +2104,7 @@ class IntakeScreen(Screen):
     # ── Rules overlay (immediate binding) ────────────────────────────────────
 
     def action_open_rules(self) -> None:
-        self.app.push_screen(RulesScreen(self._day))
+        self.app.push_screen(RulesScreen(self._day, self.evidence_state))
 
     # ── Within-page focus navigation (arrow keys) ─────────────────────────────
     # EvidenceBoard consumes up/down when focused; letters still bubble to bar.
@@ -1552,6 +2130,18 @@ class IntakeScreen(Screen):
         k  = event.key
         ch = event.character  # empty string for non-printable keys
 
+        # ── Stego stamp mode — captures arrows/Space/Esc while active ─────────
+        if self._stamp_mode:
+            if k in ("up", "down", "left", "right"):
+                self.image_st.move_stamp(k); event.stop(); return
+            if k == "space":
+                self._do_stamp(); event.stop(); return
+            if k in ("escape", config.KEY_BINDINGS["stamp_mode"]):
+                self._exit_stamp_mode(); event.stop(); return
+            if k not in ("1", "2", "3", "4", "5"):
+                event.stop(); return          # swallow everything else
+            self._exit_stamp_mode(quiet=True)  # page nav below exits stamp mode
+
         # ── Immediate actions (no Enter needed, do not enter command bar) ──────
         if k == "1":
             self._goto_page(0); event.stop(); return
@@ -1564,9 +2154,24 @@ class IntakeScreen(Screen):
         if k == "5":
             self._goto_page(4); event.stop(); return
         if k == "0":
-            self.app.push_screen(RulesScreen(self._day)); event.stop(); return
+            self.app.push_screen(RulesScreen(self._day, self.evidence_state)); event.stop(); return
+        if k == config.KEY_BINDINGS["toggle_evidence"]:   # Tab
+            if 1 <= self._page_index <= 4:
+                self._toggle_evidence(); event.stop()
+            elif self._page_index == 0:
+                # On the candidate page: jump to Ghostscan and open the board.
+                self._goto_page(1)
+                if not self._evidence_open:
+                    self._toggle_evidence()
+                event.stop()
+            return
         if k == "grave_accent":
             self.debug.display = not self.debug.display; event.stop(); return
+
+        # ── Stamp mode entry — X on the stego page with an empty buffer ────────
+        if (k == config.KEY_BINDINGS["stamp_mode"] and self._page_index == 4
+                and not self.command_bar.get_buffer()):
+            self._enter_stamp_mode(); event.stop(); return
 
         # ── Command bar input ─────────────────────────────────────────────────
         if k == "enter":
@@ -1593,7 +2198,7 @@ class IntakeScreen(Screen):
         1: ToolName.GHOSTSCAN,
         2: ToolName.HASHCRACK,
         3: ToolName.LOGWATCH,
-        4: ToolName.STEGOTOOL,
+        # 4 (stegotool) removed — stamp minigame replaced scan/filter there.
     }
 
     def _execute_command(self, raw: str) -> None:
@@ -1613,17 +2218,27 @@ class IntakeScreen(Screen):
             self._goto_page(self._TOOL_PAGE[arg])
             self._run_tool(arg)   # sets command_bar response internally
 
+        elif kind == "stamp":
+            self._goto_page(4)
+            self._enter_stamp_mode()
+
         elif kind == "filter":
+            if self._page_index == 4:
+                self._activate_stego_filter()
+                return
             tool = self._FILTER_PAGE_MAP.get(self._page_index)
             if tool is None:
                 self.command_bar.set_response(
-                    "ERROR — navigate to a tool page first (pages 2–5)", error=True
+                    "ERROR — navigate to a tool page first (pages 2–4)", error=True
                 )
             else:
                 self._run_tool(tool, filtered=True)
 
         elif kind == "verdict":
             self._commit_verdict(arg)   # sets command_bar response internally
+
+        elif kind == "reveal":
+            self._credit_reveal()
 
         elif kind == "next":
             if not self._verdict_locked:
@@ -1636,13 +2251,24 @@ class IntakeScreen(Screen):
                 self._load_current_candidate()
 
         elif kind == "rules":
-            self.app.push_screen(RulesScreen(self._day))
+            self.app.push_screen(RulesScreen(self._day, self.evidence_state))
+
+        elif kind == "evidence":
+            if 1 <= self._page_index <= 4:
+                self._toggle_evidence()
+            else:
+                self.command_bar.set_response(
+                    "Evidence Board is always shown on the Candidate page — "
+                    "press Tab on a tool page (2-5) to toggle it there.",
+                    error=False,
+                )
 
         elif kind == "help":
             self.command_bar.set_response(
-                "COMMANDS:  recon · crack · analyze · extract · filter · "
-                "admit · deny · next · rules · help · quit  "
-                "·  pages 1-5  ·  rules 0  ·  arrows = focus panels",
+                "COMMANDS:  recon · crack · analyze · stamp (stego) · filter · "
+                "admit · deny · next · rules · evidence · help · quit  "
+                "·  pages 1-5  ·  rules 0  ·  Tab = evidence board (tool pages)  "
+                "·  X = stamp mode (stego page)",
                 error=False,
             )
 
@@ -1657,12 +2283,16 @@ class EODScreen(Screen):
     ]
 
     def __init__(self, day: Day, state: GameState, narrative: str,
-                 performance: Performance) -> None:
+                 performance: Performance, hd_earned: int = 0,
+                 hd_bonus: int = 0, health_delta: float = 0.0) -> None:
         super().__init__()
-        self._day         = day
-        self._state       = state
-        self._narrative   = narrative
-        self._performance = performance
+        self._day          = day
+        self._state        = state
+        self._narrative    = narrative
+        self._performance  = performance
+        self._hd_earned    = hd_earned      # HD$ from verdicts today (issue #21)
+        self._hd_bonus     = hd_bonus       # HD$ Site Health bonus (issue #20)
+        self._health_delta = health_delta   # Site Health change over the day
 
     def compose(self) -> ComposeResult:
         yield Static(f"[b][#7dd3c0]End of {self._day.title}[/][/]",
@@ -1672,21 +2302,36 @@ class EODScreen(Screen):
             total   = len(self._state.pending_results)
             yield Static(f"Verdicts: [b]{correct}[/]/{total} correct")
             yield Static(
-                f"Computing hours: [#ffb454][b]{self._state.compute_hours} ⏱[/][/]  "
-                f"(target: {self._day.quotas.compute_target} ⏱)"
+                f"Computing hours: [#ffb454][b]{self._state.compute_hours} ⏱[/][/] "
+                f"left unspent  [dim](daily budget — does not carry over)[/]"
             )
-            yield Static(f"Lives remaining: [#ff5470]{self._state.lives}[/]")
+            h    = self._state.site_health
+            hcol = ("#00ff9f" if h >= config.SITE_HEALTH_REWARD_THRESHOLD else
+                    "#ffd93d" if h >= config.SITE_HEALTH_LOSS_THRESHOLD + 15 else
+                    "#ff5470")
+            dcol = "#00ff9f" if self._health_delta >= 0 else "#ff5470"
+            yield Static(
+                f"Site Health: [{hcol}][b]{h:.0f}%[/][/]  "
+                f"[{dcol}]({self._health_delta:+.1f} today)[/]"
+            )
+            hd_bonus_str = (f"  [#00ff9f]+{self._hd_bonus}[/] health bonus"
+                            if self._hd_bonus else "  [dim](no health bonus)[/]")
+            yield Static(
+                f"HackDollar$: [#00ff9f]+{self._hd_earned}[/] earned{hd_bonus_str}"
+                f"  ·  balance [#00ff9f][b]{self._state.hackdollars} HD$[/][/]"
+            )
             yield Static(f"Alignment: {self._state.alignment:+d}")
             yield Static("")
             for r in self._state.pending_results:
                 tag  = "verdict-correct" if r.correct else "verdict-wrong"
                 mark = "✓" if r.correct else "✗"
-                bonus_str = f"  board+{r.board_bonus}⏱" if r.board_bonus else ""
+                bonus_str = f"  board+{r.board_bonus}HD$" if r.board_bonus else ""
                 yield Static(
                     f"[{tag}]{mark}[/]  {r.archetype.value:<14}  "
                     f"you {r.player_verdict.value:<5}  "
-                    f"[#6b7785]+{r.compute_delta}⏱{bonus_str}  "
-                    f"♥{r.lives_delta:+d}  Align {r.alignment_delta:+d}[/]"
+                    f"[#6b7785]⛨{r.site_health_delta:+.1f}  "
+                    f"+{r.hackdollar_delta}HD${bonus_str}  "
+                    f"Align {r.alignment_delta:+d}[/]"
                 )
         with Container(id="overseer-panel"):
             yield Static("[b]Overseer:[/]", classes="speaker")
@@ -1698,9 +2343,243 @@ class EODScreen(Screen):
         )
 
     def action_continue_game(self) -> None:
-        from gameengine.core import persistence
+        persistence.save(self._state)
+        self.app.show_between_day()   # between-day menu next (issue #22)
+
+    def action_quit_app(self) -> None:
+        self.app.exit()
+
+
+class BetweenDayScreen(Screen):
+    """Between-day menu (issues #18/#22) — the campaign's connective tissue.
+
+    Runs after the end-of-day summary and before the next day's intro.
+    Three regions: performance summary (the day's numbers landing), Overseer
+    contact (tutorial / foreshadowing / the hostility arc), and the
+    HackDollar$ shop (upgrades #23, HackDox Credits #19/#25, ⏱ capacity).
+    Purchases deduct HackDollar$ and persist immediately.
+    """
+
+    BINDINGS = [
+        Binding("up",    "cursor_up",   "Up",   show=False),
+        Binding("down",  "cursor_down", "Down", show=False),
+        Binding("enter", "buy",         "Buy",  show=False),
+        Binding("space", "buy",         "Buy",  show=False),
+        Binding("n",     "next_day",    "Next day"),
+        Binding("q",     "quit_app",    "Quit"),
+    ]
+
+    def __init__(self, day: Day, state: GameState, narrative: str,
+                 hd_earned: int = 0, hd_bonus: int = 0,
+                 health_delta: float = 0.0) -> None:
+        super().__init__()
+        self._day          = day
+        self._state        = state
+        self._narrative    = narrative
+        self._hd_earned    = hd_earned
+        self._hd_bonus     = hd_bonus
+        self._health_delta = health_delta
+        self._cursor       = 0
+        self._status_msg   = ""
+        self._status_err   = False
+        # Shop catalog: consumables/capacity first, then permanent upgrades.
+        items: list[tuple[str, str, int, str, str]] = [
+            ("credit",   "hackdox_credit", config.SHOP_PRICE_CREDIT,
+             "HackDox Credit +1",
+             f"ground-truth reveal charge (max {config.HACKDOX_CREDIT_MAX} slots)"),
+            ("capacity", "compute_capacity", config.SHOP_PRICE_CAPACITY,
+             f"Compute Capacity +{config.COMPUTE_CAPACITY_STEP} ⏱",
+             "permanently raise the per-shift computing-hours budget"),
+        ]
+        for uid, label, price, desc in config.UPGRADE_CATALOG:
+            items.append(("upgrade", uid, price, label, desc))
+        self._items = items
+        self._summary_w = Static(id="bd-summary", classes="panel")
+        self._shop_w    = Static(id="bd-shop", classes="panel")
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            f"[b][#7dd3c0]HACKDOX — NIGHT OF DAY {self._day.number}[/][/]",
+            classes="screen-title",
+        )
+        with Horizontal(id="bd-root"):
+            with Vertical(id="bd-left"):
+                yield self._summary_w
+                with Container(id="bd-overseer"):
+                    yield Static("[b]Overseer:[/]", classes="speaker")
+                    yield Static(self._narrative, id="bd-overseer-text")
+            yield self._shop_w
+        yield Static(
+            "[#00ff9f][b]↑↓[/][/] browse shop  ·  [#00ff9f][b]Enter[/][/] buy  ·  "
+            "[#00ff9f][b]N[/][/] begin next day  ·  [#00ff9f][b]Q[/][/] quit",
+            classes="hint",
+        )
+
+    def on_mount(self) -> None:
+        self._summary_w.border_title = " Shift Report "
+        self._shop_w.border_title    = " HackDollar$ Shop "
+        self._repaint()
+
+    # ── Rendering ─────────────────────────────────────────────────────
+
+    def _repaint(self) -> None:
+        self._summary_w.update(self._summary_text())
+        self._shop_w.update(self._shop_text())
+
+    def _summary_text(self) -> str:
+        st      = self._state
+        results = st.pending_results
+        correct = sum(1 for r in results if r.correct)
+        total   = len(results)
+        # Issue #27: ⏱ is a spend-only daily pool — spent = budget − leftover.
+        budget      = config.daily_compute_budget(self._day.number,
+                                                  st.compute_capacity)
+        spent       = max(0, budget - st.compute_hours)
+        next_budget = config.daily_compute_budget(self._day.number + 1,
+                                                  st.compute_capacity)
+        board   = sum(r.board_bonus for r in results)
+        board_max = max(1, total * config.BOARD_ACCURACY_MAX_BONUS)
+        board_pct = round(100 * board / board_max)
+        h    = st.site_health
+        hcol = ("#00ff9f" if h >= config.SITE_HEALTH_REWARD_THRESHOLD else
+                "#ffd93d" if h >= config.SITE_HEALTH_LOSS_THRESHOLD + 15 else
+                "#ff5470")
+        filled = max(0, min(20, round(h / 5)))
+        bar    = "█" * filled + "░" * (20 - filled)
+        dcol   = "#00ff9f" if self._health_delta >= 0 else "#ff5470"
+        acol   = "#ff5470" if st.alignment < 0 else "#00ff9f"
+        align_lbl = ("Dark Web" if st.alignment < 0 else
+                     "White Hat" if st.alignment > 0 else "Neutral")
+        hd_bonus_str = (f"  [#00ff9f]+{self._hd_bonus}[/] health bonus"
+                        if self._hd_bonus else "  [dim](no health bonus)[/]")
+        return "\n".join([
+            f"[#6b7785]Verdicts[/]        [b]{correct}[/]/{total} correct",
+            f"[#6b7785]⏱ spent[/]         [#ffb454]−{spent}[/] of {budget}"
+            f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]",
+            f"[#6b7785]Board accuracy[/]  {board_pct}%  [dim](paid as HD$ bonus)[/]",
+            f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]",
+            "",
+            f"[#6b7785]HackDollar$[/]     [#00ff9f]+{self._hd_earned}[/] verdicts{hd_bonus_str}",
+            f"[#6b7785]Balance[/]         [#00ff9f][b]{st.hackdollars} HD$[/][/]",
+            "",
+            f"[#6b7785]Site Health[/]     [{hcol}]{bar}[/]  [{hcol}][b]{h:.0f}%[/][/]"
+            f"  [{dcol}]({self._health_delta:+.1f} applied at end of day)[/]",
+            f"[dim]health only moves at shift end · game over below "
+            f"{config.SITE_HEALTH_LOSS_THRESHOLD:.0f}%"
+            f" · bonus above {config.SITE_HEALTH_REWARD_THRESHOLD:.0f}%[/]",
+        ] + ([
+            "",
+            f"[#ff5470][b]▼ SITE HEALTH BELOW {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}% "
+            f"— HACKDOX IS LOST[/][/]",
+            "[#ff5470]The day's admissions took the site down. "
+            "Press N to face the consequences.[/]",
+        ] if scoring.health_below_loss(st) else []))
+
+    def _shop_text(self) -> str:
+        st = self._state
+        lines = [
+            f"[#6b7785]balance[/] [#00ff9f][b]{st.hackdollars} HD$[/][/]"
+            f"   [#6b7785]credits[/] [#c084fc]{st.hackdox_credits}/{config.HACKDOX_CREDIT_MAX}[/]"
+            f"   [#6b7785]⏱ cap[/] [#ffb454]{st.compute_capacity}[/]",
+            "",
+        ]
+        for idx, (kind, iid, price, label, desc) in enumerate(self._items):
+            owned  = kind == "upgrade" and iid in st.upgrades
+            capped = kind == "credit" and st.hackdox_credits >= config.HACKDOX_CREDIT_MAX
+            afford = st.hackdollars >= price
+            cur    = idx == self._cursor
+            if owned:
+                tag, lcol = "[#6b7785]OWNED [/]", "#6b7785"
+            elif capped:
+                tag, lcol = "[#6b7785]FULL  [/]", "#6b7785"
+            elif afford:
+                tag, lcol = f"[#00ff9f]{price:>3} $[/] ", "#c8d4e1"
+            else:
+                tag, lcol = f"[#ff5470]{price:>3} $[/] ", "#5a6775"
+            marker = "[#00ffd5]▶ [/]" if cur else "  "
+            lbl    = f"[reverse] {label} [/]" if cur else f"[{lcol}]{label}[/]"
+            lines.append(f"{marker}{tag} {lbl}")
+            if cur:
+                lines.append(f"      [dim]{desc}[/]")
+        lines.append("")
+        if self._status_msg:
+            scol = "#ff5470" if self._status_err else "#7dd3c0"
+            lines.append(f"[{scol}]{self._status_msg}[/]")
+        else:
+            lines.append("[dim]Enter to buy · N for next day[/]")
+        return "\n".join(lines)
+
+    # ── Actions ───────────────────────────────────────────────────────
+
+    def action_cursor_up(self) -> None:
+        self._cursor = max(0, self._cursor - 1)
+        self._repaint()
+
+    def action_cursor_down(self) -> None:
+        self._cursor = min(len(self._items) - 1, self._cursor + 1)
+        self._repaint()
+
+    def action_buy(self) -> None:
+        kind, iid, price, label, _desc = self._items[self._cursor]
+        st = self._state
+        if kind == "upgrade" and iid in st.upgrades:
+            self._flash(f"{label} already owned", err=True)
+            return
+        if kind == "credit" and st.hackdox_credits >= config.HACKDOX_CREDIT_MAX:
+            self._flash("credit slots full", err=True)
+            return
+        if st.hackdollars < price:
+            self._flash(
+                f"insufficient HackDollar$ — need {price}, have {st.hackdollars}",
+                err=True)
+            return
+        st.hackdollars -= price
+        if kind == "upgrade":
+            st.upgrades.add(iid)
+        elif kind == "credit":
+            st.hackdox_credits += 1
+        else:
+            st.compute_capacity += config.COMPUTE_CAPACITY_STEP
+        persistence.save(st)   # purchases persist immediately (issue #22)
+        self._flash(f"purchased {label}  (−{price} HD$)", err=False)
+
+    def _flash(self, msg: str, err: bool) -> None:
+        self._status_msg = msg
+        self._status_err = err
+        self._repaint()
+
+    def action_next_day(self) -> None:
+        # #20 rework: the loss condition is evaluated at end of day. If the
+        # batch application dropped health below the threshold, the campaign
+        # ends here instead of advancing.
+        if scoring.health_below_loss(self._state):
+            self.app.game_over()
+            return
+        self.app.advance_day()
+
+    def action_quit_app(self) -> None:
         persistence.save(self._state)
         self.app.exit()
+
+
+class CampaignEndScreen(Screen):
+    """Shown when the next day's content doesn't exist yet."""
+
+    BINDINGS = [Binding("q", "quit_app", "Quit")]
+
+    def __init__(self, day_number: int) -> None:
+        super().__init__()
+        self._day_number = day_number
+
+    def compose(self) -> ComposeResult:
+        with Container(id="splash"):
+            yield Static("[b][#00ff9f]TO BE CONTINUED[/][/]", classes="title")
+            yield Static(
+                f"Day {self._day_number} isn't written yet. Your save is stored — "
+                "the campaign resumes when the content lands.",
+                classes="subtitle",
+            )
+            yield Static("[#00ff9f][b]Q[/][/]  Quit", classes="hint")
 
     def action_quit_app(self) -> None:
         self.app.exit()
@@ -1715,7 +2594,10 @@ class GameOverScreen(Screen):
     def compose(self) -> ComposeResult:
         with Container(id="splash"):
             yield Static("[b][#ff5470]GAME OVER[/][/]", classes="title")
-            yield Static("Too many invalid candidates slipped through.", classes="subtitle")
+            yield Static(
+                "Site Health collapsed — the threats you admitted took the site down.",
+                classes="subtitle",
+            )
             yield Static(
                 "[#00ff9f][b]R[/][/] Restart     [#00ff9f][b]Q[/][/] Quit",
                 classes="hint",
@@ -1742,6 +2624,9 @@ class HackDoxApp(App):
         self._state: GameState | None = None
         self._day:   Day        | None = None
         self._narratives: dict[str, str] = {}
+        self._day_start_health: float = config.SITE_HEALTH_START
+        self._hd_earned = 0   # HD$ from verdicts, set at finish_day
+        self._hd_bonus  = 0   # HD$ Site Health bonus, set at finish_day
 
     def on_mount(self) -> None:
         self._narratives = load_narratives()
@@ -1751,10 +2636,14 @@ class HackDoxApp(App):
         self._state = GameState(
             seed=self._seed,
             current_day=1,
-            compute_hours=config.STARTING_COMPUTE,
+            compute_hours=config.daily_compute_budget(1, config.STARTING_COMPUTE),
+            compute_capacity=config.STARTING_COMPUTE,
             alignment=config.STARTING_ALIGNMENT,
-            lives=config.STARTING_LIVES,
+            site_health=config.SITE_HEALTH_START,
+            hackdollars=config.STARTING_HACKDOLLARS,
+            hackdox_credits=config.STARTING_HACKDOX_CREDITS,
         )
+        self._day_start_health = self._state.site_health
         self._day = load_day(self._state.current_day)
         narrative = self._narratives[self._day.overseer_intro_key]
         self.pop_screen()
@@ -1762,23 +2651,79 @@ class HackDoxApp(App):
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
+        self._day_start_health = self._state.site_health
         intro = self._narratives.get(self._day.overseer_intro_key, "")
         self.pop_screen()
         self.push_screen(IntakeScreen(self._day, self._state, intro))
 
     def finish_day(self) -> None:
         assert self._state is not None and self._day is not None
+        # #20 rework: the day's accumulated Site Health deltas land HERE, in
+        # one batch — health never moves mid-shift, so the loss condition is
+        # only evaluated from this point on.
+        scoring.apply_end_of_day_health(self._state)
+        # End-of-day HackDollar$ payout (issue #21): verdict earnings accrued
+        # during play; the Site Health bonus (issue #20) lands here.
+        self._hd_earned = sum(r.hackdollar_delta
+                              for r in self._state.pending_results)
+        self._hd_bonus  = scoring.eod_health_bonus(self._state)
+        self._state.hackdollars += self._hd_bonus
         performance = self._evaluate_performance()
         outro_key   = self._day.overseer_outro_keys.get(
             performance, self._day.overseer_outro_keys[Performance.PASSING]
         )
         narrative = self._narratives.get(outro_key, "...")
         self.pop_screen()
-        self.push_screen(EODScreen(self._day, self._state, narrative, performance))
+        self.push_screen(EODScreen(
+            self._day, self._state, narrative, performance,
+            hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
+            health_delta=self._state.site_health - self._day_start_health,
+        ))
 
     def game_over(self) -> None:
         self.pop_screen()
         self.push_screen(GameOverScreen())
+
+    def show_between_day(self) -> None:
+        """EOD → between-day menu (issue #22)."""
+        assert self._state is not None and self._day is not None
+        narrative = self._narratives.get(
+            f"day{self._day.number}_between",
+            "Rest while you can. Tomorrow's list is longer, and the rules "
+            "won't be getting any kinder. Spend your HackDollar$ wisely.",
+        )
+        self.pop_screen()
+        self.push_screen(BetweenDayScreen(
+            self._day, self._state, narrative,
+            hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
+            health_delta=self._state.site_health - self._day_start_health,
+        ))
+
+    def advance_day(self) -> None:
+        """Between-day menu → next day intro. Resets the shift budget."""
+        assert self._state is not None
+        st = self._state
+        if scoring.health_below_loss(st):   # loss trips at end of day (#20)
+            self.game_over()
+            return
+        st.current_day += 1
+        st.current_slot_index = 0
+        st.pending_results = []
+        # ⏱ resets to the day's fixed budget every shift — never carries
+        # over (issues #21/#27). The formula scales with the day number.
+        st.compute_hours = config.daily_compute_budget(
+            st.current_day, st.compute_capacity)
+        persistence.save(st)
+        try:
+            self._day = load_day(st.current_day)
+        except FileNotFoundError:
+            self.pop_screen()
+            self.push_screen(CampaignEndScreen(st.current_day))
+            return
+        self._day_start_health = st.site_health
+        narrative = self._narratives.get(self._day.overseer_intro_key, "")
+        self.pop_screen()
+        self.push_screen(BriefingScreen(self._day, narrative))
 
     def _evaluate_performance(self) -> Performance:
         assert self._state is not None and self._day is not None
@@ -1791,14 +2736,14 @@ class HackDoxApp(App):
             if not r.correct and r.player_verdict == Verdict.ADMIT
         )
         quotas = self._day.quotas
-        if self._state.lives <= 0:
+        if scoring.health_below_loss(self._state):
             return Performance.FAILED
         if false_admits > quotas.max_false_admits:
             return Performance.FAILED
         if correct_admits < quotas.min_correct_admits:
             return Performance.POOR
-        if self._state.compute_hours < quotas.compute_target:
-            return Performance.POOR
+        # (compute_target check removed — issue #27: ⏱ is spend-only, so an
+        # end-of-day balance target no longer exists.)
         wrong = sum(1 for r in self._state.pending_results if not r.correct)
         if wrong == 0:
             return Performance.EXCELLENT

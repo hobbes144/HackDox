@@ -14,8 +14,11 @@ def save(state: GameState) -> None:
         "seed":               state.seed,
         "current_day":        state.current_day,
         "compute_hours":      state.compute_hours,
+        "compute_capacity":   state.compute_capacity,
         "alignment":          state.alignment,
-        "lives":              state.lives,
+        "site_health":        state.site_health,
+        "hackdollars":        state.hackdollars,
+        "hackdox_credits":    state.hackdox_credits,
         "upgrades":           sorted(state.upgrades),
         "current_slot_index": state.current_slot_index,
         # DayResult / CandidateResult round-trip deferred to v1.1 —
@@ -34,8 +37,11 @@ def load() -> GameState | None:
     state.current_day    = raw.get("current_day", 1)
     state.compute_hours  = raw.get("compute_hours",
                                    raw.get("currency", config.STARTING_COMPUTE))
-    state.alignment      = raw.get("alignment", 0)
-    state.lives          = raw.get("lives", config.STARTING_LIVES)
-    state.upgrades       = set(raw.get("upgrades", []))
+    state.alignment        = raw.get("alignment", 0)
+    state.compute_capacity = raw.get("compute_capacity", config.STARTING_COMPUTE)
+    state.site_health      = raw.get("site_health", config.SITE_HEALTH_START)
+    state.hackdollars      = raw.get("hackdollars", config.STARTING_HACKDOLLARS)
+    state.hackdox_credits  = raw.get("hackdox_credits", config.STARTING_HACKDOX_CREDITS)
+    state.upgrades         = set(raw.get("upgrades", []))
     state.current_slot_index = raw.get("current_slot_index", 0)
     return state

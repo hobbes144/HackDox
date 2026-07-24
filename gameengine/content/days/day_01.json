@@ -1,6 +1,6 @@
 {
   "number": 1,
-  "title": "Day 1 — Onboarding",
+  "title": "Day 1 \u2014 Onboarding",
   "candidate_count": 6,
   "archetype_mix": {
     "obvious_admit": 2,
@@ -39,12 +39,53 @@
       "text": "Deny any candidate who submits an image with a covert embedded payload.",
       "predicate": "has_discrepancy:stego_payload_present",
       "severity": "disqualifying"
+    },
+    {
+      "id": "rule_credential_stuffing",
+      "text": "Deny any candidate whose logs show a credential-stuffing sweep (one source hitting many accounts).",
+      "predicate": "has_discrepancy:credential_stuffing",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_low_and_slow",
+      "text": "Deny any candidate whose logs reveal a low-and-slow intrusion spread to evade detection.",
+      "predicate": "has_discrepancy:low_and_slow",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_encrypted_payload",
+      "text": "Deny any candidate who submits an image hiding an encrypted/obfuscated payload.",
+      "predicate": "has_discrepancy:encrypted_payload",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_leaked_password",
+      "text": "Deny any candidate whose submitted credential cracks to a password found in a known breach corpus.",
+      "predicate": "has_discrepancy:leaked_password",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_threat_forum",
+      "text": "Deny any candidate whose handle matches a known threat / dark-web forum account.",
+      "predicate": "has_discrepancy:threat_forum_match",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_claimed_ip",
+      "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs \u2014 corroborate before denying.",
+      "predicate": "has_discrepancy:claimed_ip_mismatch",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_weak_credential",
+      "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password \u2014 poor hygiene, not proof of malice.",
+      "predicate": "has_discrepancy:weak_credential",
+      "severity": "weighted"
     }
   ],
   "quotas": {
     "min_correct_admits": 2,
-    "max_false_admits": 1,
-    "compute_target": 100
+    "max_false_admits": 1
   },
   "overseer_intro_key": "day1_intro_friendly",
   "overseer_outro_keys": {

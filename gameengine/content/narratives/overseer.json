@@ -1,7 +1,8 @@
 {
   "day1_intro_friendly": "Welcome to HackDox. I'll be honest with you — the whole system's already been hacked. That's why you're here, doing this by hand. Just follow the rulebook. We'll talk again at the end of your shift.",
-  "day1_outro_praise":   "Good shift. The line moved, the right people got in, the wrong people didn't. That's all we ask.",
+  "day1_outro_praise": "Good shift. The line moved, the right people got in, the wrong people didn't. That's all we ask.",
   "day1_outro_measured": "You're learning. Tomorrow's faster. Keep your eyes open.",
-  "day1_outro_warning":  "You let one slip through. We notice. Don't make a habit of it.",
-  "day1_outro_failed":   "I'm going to need you to stay behind. We need to have a conversation about your performance."
+  "day1_outro_warning": "You let one slip through. We notice. Don't make a habit of it.",
+  "day1_outro_failed": "I'm going to need you to stay behind. We need to have a conversation about your performance.",
+  "day1_between": "Not bad for a first shift. The site held. Listen — the pay you earned tonight, the HackDollars, spend them here. Tools get cheaper, the terminal gets smarter. And those Credits? Ground truth on demand. Use them when you truly cannot call it. Tomorrow the list gets longer."
 }

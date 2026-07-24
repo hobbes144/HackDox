@@ -33,7 +33,8 @@ Screen {
 /* ── Status / tab strip ──────────────────────────────────────────────── */
 
 #status-header {
-    height: 1;
+    /* Two-line strip: player resources/standings on top, page tabs below */
+    height: 2;
     background: #11161c;
     color: #7dd3c0;
     padding: 0 1;
@@ -56,16 +57,16 @@ ContentSwitcher {
 
 #candidate-top {
     layout: horizontal;
-    height: 40%;
+    height: 36%;
 }
 
 #candidate-mid {
-    height: 30%;
+    height: 38%;
 }
 
 #candidate-bot {
     layout: horizontal;
-    height: 30%;
+    height: 26%;
 }
 
 #dossier   { width: 40%; }
@@ -80,6 +81,57 @@ ContentSwitcher {
 }
 
 #evidence-board:focus {
+    border: tall #00ff9f;
+    border-title-color: #00ff9f;
+}
+
+/* Toggleable evidence board on the tool pages (2-5). Hidden until the player
+ * presses Tab, then it occupies the left column in place of the condensed
+ * dossier/reference sidebar so the tool data on the right stays visible.
+ * The Candidate page board (#evidence-board, above) is unaffected. */
+.tool-evidence {
+    display: none;
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #0d1117;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #3a4a58;
+    scrollbar-color-hover: #00ff9f;
+    scrollbar-color-active: #00ff9f;
+}
+
+.tool-evidence:focus {
+    border: tall #00ff9f;
+    border-title-color: #00ff9f;
+}
+
+/* Wider than the sidebars they replace so the 25-item board has room to
+ * breathe — it is the player's primary point of contact with the game. */
+#evidence-gs { width: 34%; }
+#evidence-hc, #evidence-lw { width: 36%; }
+#evidence-st { width: 32%; }
+/* Candidate/Dossier-page editable board fills the mid row. */
+#evidence-c0 { width: 100%; }
+
+/* Evidence board embedded in the Rules overlay tab — always visible in-tab. */
+.rules-evidence {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #0d1117;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #3a4a58;
+    scrollbar-color-hover: #00ff9f;
+    scrollbar-color-active: #00ff9f;
+}
+
+.rules-evidence:focus {
     border: tall #00ff9f;
     border-title-color: #00ff9f;
 }
@@ -126,6 +178,34 @@ ContentSwitcher {
 
 #breach-content {
     width: 100%;
+}
+
+/* ── Stegotool page — 3-column override ─────────────────────────────── */
+/* sidebar (26%) | findings terminal (34%) | image viewer (40%)          */
+/* The image viewer dominates the right side — it is the stamp-minigame  */
+/* canvas, not a report panel.                                           */
+
+#page-stegotool #st-left {
+    width: 26%;
+}
+
+#terminal-st {
+    width: 34%;
+}
+
+#stego-image-panel {
+    width: 40%;
+    border: tall #3a4a58;
+    border-title-color: #7dd3c0;
+    border-title-style: bold;
+    background: #05080c;
+    padding: 0 1;
+    content-align: center middle;
+}
+
+#stego-image-content {
+    width: 100%;
+    content-align: center middle;
 }
 
 /* ── Condensed dossiers ──────────────────────────────────────────────── */
@@ -361,4 +441,46 @@ RulesScreen Tab {
 RulesScreen Tab.-active {
     color: #7dd3c0;
     text-style: bold;
+}
+
+/* ── Between-day menu (issue #22) ─────────────────────────────────────── */
+
+#bd-root {
+    height: 1fr;
+    padding: 1 2;
+}
+#bd-left {
+    width: 55%;
+    margin-right: 2;
+}
+#bd-summary {
+    height: auto;
+    padding: 1 2;
+    margin-bottom: 1;
+}
+#bd-overseer {
+    height: 1fr;
+    padding: 1 2;
+    border: round #2b3a4a;
+    background: #0d131a;
+}
+#bd-overseer .speaker { color: #7dd3c0; margin-bottom: 1; }
+#bd-shop {
+    width: 45%;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ── HackDox Credit reveal modal (issue #25) ──────────────────────────── */
+
+CreditRevealScreen {
+    align: center middle;
+}
+#credit-modal {
+    width: 74;
+    height: auto;
+    max-height: 80%;
+    padding: 2 3;
+    background: #0b0714;
+    border: double #c084fc;
 }

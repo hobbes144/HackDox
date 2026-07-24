@@ -35,11 +35,11 @@ def load_day(day_number: int) -> Day:
     archetype_mix = {
         Archetype(key): count for key, count in raw["archetype_mix"].items()
     }
+    # compute_target retired by issue #27 (⏱ is a spend-only daily budget);
+    # legacy day files that still carry it are simply ignored.
     quotas = Quotas(
         min_correct_admits=raw["quotas"]["min_correct_admits"],
         max_false_admits=raw["quotas"]["max_false_admits"],
-        compute_target=raw["quotas"].get("compute_target",
-                          raw["quotas"].get("currency_target", 100)),
     )
     outro_keys = {
         Performance(k): v for k, v in raw["overseer_outro_keys"].items()
