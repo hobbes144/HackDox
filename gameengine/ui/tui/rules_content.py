@@ -99,7 +99,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.DISPOSABLE_EMAIL:       "free — domain visible on the dossier, no tool needed (quick deny)",
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free — dossier IP vs log IPs; a breadcrumb, corroborate before denying",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "base recon shows commit email · filter highlights the mismatch",
-    DiscrepancyKind.BREACH_HIT:             "base recon highlights breach panel · filter confirms ▲ BREACH_HIT",
+    DiscrepancyKind.BREACH_HIT:             "email in a breach panel corpus — exposure, not misconduct; chase it with Hashcrack",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "handle on a CRITICAL forum — blended in base run, filter labels it",
     DiscrepancyKind.AFFILIATION_MISMATCH:   "elite org claimed but absent from the sweep — filter confirms",
     DiscrepancyKind.BURNER_IDENTITY:        "account registry: creation dates clustered within days — filter labels",
@@ -113,7 +113,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.LOW_AND_SLOW:           "sub-threshold on purpose — only the filter's correlation finds it",
     DiscrepancyKind.LEAKED_PASSWORD:        "crack reveals plaintext + BREACH_MATCH names the corpus",
     DiscrepancyKind.WEAK_CREDENTIAL:        "weak encryption (MD5) cracks to a weak plaintext — minor hygiene flag",
-    DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND breach-corpus match — cross-check the breach panel",
+    DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND corpus naming the same plaintext — the breach panel lists both",
     DiscrepancyKind.UNSALTED_STORAGE:       "hash shape is free info; crack is instant — storage hygiene failure",
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
@@ -457,9 +457,10 @@ def build_osint_text(day: Day | None) -> str:
         "  [#ff8c42]2. highlighted[/]  after base recon — candidate email marked ►",
         "  [#ff5470]3. confirmed[/]    after filter — red ▲ BREACH_HIT label",
         "",
-        "  [dim]The named database always matches the BREACH_MATCH entry in the",
-        "  Hashcrack audit log — cross-reference the two for a LEAKED_PASSWORD",
-        "  or CROSS_BREACH_REUSE case.[/]",
+        "  [dim]The named databases always match the BREACH_MATCH entries in the",
+        "  Hashcrack audit log. A single corpus is a BREACH_HIT (minor — they",
+        "  were exposed). TWO corpora naming the same cracked plaintext is",
+        "  CROSS_BREACH_REUSE (major — they never changed it).[/]",
     ]
     return "\n".join(lines)
 

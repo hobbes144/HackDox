@@ -1,6 +1,6 @@
 {
   "number": 1,
-  "title": "Day 1 \u2014 Onboarding",
+  "title": "Day 1 — Onboarding",
   "candidate_count": 6,
   "archetype_mix": {
     "obvious_admit": 2,
@@ -12,9 +12,9 @@
   "rules": [
     {
       "id": "rule_breach",
-      "text": "Deny any candidate whose email appears in a known breach corpus.",
+      "text": "Flag (do not auto-deny) an email found in a breach corpus — exposure alone is not misconduct; corroborate with Hashcrack before denying.",
       "predicate": "has_discrepancy:breach_hit",
-      "severity": "disqualifying"
+      "severity": "weighted"
     },
     {
       "id": "rule_github_mismatch",
@@ -65,6 +65,18 @@
       "severity": "disqualifying"
     },
     {
+      "id": "rule_cross_breach_reuse",
+      "text": "Deny any candidate still submitting a credential whose plaintext recurs across multiple breach corpora.",
+      "predicate": "has_discrepancy:cross_breach_reuse",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_unsalted_storage",
+      "text": "Deny any candidate submitting an unsalted / plaintext-equivalent credential — it cracks on the first attempt.",
+      "predicate": "has_discrepancy:unsalted_storage",
+      "severity": "disqualifying"
+    },
+    {
       "id": "rule_threat_forum",
       "text": "Deny any candidate whose handle matches a known threat / dark-web forum account.",
       "predicate": "has_discrepancy:threat_forum_match",
@@ -72,13 +84,13 @@
     },
     {
       "id": "rule_claimed_ip",
-      "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs \u2014 corroborate before denying.",
+      "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs — corroborate before denying.",
       "predicate": "has_discrepancy:claimed_ip_mismatch",
       "severity": "weighted"
     },
     {
       "id": "rule_weak_credential",
-      "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password \u2014 poor hygiene, not proof of malice.",
+      "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password — poor hygiene, not proof of malice.",
       "predicate": "has_discrepancy:weak_credential",
       "severity": "weighted"
     }
