@@ -31,6 +31,10 @@ gameengine/saves/
 *.swo
 *~
 
+# Claude Code local settings (machine-specific, not shared config)
+.claude/
+**/.claude/
+
 # OS
 .DS_Store
 Thumbs.db
