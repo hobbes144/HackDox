@@ -77,9 +77,17 @@ def test_bad_actor_triggers_disqualifying_rules() -> None:
 
 def test_sneaky_bugger_evades_dossier_rules() -> None:
     """Sneaky Bugger should NOT trigger dossier-only rules — they're
-    tool-only by design. Day 1's rulebook still catches them via
-    has_discrepancy:stego_payload_present."""
-    day = load_day(1)
+    tool-only by design.
+
+    #31 note: the evidence-tier gate strips a kind before its revealing tool
+    is taught, and the Sneaky Bugger is *entirely* tool-only — so on Day 1
+    (no tools unlocked) it correctly plants nothing. Its actual contract
+    ("has tool-only evidence, never dossier-level") is only observable once
+    those tools exist, so this test now runs on a fully-unlocked day. Rebalancing
+    day_01.json's mix so it doesn't schedule a tool-only archetype before any
+    tool is taught is day-CONTENT work for #32/#15, not this gate."""
+    import dataclasses
+    day = dataclasses.replace(load_day(1), number=5)   # all tools taught by Day 5
     for i in range(day.candidate_count):
         c = candidate_gen.generate(SEED, day, i)
         if c.archetype == Archetype.SNEAKY_BUGGER:

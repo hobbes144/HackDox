@@ -22,6 +22,7 @@ import hashlib as _hashlib
 import uuid
 from dataclasses import dataclass, field
 
+from .. import config
 from .models import (
     Archetype,
     Candidate,
@@ -376,6 +377,30 @@ _SEVERITY_REVEAL = {
 }
 
 
+# ─── Evidence-tier gate (#31) ────────────────────────────────────────────────
+#
+# A discrepancy is only plantable once the tool that reveals it has been
+# taught. intro_day(kind) defaults to the unlock day of its revealing tool
+# (config.TOOL_UNLOCK_DAY) — so the gate and the UI unlock schedule can never
+# disagree — unless a kind is explicitly held back below. The generator
+# filters each archetype's eligible kinds through this before rolling, so a
+# Day-N candidate can never carry evidence the player has no way to read yet.
+
+# Per-kind overrides: debut a specific kind LATER than its tool's unlock day.
+# Empty for now (every kind debuts with its tool). Add entries here rather
+# than building a parallel per-kind table, so the tool-derived default stays
+# the norm and only the exceptions are spelled out.
+_INTRO_DAY_OVERRIDE: dict[DiscrepancyKind, int] = {}
+
+
+def intro_day(kind: DiscrepancyKind) -> int:
+    """The earliest day `kind` may be planted (its revealing tool's unlock day)."""
+    if kind in _INTRO_DAY_OVERRIDE:
+        return _INTRO_DAY_OVERRIDE[kind]
+    revealing_tool, _ = _SEVERITY_REVEAL[kind]
+    return config.TOOL_UNLOCK_DAY[revealing_tool.value]
+
+
 _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.MISSING_PUBLIC_PROFILE: "No public profile found for the claimed handle.",
     DiscrepancyKind.HOSTILE_CHAT:           "Candidate threatened the service operator.",
@@ -512,16 +537,25 @@ def _make_email(
 def _roll_discrepancies(
     rng: random.Random,
     spec: ArchetypeSpec,
+    day_number: int,
 ) -> list[Discrepancy]:
     """Pick discrepancies for this candidate.
 
     Honors the archetype's budget. If a budget slot requires a severity
     that none of the eligible kinds can satisfy, the slot is skipped — the
     archetype specs above are written so this shouldn't happen.
+
+    The evidence-tier gate (#31) filters out any kind whose revealing tool
+    hasn't been taught by `day_number` before rolling, so an early-campaign
+    candidate never carries evidence the player can't yet read. NOTE: for a
+    tool-only archetype (e.g. Sneaky Bugger) this can empty the eligible pool
+    on very early days — that's a day-CONTENT concern (the day's archetype
+    mix should suit the tools taught so far, handled by #32/#15), not a bug in
+    this gate.
     """
     chosen: list[Discrepancy] = []
     used: set[DiscrepancyKind] = set()
-    eligible = list(spec.eligible_kinds)
+    eligible = [k for k in spec.eligible_kinds if intro_day(k) <= day_number]
     rng.shuffle(eligible)
 
     def take(severity: str, count: int) -> None:
@@ -640,8 +674,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     email = _make_email(rng_id, first, last, affiliation, disposable=is_incompatible)
 
     rng_disc = _seeded_rng(game_seed, day.number, slot_index, "discrepancies")
-    rng_disc = _seeded_rng(game_seed, day.number, slot_index, "discrepancies")
-    discrepancies = _roll_discrepancies(rng_disc, spec)
+    discrepancies = _roll_discrepancies(rng_disc, spec, day.number)
 
     rng_chat = _seeded_rng(game_seed, day.number, slot_index, "chat")
     chat = _build_chat(rng_chat, spec, discrepancies)

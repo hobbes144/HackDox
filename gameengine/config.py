@@ -105,6 +105,38 @@ STARTING_HACKDOX_CREDITS = 1    # NOTE: issue #25 AC says start 1 (title says
 HACKDOX_CREDIT_MAX       = 3    # slot cap — purchases refuse beyond this
 CREDIT_REVEAL_COMMANDS   = ("reveal", "credit", "truth")   # command-bar keywords
 
+# ─── Progressive unlock — the day each tool is introduced (#2 / #31) ─────────
+#
+# The Dossier (page 0) is always available. The four tools unlock one per day
+# across the tutorial, in the teaching order defined by #15/#34
+# (Ghostscan → Hashcrack → Logwatch → Stegotool). This mapping is the single
+# source of truth for two things:
+#   • the candidate generator's evidence-tier gate — a discrepancy is never
+#     planted before the day its revealing tool is taught (#31), and
+#   • the UI unlock schedule (#33/#34) — which page becomes live on which day.
+# Change a value here to reschedule a tool everywhere at once.
+#
+TOOL_UNLOCK_DAY: dict[str, int] = {
+    "dossier":   1,   # always available; listed for completeness
+    "ghostscan": 2,
+    "hashcrack": 3,
+    "logwatch":  4,
+    "stegotool": 5,
+}
+
+
+def tools_unlocked_by(day_number: int) -> set[str]:
+    """The tool set a player should have unlocked by the given day.
+
+    Used to backfill legacy saves (predating GameState.unlocked_tools) and to
+    seed a new game. Excludes the Dossier, which is not a lockable tool page.
+    """
+    return {
+        tool for tool, intro in TOOL_UNLOCK_DAY.items()
+        if tool != "dossier" and intro <= day_number
+    }
+
+
 # ─── Tool base costs (⏱ per invocation) ─────────────────────────────────────
 
 TOOL_COSTS: dict[str, int] = {

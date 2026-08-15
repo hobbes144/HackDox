@@ -310,6 +310,14 @@ class GameState:
     hackdollars: int = 0          # persistent between-day currency (issue #21)
     hackdox_credits: int = 1      # ground-truth reveal consumable (issue #25)
     upgrades: set[UpgradeId] = field(default_factory=set)
+    # Progressive unlock (#31): which tool pages the player has been granted.
+    # Stores ToolName.value strings (JSON-friendly, like `upgrades`). The
+    # Dossier is never listed here — it's page 0, always available. A fresh
+    # game starts empty; the Overseer's briefing beat (#34) adds a tool to
+    # this set the moment its unlock line plays. The UI (#33) greys any tool
+    # page not in here. Legacy saves without the field are backfilled from
+    # config.TOOL_UNLOCK_DAY on load, so a mid-campaign player isn't locked out.
+    unlocked_tools: set[str] = field(default_factory=set)
     completed_days: list[DayResult] = field(default_factory=list)
     # In-progress-day fields -- populated only mid-day:
     current_slot_index: int = 0

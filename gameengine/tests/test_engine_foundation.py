@@ -10,10 +10,12 @@ from __future__ import annotations
 import pytest
 
 from gameengine import config
-from gameengine.core import candidate_gen, rules_engine, scoring
+from gameengine.core import candidate_gen, persistence, rules_engine, scoring
+from gameengine.core.candidate_gen import intro_day
 from gameengine.core.content_loader import load_day
 from gameengine.core.models import (
     Archetype,
+    DiscrepancyKind,
     GameState,
     Verdict,
 )
@@ -139,3 +141,68 @@ def test_site_health_loss_threshold():
     assert not scoring.health_below_loss(state)
     state.site_health = config.SITE_HEALTH_LOSS_THRESHOLD - 1
     assert scoring.health_below_loss(state)
+
+
+# ─── Progressive unlock (#31) ────────────────────────────────────────────────
+
+
+def test_unlocked_tools_round_trips(tmp_path, monkeypatch):
+    """GameState.unlocked_tools survives a save/load cycle (#31 AC)."""
+    save_file = tmp_path / "slot.json"
+    monkeypatch.setattr(config, "SAVE_FILE", save_file)
+    state = GameState(seed=SEED, current_day=3)
+    state.unlocked_tools = {"ghostscan", "hashcrack"}
+    persistence.save(state)
+    loaded = persistence.load()
+    assert loaded is not None
+    assert loaded.unlocked_tools == {"ghostscan", "hashcrack"}
+
+
+def test_legacy_save_backfills_unlocked_tools(tmp_path, monkeypatch):
+    """A pre-#31 save (no unlocked_tools key) backfills from the schedule for
+    its day, so a mid-campaign player isn't loaded in fully locked."""
+    import json
+    save_file = tmp_path / "slot.json"
+    save_file.write_text(json.dumps({"seed": SEED, "current_day": 3}),
+                         encoding="utf-8")
+    monkeypatch.setattr(config, "SAVE_FILE", save_file)
+    loaded = persistence.load()
+    assert loaded is not None
+    # Day 3 → Ghostscan (day 2) + Hashcrack (day 3) earned; Logwatch/Stego not.
+    assert loaded.unlocked_tools == {"ghostscan", "hashcrack"}
+
+
+def test_day1_never_rolls_a_later_day_kind(day1):
+    """The evidence-tier gate (#31 AC): a Day-1 candidate can never carry a
+    discrepancy whose revealing tool is taught after Day 1."""
+    for i in range(day1.candidate_count):
+        c = candidate_gen.generate(SEED, day1, i)
+        for d in c.truth.discrepancies:
+            assert intro_day(d.kind) <= 1, (
+                f"{c.archetype} slot {i} planted {d.kind} "
+                f"(intro_day={intro_day(d.kind)}) on Day 1"
+            )
+
+
+def test_gate_keeps_dossier_evidence_for_bad_actor_day1(day1):
+    """Regression: the gate must not strip a Bad Actor's *dossier-level*
+    evidence on Day 1 — hostile_chat is a Day-1 kind and must still land, or
+    Day 1 has no deniable threat."""
+    bad_actors = [
+        candidate_gen.generate(SEED, day1, i)
+        for i in range(day1.candidate_count)
+        if candidate_gen.generate(SEED, day1, i).archetype == Archetype.BAD_ACTOR
+    ]
+    assert bad_actors, "No Bad Actor in Day 1 mix?"
+    kinds = {d.kind for c in bad_actors for d in c.truth.discrepancies}
+    assert DiscrepancyKind.HOSTILE_CHAT in kinds
+
+
+def test_intro_day_matches_tool_schedule():
+    """intro_day derives from the revealing tool's unlock day (the answer to
+    the gate's design question), keeping gate and UI schedule in lockstep."""
+    assert intro_day(DiscrepancyKind.AFFILIATION_UNVERIFIED) == 1   # dossier
+    assert intro_day(DiscrepancyKind.BREACH_HIT) == 2               # ghostscan
+    assert intro_day(DiscrepancyKind.LEAKED_PASSWORD) == 3          # hashcrack
+    assert intro_day(DiscrepancyKind.BRUTE_FORCE_IN_LOG) == 4       # logwatch
+    assert intro_day(DiscrepancyKind.STEGO_PAYLOAD_PRESENT) == 5    # stegotool
