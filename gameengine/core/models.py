@@ -121,6 +121,21 @@ class Performance(str, Enum):
 Severity = Literal["minor", "major", "critical"]
 RuleSeverity = Literal["disqualifying", "weighted"]
 
+# Issue #35 - how a rule is allowed to change across the campaign. This is the
+# data layer of #5's rule-mutation engine: it marks WHICH rules may flip, it
+# does not itself flip anything.
+#   fixed             - never changes. The default, so every pre-#35 day file
+#                       and all of Day 1's rules load with zero behaviour change.
+#   overseer_variable - may flip between "disqualifying" and "weighted" from one
+#                       shift to the next; the Overseer announces the change
+#                       casually in the morning briefing (#36).
+#   dark_web          - mutated by a Dark Web directive (#37). Reserved so the
+#                       three-state field exists once and only once; nothing
+#                       plants one yet.
+RuleMutability = Literal["fixed", "overseer_variable", "dark_web"]
+RULE_MUTABILITIES: frozenset[str] = frozenset(
+    {"fixed", "overseer_variable", "dark_web"})
+
 
 # ─── Chat ───────────────────────────────────────────────────────────────────
 
@@ -239,6 +254,10 @@ class Rule:
     text: str
     predicate: str
     severity: RuleSeverity = "disqualifying"
+    # Issue #35. Defaults to "fixed" so adding this field changed nothing about
+    # existing content - a day file that never mentions mutability produces the
+    # exact same ruleset it did before.
+    mutability: RuleMutability = "fixed"
 
 
 @dataclass(frozen=True)

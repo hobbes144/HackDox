@@ -17,22 +17,40 @@ from .models import (
     DiscrepancyKind,
     Performance,
     Quotas,
+    RULE_MUTABILITIES,
     Rule,
 )
+
+
+def _parse_rule(raw_rule: dict) -> Rule:
+    """Build one Rule from its JSON object.
+
+    `mutability` (issue #35) is optional and defaults to "fixed", so every day
+    file authored before #35 loads byte-identically. An unrecognised value
+    raises rather than silently degrading to "fixed" - the same fail-loud
+    stance `rules_engine.resolve()` takes on predicate typos, and for the same
+    reason: a typo that quietly means "this rule never mutates" is a content
+    bug nobody would notice until the corruption arc failed to happen.
+    """
+    mutability = raw_rule.get("mutability", "fixed")
+    if mutability not in RULE_MUTABILITIES:
+        raise ValueError(
+            f"Unknown rule mutability {mutability!r} in rule "
+            f"{raw_rule.get('id')!r}; expected one of {sorted(RULE_MUTABILITIES)}"
+        )
+    return Rule(
+        id=raw_rule["id"],
+        text=raw_rule["text"],
+        predicate=raw_rule["predicate"],
+        severity=raw_rule.get("severity", "disqualifying"),
+        mutability=mutability,
+    )
 
 
 def load_day(day_number: int) -> Day:
     path = config.DAYS_DIR / f"day_{day_number:02d}.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
-    rules = tuple(
-        Rule(
-            id=r["id"],
-            text=r["text"],
-            predicate=r["predicate"],
-            severity=r.get("severity", "disqualifying"),
-        )
-        for r in raw["rules"]
-    )
+    rules = tuple(_parse_rule(r) for r in raw["rules"])
     archetype_mix = {
         Archetype(key): count for key, count in raw["archetype_mix"].items()
     }

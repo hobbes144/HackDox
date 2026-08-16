@@ -261,3 +261,79 @@ def test_allowed_violations_whitelist_restricts_planted_kinds():
             assert d.kind == DiscrepancyKind.AFFILIATION_UNVERIFIED, (
                 f"slot {i} planted {d.kind} outside the day whitelist"
             )
+
+
+# --- Issue #35 - Rule.mutability + per-day ruleset loading ------------------
+
+
+def test_day1_rules_all_default_to_fixed(day1):
+    """Adding `mutability` must not have changed any existing content.
+
+    Day 1's rule file predates #35 and never mentions mutability, so every
+    rule must load as "fixed" - the guard that this field is purely additive.
+    """
+    assert day1.rules, "Day 1 should have rules"
+    assert all(r.mutability == "fixed" for r in day1.rules)
+
+
+def test_rule_mutability_survives_a_day_json_round_trip(tmp_path, monkeypatch):
+    """#35 AC: a rule's mutability round-trips through day_N.json."""
+    import json
+
+    source = json.loads((config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source["number"] = 99
+    # One rule of each non-default state, plus the untouched (fixed) remainder.
+    source["rules"][0]["mutability"] = "overseer_variable"
+    source["rules"][1]["mutability"] = "dark_web"
+
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / "day_99.json").write_text(json.dumps(source), encoding="utf-8")
+
+    loaded = load_day(99)
+    assert loaded.rules[0].mutability == "overseer_variable"
+    assert loaded.rules[1].mutability == "dark_web"
+    assert loaded.rules[2].mutability == "fixed"
+
+
+def test_unknown_mutability_raises(tmp_path, monkeypatch):
+    """A typo must fail loudly, not silently degrade to "fixed"."""
+    import json
+
+    source = json.loads((config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source["number"] = 98
+    source["rules"][0]["mutability"] = "overseer-variable"   # hyphen, not underscore
+
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / "day_98.json").write_text(json.dumps(source), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mutability"):
+        load_day(98)
+
+
+def test_rules_engine_evaluates_against_the_passed_day(day1):
+    """#35 AC: the active ruleset is whatever Day is handed in - not a cached
+    Day-1 ruleset.
+
+    This pins behaviour that is already correct (`rules_engine.evaluate` is a
+    pure function of its arguments, and `HackDoxApp.advance_day` reloads the
+    Day each shift). The test exists so a future refactor cannot reintroduce a
+    module-level or cached ruleset without turning something red: the SAME
+    candidate is evaluated against two different rulesets and must produce
+    different results.
+    """
+    from dataclasses import replace
+
+    # Find a candidate that trips at least one disqualifying rule under Day 1.
+    dirty = next(
+        c for c in (
+            candidate_gen.generate(SEED, day1, slot_index=i)
+            for i in range(day1.candidate_count)
+        )
+        if rules_engine.evaluate(c, day1).triggered_disqualifying
+    )
+    assert rules_engine.evaluate(dirty, day1).triggered_disqualifying
+
+    # A "tomorrow" whose ruleset is empty must clear that same candidate.
+    tomorrow = replace(day1, number=day1.number + 1, rules=())
+    assert not rules_engine.evaluate(dirty, tomorrow).triggered_disqualifying
+    assert not rules_engine.evaluate(dirty, tomorrow).triggered_weighted
