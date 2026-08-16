@@ -80,3 +80,43 @@ _Scope: #31, #3, #32, #33, #34 → closes epic #2. Compiled 2026-08-15. Base bra
 3. **#32 spec shape** — extend `Day` (recommended, least churn) vs a separate `CandidateDaySpec`. Per-day `seed`: keep the existing global-seed derivation (recommended) or add a per-day override?
 4. **#34 content scope** — build the trigger mechanism + placeholder unlock lines now (final copy with #15), or author the Day 1–5 unlock lines in this batch?
 5. **Branch + commit granularity** — feature branch name, and one-commit-per-issue (recommended)?
+
+### Answers (Nick, 2026-08-16) — ANSWERED
+
+1. **Unlock model** → ANSWERED: **stored set + Overseer flips it (hybrid)**. `GameState.unlocked_tools` persisted; `config.TOOL_UNLOCK_DAY` schedule; the briefing beat (#34) adds the tool to the set; legacy saves backfilled by `config.tools_unlocked_by(day)`.
+2. **`intro_day` source** → ANSWERED: **derive from the revealing tool's unlock day** (`config.TOOL_UNLOCK_DAY` via `_SEVERITY_REVEAL`), with an empty `_INTRO_DAY_OVERRIDE` map for future per-kind exceptions.
+3. **#32 spec shape** → ANSWERED: **extend `Day`** with `allowed_violations` / `difficulty_band` / `forced_includes`; **keep the global seed** (no per-day seed).
+4. **#34 content scope** → ANSWERED: **mechanism + placeholder unlock lines** (`_UNLOCK_LINES`); final day-by-day copy deferred to #15.
+5. **Branch + commit granularity** → ANSWERED: branch **`batch-1-progressive-unlock`**, **one commit per issue**.
+6. **#25 credits balance** (from the planning gate) → ANSWERED: **keep as shipped** (start 1, cap 3) — not reverted.
+7. **Campaign length** → ANSWERED: **~20 days**.
+
+---
+
+## Phase 1–5 — SHIPPED 2026-08-16
+
+All five phases built, tested, and committed on `batch-1-progressive-unlock`. **Epic #2 (progressive unlock) is complete.** Not pushed — Nick pushes.
+
+| Issue | What landed | Commit |
+|---|---|---|
+| **#31** | `GameState.unlocked_tools` (persisted + legacy backfill) · `config.TOOL_UNLOCK_DAY` · evidence-tier gate in `candidate_gen` (`intro_day` from the revealing tool) | `a9d0561` |
+| **#3** | `TypewriterLog` widget (queue, char-by-char, focus-scoped Space, `Finished`+`triggers`) · `ChatPanel` refactored onto it · Briefing/EOD/BetweenDay Overseer regions stream through it | `037566e` |
+| **#32** | `Day` extended: `allowed_violations` (intersects the gate) · `difficulty_band` · `forced_includes` (slot→archetype, mix-preserving) · loader + generator consume it | `14f6e48` |
+| **#33** | Locked tool tabs greyed (`_PAGE_TOOL`) · `_goto_page` refuses locked pages · `_run_tool`/`_enter_stamp_mode` inert for locked tools (no ⏱) | `498f849` |
+| **#34** | `config.tool_introduced_on(day)` · Briefing plays the Overseer unlock line whose `triggers` flips `unlocked_tools` · `action_begin_day` applies it idempotently · placeholder `_UNLOCK_LINES` | `6af1c69` |
+
+**Verification:** `pytest gameengine/tests/` = **32 passed**; `run_foundation_tests.py` = **16/16**; `app.py` imports clean. New pilot suites: `test_typewriter.py` (7, headless Textual), `test_unlock_ui.py` (7). Core suite `test_engine_foundation.py` extended to 18.
+
+**Smoke-test checklist (for Nick, in-app):**
+- [ ] New game → Day 1: all four tool tabs greyed with ⊘; only Candidate reachable; G/L/H/S inert, no ⏱ spent.
+- [ ] Day 2 briefing: Overseer types the Ghostscan unlock line; entering intake, Ghostscan tab is live, others still locked.
+- [ ] Press Space to skip the Day-2 beat early → Ghostscan still unlocked in intake.
+- [ ] Chat + Overseer/EOD/between-day dialogue type out; Space still buys/continues/stamps on those screens.
+- [ ] Save mid-campaign, reload → `unlocked_tools` preserved.
+
+**Deliberately not done (with reasons):**
+- **Day-content rebalance** — `day_01.json` still schedules the tool-only Sneaky Bugger, which the gate correctly leaves evidence-less on Day 1. Belongs to **#32/#15** (day content), not the #31 mechanism. The runner's sneaky test was moved to a fully-unlocked day.
+- **Final unlock-line copy** — placeholders per the gate; authored with **#15**.
+- **Intake `OverseerPanel` (stats panel)** — left as-is to protect the candidate-page layout (can't run the full TUI headless here). Its dialogue could move to `TypewriterLog` in a follow-up; the three screen hosts already do.
+
+**Merge note:** the branch is based on `3bbb465` and does **not** include `main`'s `b533dfb "Candidate Generation Anomalies"`, which also edits `candidate_gen.py`. Reconcile that file when merging this branch to `main`.
