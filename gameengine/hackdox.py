@@ -153,7 +153,7 @@ def inspect(
 
 
 @app.command("play")
-def play(seed: int = typer.Option(0xC0FFEE, help="RNG seed for the run.")) -> None:
+def play(seed: int = typer.Option(0xABCDEF, help="RNG seed for the run.")) -> None:
     """Launch the Textual TUI (Day 1 vertical slice)."""
     try:
         from gameengine.ui.tui.app import run as run_tui
