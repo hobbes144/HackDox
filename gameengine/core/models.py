@@ -99,8 +99,14 @@ class DiscrepancyKind(str, Enum):
     UNSALTED_STORAGE       = "unsalted_storage"       # unsalted / plaintext-equivalent storage
     # Stegotool-revealed
     ENCRYPTED_PAYLOAD      = "encrypted_payload"      # XOR/encrypted hidden payload
-    # Dossier-level (prompts Logwatch/Stego)
+    # Logwatch-revealed (2026-08-16: moved off Dossier — the dossier only shows
+    # the *claimed* IP; confirming a mismatch requires comparing it against the
+    # login IPs in the Logwatch log, so that's the tool that actually reveals it)
     CLAIMED_IP_MISMATCH    = "claimed_ip_mismatch"    # claimed IP != IP in submitted logs
+    # Dossier-level (no tool needed — the password's hash shape/strength chip
+    # is shown on every dossier for free; this flags the algorithm itself,
+    # independent of whether the underlying password turns out to be strong)
+    WEAK_ENCRYPTION         = "weak_encryption"        # password stored with a weak (MD5) algorithm
 
 
 class Performance(str, Enum):
@@ -167,10 +173,19 @@ class Dossier:
     commit_email:          str | None = None   # actual GitHub commit author email
     claimed_ip:            str | None = None   # IP the candidate claims to connect from
     # Issue #29 — the plaintext behind submitted_hash. ENGINE-ONLY ground
-    # truth: never rendered until Hashcrack cracks it (and never for bcrypt).
+    # truth: not rendered until Hashcrack cracks it (and never for bcrypt) —
+    # UNLESS `credential_unsalted` is set (below), in which case the dossier
+    # shows it immediately, no crack required.
     # Encryption strength is derived from the hash shape:
     #   $2b$… bcrypt = STRONG (uncrackable) · 64-hex SHA256 = MEDIUM · 32-hex MD5 = WEAK
     password_plain:        str | None = None
+    # 2026-08-16: UNSALTED_STORAGE moved to the Dossier tier — an unsalted /
+    # plaintext-equivalent credential is visible in the clear without running
+    # Hashcrack at all, which is the whole point of the violation. `submitted_hash`
+    # stays a real MD5 hash underneath (so Hashcrack's own log/crack display is
+    # unaffected if the player runs it anyway); this flag just tells the dossier
+    # to show `password_plain` up front instead of gating it behind a crack.
+    credential_unsalted:   bool = False
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────

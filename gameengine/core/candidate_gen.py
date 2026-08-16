@@ -200,6 +200,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.AFTER_HOURS_ACCESS,   # v2: benign minor noise
             DiscrepancyKind.CLAIMED_IP_MISMATCH,  # v2: benign minor noise
             DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
+            DiscrepancyKind.WEAK_ENCRYPTION,      # dossier-tier: weak algo, not weak pw
         ),
         handle_style="casual",
         affiliation_pool="legit",
@@ -235,6 +236,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.AFTER_HOURS_ACCESS,
             DiscrepancyKind.CLAIMED_IP_MISMATCH,
             DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
+            DiscrepancyKind.WEAK_ENCRYPTION,      # dossier-tier: weak algo, not weak pw
         ),
         handle_style="casual",
         affiliation_pool="thin",
@@ -289,6 +291,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.TYPOSQUAT_HANDLE,
             DiscrepancyKind.AFTER_HOURS_ACCESS,
             DiscrepancyKind.CLAIMED_IP_MISMATCH,
+            DiscrepancyKind.WEAK_ENCRYPTION,
         ),
         handle_style="academic",
         affiliation_pool="elite",       # the camouflage — faked prestigious affiliation
@@ -371,10 +374,35 @@ _SEVERITY_REVEAL = {
     DiscrepancyKind.AFTER_HOURS_ACCESS:     (ToolName.LOGWATCH,   "minor"),
     DiscrepancyKind.LOW_AND_SLOW:           (ToolName.LOGWATCH,   "critical"),
     DiscrepancyKind.CROSS_BREACH_REUSE:     (ToolName.HASHCRACK,  "major"),
-    DiscrepancyKind.UNSALTED_STORAGE:       (ToolName.HASHCRACK,  "major"),
+    # 2026-08-16: moved HASHCRACK → DOSSIER. Originally speced as "free (hash
+    # shape)" but shipped as Hashcrack-only; the dossier now shows the stored
+    # password in the clear for this kind (see Dossier.credential_unsalted),
+    # so no crack is needed to catch it.
+    DiscrepancyKind.UNSALTED_STORAGE:       (ToolName.DOSSIER,    "major"),
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      (ToolName.STEGOTOOL,  "critical"),
-    DiscrepancyKind.CLAIMED_IP_MISMATCH:    (ToolName.DOSSIER,    "minor"),
+    # 2026-08-16: moved DOSSIER → LOGWATCH. The dossier only ever shows the
+    # *claimed* IP; the mismatch is only confirmable by comparing it against
+    # the login IPs in the Logwatch log, so Logwatch is what actually reveals
+    # it (and gates it to Logwatch's unlock day instead of day 1).
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    (ToolName.LOGWATCH,   "minor"),
+    # Weak encryption ALGORITHM (not a weak plaintext) — the hash-shape /
+    # strength chip on the dossier already shows this for free, no tool
+    # needed. Distinct from WEAK_CREDENTIAL, which needs a Hashcrack crack to
+    # confirm the plaintext itself is bad.
+    DiscrepancyKind.WEAK_ENCRYPTION:        (ToolName.DOSSIER,    "minor"),
 }
+
+
+# The set of kinds that drive submitted_hash/password_plain generation in
+# `generate()` below — a candidate can carry at most one of these (see the
+# exclusivity note in `_roll_discrepancies`).
+_CREDENTIAL_ARTIFACT_KINDS: frozenset[DiscrepancyKind] = frozenset({
+    DiscrepancyKind.LEAKED_PASSWORD,
+    DiscrepancyKind.CROSS_BREACH_REUSE,
+    DiscrepancyKind.WEAK_CREDENTIAL,
+    DiscrepancyKind.UNSALTED_STORAGE,
+    DiscrepancyKind.WEAK_ENCRYPTION,
+})
 
 
 # ─── Evidence-tier gate (#31) ────────────────────────────────────────────────
@@ -425,9 +453,10 @@ _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.AFTER_HOURS_ACCESS:     "Account activity outside business hours.",
     DiscrepancyKind.LOW_AND_SLOW:           "Attack activity spread thin over time to evade detection thresholds.",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "Cracked password recurs across multiple breach corpora — reused credential.",
-    DiscrepancyKind.UNSALTED_STORAGE:       "Submitted credential is unsalted / plaintext-equivalent and cracks instantly.",
+    DiscrepancyKind.UNSALTED_STORAGE:       "Submitted credential is unsalted / plaintext-equivalent — visible in the clear on the dossier, no crack needed.",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "Hidden image payload is XOR/encrypted — deliberate obfuscation.",
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    "Claimed connection IP does not match the IP in the submitted logs.",
+    DiscrepancyKind.WEAK_ENCRYPTION:        "Password stored with a weak encryption algorithm (MD5) — the algorithm is the problem, not necessarily the password.",
 }
 
 
@@ -558,6 +587,16 @@ def _roll_discrepancies(
     empty the eligible pool on very early days — that's a day-CONTENT concern
     (the day's archetype mix should suit the tools taught so far, handled by
     #32/#15), not a bug here.
+
+    Credential-artifact exclusivity: every candidate submits exactly ONE
+    password (issue #29), so at most one of LEAKED_PASSWORD /
+    CROSS_BREACH_REUSE / WEAK_CREDENTIAL / UNSALTED_STORAGE / WEAK_ENCRYPTION
+    may be chosen per candidate — picking two would mean the generator's
+    if/elif hash-selection in `generate()` silently builds an artifact for
+    only the higher-priority one, leaving the other planted in ground truth
+    with no matching hash for the player to ever actually find. Choosing one
+    credential-artifact kind removes the rest from contention for the same
+    candidate's remaining severity slots.
     """
     chosen: list[Discrepancy] = []
     used: set[DiscrepancyKind] = set()
@@ -584,6 +623,8 @@ def _roll_discrepancies(
                         description=_DISCREPANCY_DESCRIPTIONS[kind],
                     ))
                     used.add(kind)
+                    if kind in _CREDENTIAL_ARTIFACT_KINDS:
+                        used.update(_CREDENTIAL_ARTIFACT_KINDS)
                     break
 
     take("critical", spec.budget.critical)
@@ -748,20 +789,30 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     #   MD5     = WEAK   (cracks instantly)
     # Violation carriers keep their v2 semantics: CROSS_BREACH_REUSE behaves
     # like a leaked credential (sha256 of a reused leaked password);
-    # UNSALTED_STORAGE behaves like a weak credential (instant-crack md5).
+    # UNSALTED_STORAGE behaves like a weak credential (instant-crack md5) —
+    # `credential_unsalted` below additionally surfaces the plaintext on the
+    # dossier directly, since that's now what actually reveals this kind.
     # WEAK_CREDENTIAL (#29 rework) = weak encryption + weak plaintext.
+    # WEAK_ENCRYPTION = weak encryption ONLY — same MD5 shape (so the dossier
+    # chip reads WEAK either way), but the plaintext behind it is one of the
+    # obviously-strong passwords, so cracking it confirms the algorithm was
+    # the problem, not the password.
     submitted_hash: str | None = None
     password_plain: str | None = None
-    _has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in discrepancies)
-    _has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in discrepancies)
-    _has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in discrepancies)
-    _has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in discrepancies)
+    _has_leaked  = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in discrepancies)
+    _has_weak    = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in discrepancies)
+    _has_reuse   = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in discrepancies)
+    _has_unsalt  = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in discrepancies)
+    _has_weakenc = any(d.kind == DiscrepancyKind.WEAK_ENCRYPTION    for d in discrepancies)
     rng_hc = random.Random(int(cand_id, 16) ^ 0xDEAD_C0DE)
     if _has_leaked or _has_reuse:
         password_plain = rng_hc.choice(_HC_LEAKED_PASSWORDS)
         submitted_hash = _hashlib.sha256(password_plain.encode()).hexdigest()
     elif _has_weak or _has_unsalt:
         password_plain = rng_hc.choice(_HC_WEAK_PASSWORDS)
+        submitted_hash = _hashlib.md5(password_plain.encode()).hexdigest()
+    elif _has_weakenc:
+        password_plain = rng_hc.choice(_HC_STRONG_PASSWORDS)
         submitted_hash = _hashlib.md5(password_plain.encode()).hexdigest()
     elif rng_hc.random() < 0.6:
         # Clean candidate, strong-tier encryption: bcrypt — no violation
@@ -788,6 +839,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
         submitted_image_path=submitted_image_path,
         claimed_ip=claimed_ip,
         password_plain=password_plain,
+        credential_unsalted=_has_unsalt,
     )
 
     truth = GroundTruth(

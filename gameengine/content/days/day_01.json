@@ -71,6 +71,12 @@
       "severity": "disqualifying"
     },
     {
+      "id": "rule_unsalted_storage",
+      "text": "Deny any candidate whose submitted credential is unsalted / plaintext-equivalent — the password is exposed outright on the dossier.",
+      "predicate": "has_discrepancy:unsalted_storage",
+      "severity": "disqualifying"
+    },
+    {
       "id": "rule_claimed_ip",
       "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs \u2014 corroborate before denying.",
       "predicate": "has_discrepancy:claimed_ip_mismatch",
@@ -80,6 +86,12 @@
       "id": "rule_weak_credential",
       "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password \u2014 poor hygiene, not proof of malice.",
       "predicate": "has_discrepancy:weak_credential",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_weak_encryption",
+      "text": "Flag (do not auto-deny) a password stored with weak encryption (MD5) \u2014 a hygiene issue, not proof the password itself is weak.",
+      "predicate": "has_discrepancy:weak_encryption",
       "severity": "weighted"
     }
   ],

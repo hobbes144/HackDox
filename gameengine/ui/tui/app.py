@@ -77,7 +77,7 @@ def _sev_color(kind: DiscrepancyKind) -> str:
 
 # Board group order + per-group display metadata: (accent colour, tool hotkey).
 # The hotkey is the tool page each group is investigated on (blank = dossier).
-_GROUP_ORDER = ["DOSSIER", "OSINT", "FORENSICS", "CREDENTIAL", "STEGO"]
+_GROUP_ORDER = ["DOSSIER", "OSINT", "CREDENTIAL", "FORENSICS", "STEGO"]
 _GROUP_META: dict[str, tuple[str, str]] = {
     "DOSSIER":    ("#7dd3c0", ""),
     "OSINT":      ("#6ad4ff", "G"),
@@ -350,6 +350,14 @@ def _password_markup(dossier, cracked_password: str | None,
     col, label, algo = _PW_STRENGTH_META[strength]
     head = (f"{dossier.submitted_hash[:prefix_len]}…  "
             f"[{col}][b]{label}[/][/] [#6b7785]{algo}[/]")
+    if dossier.credential_unsalted:
+        # UNSALTED_STORAGE (moved to dossier tier, 2026-08-16): no salt means
+        # the stored value is exposed outright — shown here immediately, no
+        # Hashcrack run required. Running Hashcrack anyway just confirms it.
+        head += "  [#ff5470][b]⚠ UNSALTED[/][/]"
+        state = (f"[#ff5470]no salt — stored value exposed:[/]  "
+                 f"[b #e8f0f8]{dossier.password_plain}[/]")
+        return head, state
     if cracked_password is None:
         state = "[dim]encrypted — run hashcrack (H) to attempt crack[/]"
     elif cracked_password == "":
@@ -463,6 +471,7 @@ class DossierPanel(Static):
             "",
             "[#3d6478]-- submitted artifacts --------------------------------[/]",
             f"  [#6b7785]IP[/]           {ip}",
+            f"               [dim]breadcrumb — corroborate against Logwatch login IPs before denying[/]",
             f"  [#6b7785]Password[/]     {pw_head}",
             *( [f"               {pw_state}"] if pw_state else [] ),
             f"  [#6b7785]Image[/]        {img}",
@@ -833,7 +842,7 @@ class EvidenceState:
 class EvidenceBoard(VerticalScroll):
     """Player-controlled evidence checklist (a *view* over EvidenceState).
 
-    A scrollable container so all 25 items stay reachable regardless of
+    A scrollable container so every item stays reachable regardless of
     terminal height. Nothing is ever written here automatically. The player
     uses ↑↓ to move the cursor and Space to toggle a flag. ← / → are NOT
     consumed here — they bubble up to the screen for page navigation.
@@ -2497,14 +2506,11 @@ class IntakeScreen(Screen):
         if k == "0":
             self.app.push_screen(RulesScreen(self._day, self.evidence_state)); event.stop(); return
         if k == config.KEY_BINDINGS["toggle_evidence"]:   # Tab
-            if 1 <= self._page_index <= 4:
+            if 0 <= self._page_index <= 4:
+                # Toggles the editable board in place on every page, including
+                # the Candidate/Dossier page (board_c0 swaps in for the
+                # read-only summary there, same as a tool page's sidebar).
                 self._toggle_evidence(); event.stop()
-            elif self._page_index == 0:
-                # On the candidate page: jump to Ghostscan and open the board.
-                self._goto_page(1)
-                if not self._evidence_open:
-                    self._toggle_evidence()
-                event.stop()
             return
         if k == "grave_accent":
             self.debug.display = not self.debug.display; event.stop(); return
@@ -2595,14 +2601,7 @@ class IntakeScreen(Screen):
             self.app.push_screen(RulesScreen(self._day, self.evidence_state))
 
         elif kind == "evidence":
-            if 1 <= self._page_index <= 4:
-                self._toggle_evidence()
-            else:
-                self.command_bar.set_response(
-                    "Evidence Board is always shown on the Candidate page — "
-                    "press Tab on a tool page (2-5) to toggle it there.",
-                    error=False,
-                )
+            self._toggle_evidence()
 
         elif kind == "help":
             self.command_bar.set_response(

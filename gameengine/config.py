@@ -327,9 +327,9 @@ KEY_BINDINGS: dict[str, str] = {
     "stamp_mode":       "x",
 
     # ── Misc ────────────────────────────────
-    # Toggle the Evidence Board on the tool pages (2-5). It slides in on the
-    # left so the tool data on the right stays visible. On the Candidate page
-    # (1) the board is always baked in, so this key is a no-op there.
+    # Toggle the editable Evidence Board on every page. On tool pages (2-5)
+    # it slides in on the left so the tool data on the right stays visible.
+    # On the Candidate page (1) it swaps in for the read-only summary board.
     "toggle_evidence":  "tab",
     "toggle_debug":     "grave_accent",
     "help":             "question_mark",

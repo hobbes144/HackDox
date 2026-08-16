@@ -362,19 +362,19 @@ Ten new evidence pieces extend the board. Each one is **two-sided**: it must be 
 | After-hours access | `AFTER_HOURS_ACCESS` | Forensics · Logwatch | base · filter | minor | LogForge `after_hours` scenario (activity outside business hours) |
 | Low-and-slow | `LOW_AND_SLOW` | Forensics · Logwatch | filter (hard to spot) | critical | LogForge `slow_burn` scenario (thresholds evaded by spreading thin) |
 | Cross-breach password reuse | `CROSS_BREACH_REUSE` | Credential · Hashcrack | base crack · filter confirms | major | Cracked plaintext recurs across breach DBs — links the Ghostscan breach panel via `_breach_db_for_candidate` |
-| Unsalted / plaintext storage | `UNSALTED_STORAGE` | Credential · Hashcrack | free (hash shape) · base | major | Submitted credential is unsalted / plaintext-equivalent (hash hygiene) |
 | Encrypted vs plaintext payload | `ENCRYPTED_PAYLOAD` | Stego · Stegotool | base score · filter decodes | critical | Stegotool hard-mode XOR encoding — deliberate obfuscation vs a casual hidden note |
-| Claimed-IP mismatch | `CLAIMED_IP_MISMATCH` | Dossier (prompts Logwatch/Stego) | free (dossier) | minor | Dossier `claimed_ip` ≠ IP in submitted logs — an investigative breadcrumb, not an auto-disqualifier |
 
 **Archetype placement (eligible_kinds to add; severities feed each archetype's `DiscrepancyBudget`):**
 
-- **The Day-to-Day** *(budget minor=1)* → `AFTER_HOURS_ACCESS`, `CLAIMED_IP_MISMATCH`
-- **The Clumsy Cutie** *(minor=2, major=1)* → `UNSALTED_STORAGE`, `CROSS_BREACH_REUSE`, `AFTER_HOURS_ACCESS`, `CLAIMED_IP_MISMATCH`
+- **The Day-to-Day** *(budget minor=1)* → `AFTER_HOURS_ACCESS`, `CLAIMED_IP_MISMATCH`, `WEAK_ENCRYPTION`
+- **The Clumsy Cutie** *(minor=2, major=1)* → `UNSALTED_STORAGE`, `CROSS_BREACH_REUSE`, `AFTER_HOURS_ACCESS`, `CLAIMED_IP_MISMATCH`, `WEAK_ENCRYPTION`
 - **The Bad Actor** *(major=2, critical=1)* → `THREAT_FORUM_MATCH`, `CREDENTIAL_STUFFING`, `BURNER_IDENTITY`, `TYPOSQUAT_HANDLE`, `CROSS_BREACH_REUSE`
-- **The Sneaky Bugger** *(major=1, critical=1 — consider +minor=1 for breadcrumbs)* → `LOW_AND_SLOW`, `ENCRYPTED_PAYLOAD`, `BURNER_IDENTITY`, `TYPOSQUAT_HANDLE`, `AFTER_HOURS_ACCESS`, `CLAIMED_IP_MISMATCH`
+- **The Sneaky Bugger** *(major=1, critical=1 — consider +minor=1 for breadcrumbs)* → `LOW_AND_SLOW`, `ENCRYPTED_PAYLOAD`, `BURNER_IDENTITY`, `TYPOSQUAT_HANDLE`, `AFTER_HOURS_ACCESS`, `CLAIMED_IP_MISMATCH`, `WEAK_ENCRYPTION`
 - **The White Hat** *(critical=1)* → `LOW_AND_SLOW`, `ENCRYPTED_PAYLOAD`, `BURNER_IDENTITY`
 
-The evidence board grows from 13 to 25 items (these 10 + the two never-listed `AFFILIATION_MISMATCH` / `DISPOSABLE_EMAIL`). Board categories are unchanged: DOSSIER (`CLAIMED_IP_MISMATCH`), OSINT (`BURNER_IDENTITY`, `THREAT_FORUM_MATCH`, `TYPOSQUAT_HANDLE`), FORENSICS (`CREDENTIAL_STUFFING`, `AFTER_HOURS_ACCESS`, `LOW_AND_SLOW`), CREDENTIAL (`CROSS_BREACH_REUSE`, `UNSALTED_STORAGE`), STEGO (`ENCRYPTED_PAYLOAD`).
+**2026-08-16 revisions (playtest fixes, see Session Log below for the full list):** `CLAIMED_IP_MISMATCH` moved Dossier → **Logwatch** (Forensics) — the dossier's claimed-IP field never actually varied by violation; the mismatch only ever showed up in the Logwatch log, so that's what actually reveals it now (gated to Logwatch's unlock day). `UNSALTED_STORAGE` moved Hashcrack → **Dossier** — this is the reveal tier the original spec above called for ("free (hash shape)") but shipped as Hashcrack-only; the dossier password field now shows the stored value in the clear (⚠ UNSALTED marker) with no crack required. New kind `WEAK_ENCRYPTION` (Dossier, minor, free) fills the slot `CLAIMED_IP_MISMATCH` left behind — flags the password's encryption *algorithm* (MD5 chip) independent of whether the plaintext itself is any good, distinct from `WEAK_CREDENTIAL`.
+
+The evidence board is now 26 items. Board categories, board order matches the tool-page order: **DOSSIER** (`MISSING_PUBLIC_PROFILE`, `HOSTILE_CHAT`, `AFFILIATION_UNVERIFIED`, `DISPOSABLE_EMAIL`, `WEAK_ENCRYPTION`, `UNSALTED_STORAGE`) · **OSINT** (`BURNER_IDENTITY`, `THREAT_FORUM_MATCH`, `TYPOSQUAT_HANDLE`, + the pre-v2 Ghostscan kinds) · **CREDENTIAL** (`CROSS_BREACH_REUSE`, `WEAK_CREDENTIAL`, `LEAKED_PASSWORD`) · **FORENSICS** (`CREDENTIAL_STUFFING`, `AFTER_HOURS_ACCESS`, `LOW_AND_SLOW`, `CLAIMED_IP_MISMATCH`, + the pre-v2 Logwatch kinds) · **STEGO** (`ENCRYPTED_PAYLOAD`, + the pre-v2 Stego kinds).
 
 ### Papers Please Mechanics (distilled)
 
@@ -465,6 +465,8 @@ The evidence board grows from 13 to 25 items (these 10 + the two never-listed `A
 
 ## Where I'm At (last updated 2026-07-18)
 
+> **2026-08-16:** Epic #2 (progressive unlock, issues #3/#31-34) shipped via the backlog-sprint flow on branch `batch-1-progressive-unlock` (not yet pushed/merged to main), plus a round of ad-hoc playtest fixes. Neither is narrated here in full — see the Session Log entry below and the session's project memory (`planning_sprint.md` / `playtest_fixes.md`) for details. This section still reflects the 2026-07-18 state as the last fully-narrated milestone.
+
 **GitHub issues #27-#30 ALL IMPLEMENTED & pilot-verified (2026-07-18).**
 - **#27 Computing hours rework** — ⏱ is now a *finite daily budget*: `config.daily_compute_budget(day, capacity)` (STARTING_COMPUTE 60, DAILY_BUDGET_GROWTH 4, floor 30). Verdicts grant **zero ⏱**; the board-accuracy bonus moved to HD$ (folds into `hackdollar_delta`; `CandidateResult.compute_delta` deleted, `board_bonus` is now HD$). `Quotas.compute_target` removed everywhere (model, loader ignores legacy keys, EOD, `_evaluate_performance`). Status header colours the balance by scarcity + shows a live per-tool cost strip (`G5·H3·L4·S1`, upgrade-aware). Running dry just blocks tools (`InsufficientCompute`), no other penalty.
 - **#28 GhostScan report UI** — report is now two banded sections: cyan `▌ PLATFORM SWEEP` (platforms + account registry) and orange `▌ BREACH DETECTION` (threat forums + breach dumps), via `_gs_band()`; candidate rows bumped to high-contrast `#e8f0f8/#c8d4e1`. Base run and filter both **REPLACE** the terminal (`ToolTerminal.set_result`) — the free identity block is folded into the report top, so nothing stacks.
@@ -551,6 +553,17 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 ---
 
 ## Session Log
+
+### 2026-08-16 (playtest fixes)
+Ad-hoc fixes from Nick's manual playtesting, applied directly (not a numbered backlog batch — see `planning_sprint.md`/`playtest_fixes.md` in project memory for the Batch 1 epic that shipped separately the same day). All 32 `gameengine/tests` pass throughout; changes also verified with 2000+-candidate generation sweeps across days 1-5.
+- **Tab-toggle bug fixed:** pressing Tab on the Candidate/Dossier page used to force-navigate to Ghostscan and only ever open the Evidence Board, never close it (`on_key`'s Tab handler special-cased page 0 instead of calling `_toggle_evidence()`, even though `board_c0` already supported toggling in place there). Now unified across all 5 pages.
+- **`CLAIMED_IP_MISMATCH` moved Dossier → Logwatch** in `_SEVERITY_REVEAL` — the dossier's `claimed_ip` field never actually varied by violation; the mismatch was only ever expressed in the Logwatch log data. Now gated to Logwatch's unlock day (4) instead of day 1.
+- **New `WEAK_ENCRYPTION` kind** (Dossier, minor, free) — flags the password's encryption *algorithm* (MD5 strength chip) independent of the plaintext's quality; fills the slot `CLAIMED_IP_MISMATCH` vacated. Distinct from `WEAK_CREDENTIAL` (needs a Hashcrack crack to confirm the plaintext itself is bad).
+- **Bug found + fixed:** `_roll_discrepancies` could plant two "credential-artifact" kinds on one candidate at once (e.g. Clumsy Cutie rolling `CROSS_BREACH_REUSE` + `WEAK_ENCRYPTION` together), but `generate()`'s hash-selection is a single if/elif chain — the loser had no matching hash a player could ever actually observe, an unflaggable ground-truth violation. New `candidate_gen._CREDENTIAL_ARTIFACT_KINDS` set enforces at most one credential kind per candidate.
+- **`UNSALTED_STORAGE` moved Hashcrack → Dossier**, major severity — this is the reveal tier the original design doc specced ("free (hash shape)") but it had shipped Hashcrack-only. New `Dossier.credential_unsalted` flag makes the dossier password field show the plaintext in the clear (⚠ UNSALTED marker), no crack required; `submitted_hash` stays a real MD5 underneath so Hashcrack's own log rendering needed no changes.
+- **Evidence Board `_GROUP_ORDER`** reordered to match tool-page order: DOSSIER, OSINT, CREDENTIAL, FORENSICS, STEGO (was …, FORENSICS, CREDENTIAL, …).
+- Added Day-1 rules `rule_weak_encryption` (weighted) and `rule_unsalted_storage` (disqualifying, matching the existing major-severity → disqualifying convention).
+- **Next:** none specified — Nick signed off for the day. Batch 2 (#35, #38, #4, #17, #36 — engine/economy) is next up per `planning_sprint.md`.
 
 ### 2026-07-18
 - **Implemented GitHub issues #27-#30.** #27: ⏱ → finite daily budget (`daily_compute_budget` formula, verdicts grant no ⏱, board bonus now HD$, `compute_target` quota retired). #28: GhostScan report rebuilt as banded PLATFORM SWEEP / BREACH DETECTION sections with high-contrast rows; filter replaces the report in place (`ToolTerminal.set_result`). #29: universal dossier password field with WEAK/MEDIUM/STRONG encryption tiers, bcrypt always safe, `WEAK_CREDENTIAL` reworked to minor (weak enc + weak plaintext), crack state mirrored across all pages. #30: `rules_content.py` — dynamic, engine-derived Rules Pages; Evidence Board catalog now imports from it; all five tabs templated with violation tables + live DENY/FLAG column.

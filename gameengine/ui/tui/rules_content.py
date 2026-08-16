@@ -36,7 +36,8 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
     ("DOSSIER",     DiscrepancyKind.AFFILIATION_UNVERIFIED, "Unverified affiliation"),
     ("DOSSIER",     DiscrepancyKind.DISPOSABLE_EMAIL,       "Disposable email domain"),
-    ("DOSSIER",     DiscrepancyKind.CLAIMED_IP_MISMATCH,    "Claimed-IP mismatch"),
+    ("DOSSIER",     DiscrepancyKind.WEAK_ENCRYPTION,        "Weak password encryption"),
+    ("DOSSIER",     DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
     # OSINT (Ghostscan)
     ("OSINT",       DiscrepancyKind.EMAIL_GITHUB_MISMATCH,  "Email / GitHub mismatch"),
     ("OSINT",       DiscrepancyKind.BREACH_HIT,             "Breach hit"),
@@ -52,11 +53,11 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("FORENSICS",   DiscrepancyKind.CREDENTIAL_STUFFING,    "Credential stuffing"),
     ("FORENSICS",   DiscrepancyKind.AFTER_HOURS_ACCESS,     "After-hours access"),
     ("FORENSICS",   DiscrepancyKind.LOW_AND_SLOW,           "Low-and-slow intrusion"),
+    ("FORENSICS",   DiscrepancyKind.CLAIMED_IP_MISMATCH,    "Claimed-IP mismatch"),
     # CREDENTIAL (Hashcrack)
     ("CREDENTIAL",  DiscrepancyKind.LEAKED_PASSWORD,        "Leaked password"),
     ("CREDENTIAL",  DiscrepancyKind.WEAK_CREDENTIAL,        "Weak credential"),
     ("CREDENTIAL",  DiscrepancyKind.CROSS_BREACH_REUSE,     "Cross-breach password reuse"),
-    ("CREDENTIAL",  DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
     # STEGO (Stegotool)
     ("STEGO",       DiscrepancyKind.STEGO_PAYLOAD_PRESENT,  "Stego payload"),
     ("STEGO",       DiscrepancyKind.COVERT_C2_CHANNEL,      "Covert C2 channel"),
@@ -97,7 +98,8 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.HOSTILE_CHAT:           "free — read the chat panel (Sentiment Scanner upgrade ⚠-marks it)",
     DiscrepancyKind.AFFILIATION_UNVERIFIED: "base recon — handle appears without the claimed org tag",
     DiscrepancyKind.DISPOSABLE_EMAIL:       "free — domain visible on the dossier, no tool needed (quick deny)",
-    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free — dossier IP vs log IPs; a breadcrumb, corroborate before denying",
+    DiscrepancyKind.WEAK_ENCRYPTION:        "free — MD5 shown on the dossier's strength chip; a crack (if attempted) reveals a fine password — the algorithm is the problem, not the value",
+    DiscrepancyKind.UNSALTED_STORAGE:       "free — the ⚠ UNSALTED marker on the dossier shows the stored password in the clear; no crack needed at all",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "base recon shows commit email · filter highlights the mismatch",
     DiscrepancyKind.BREACH_HIT:             "base recon highlights breach panel · filter confirms ▲ BREACH_HIT",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "handle on a CRITICAL forum — blended in base run, filter labels it",
@@ -111,10 +113,10 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.CREDENTIAL_STUFFING:    "one IP, many accounts, few tries — base detects · filter names it",
     DiscrepancyKind.AFTER_HOURS_ACCESS:     "activity outside business hours — benign alone (minor)",
     DiscrepancyKind.LOW_AND_SLOW:           "sub-threshold on purpose — only the filter's correlation finds it",
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free tier highlights AUTH_OK rows that diverge from the dossier's claimed IP — corroborate before denying",
     DiscrepancyKind.LEAKED_PASSWORD:        "crack reveals plaintext + BREACH_MATCH names the corpus",
     DiscrepancyKind.WEAK_CREDENTIAL:        "weak encryption (MD5) cracks to a weak plaintext — minor hygiene flag",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND breach-corpus match — cross-check the breach panel",
-    DiscrepancyKind.UNSALTED_STORAGE:       "hash shape is free info; crack is instant — storage hygiene failure",
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "CRIMSON mid-density cells — filter (F) names the payload type",
@@ -377,6 +379,23 @@ def build_rules_text(day: Day | None) -> str:
     lines.append("")
     lines += violation_table(day, "DOSSIER")
 
+    # ── Password encryption-strength chip ───────────────────────────────
+    lines += _sub("password encryption strength", "#7dd3c0")
+    lines += [
+        "[#ff5470]WEAK ENC[/]    MD5 — cracks instantly. On its own this plants",
+        "             WEAK_ENCRYPTION (the algorithm is the problem — the",
+        "             chip alone is enough, no tool needed). Paired with a",
+        "             weak plaintext it's WEAK_CREDENTIAL instead, which",
+        "             Hashcrack has to crack to confirm.",
+        "[#ffd93d]MEDIUM ENC[/]  SHA256 — crackable with effort, usually clean.",
+        "[#00ff9f]STRONG ENC[/]  bcrypt — always safe; never worth cracking.",
+        "",
+        "  [#ff5470]⚠ UNSALTED[/]  a rarer marker next to the strength chip —",
+        "             storage has no salt at all, so the stored password is",
+        "             printed in the clear right there. UNSALTED_STORAGE",
+        "             (major): no crack needed, the dossier already shows it.",
+    ]
+
     # ── Reference lists (dynamic from ghostscan data) ──────────────────
     lines += _sub("email domains", "#7dd3c0")
     trusted    = " · ".join(sorted(tools_bridge._GS_TRUSTED_DOMAINS))
@@ -572,9 +591,9 @@ def build_logs_text(day: Day | None) -> str:
         "  [#ff5470]LOW_AND_SLOW[/]         deliberately sub-threshold — the base run",
         "                       will NOT flag it; only the filter's cross-day",
         "                       correlation summary surfaces it",
-        "",
-        "  [dim]CLAIMED_IP_MISMATCH (dossier tab) is the breadcrumb that sends",
-        "  you here: compare the dossier's claimed IP against login sources.[/]",
+        "  [#ffd93d]CLAIMED_IP_MISMATCH[/]  free tier — AUTH_OK rows that diverge",
+        "                       from the dossier's claimed IP are highlighted;",
+        "                       corroborate before denying on this alone",
     ]
     lines += _sub("upgrades that change this page", "#ffb454")
     lines += [
