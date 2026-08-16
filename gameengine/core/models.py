@@ -263,6 +263,22 @@ class Day:
     quotas: Quotas
     overseer_intro_key: str
     overseer_outro_keys: dict[Performance, str]
+    # ── Per-day candidate spec (#32) ─────────────────────────────────────
+    # The Day IS the spec object the generator consumes. These three fields
+    # are optional and default to "no extra constraints", so every pre-#32
+    # day_NN.json loads unchanged.
+    #   allowed_violations — whitelist of discrepancy kinds this day may plant.
+    #     Empty = no whitelist (only #31's evidence-tier gate applies). When
+    #     set, the generator plants only kinds that are BOTH in this set AND
+    #     already taught by the current day.
+    #   difficulty_band — coarse day-difficulty label ("easy"/"medium"/"hard")
+    #     that day content and volume scaling can key off. Stored/available; no
+    #     hard-coded generator effect yet (a deliberate tuning hook).
+    #   forced_includes — pin a specific archetype into a specific slot index
+    #     (e.g. the scripted White Hat on its day). Maps slot index -> Archetype.
+    allowed_violations: tuple[DiscrepancyKind, ...] = ()
+    difficulty_band: str = "easy"
+    forced_includes: dict[int, Archetype] = field(default_factory=dict)
 
 
 # ─── Day results & game state ───────────────────────────────────────────────

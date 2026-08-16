@@ -206,3 +206,58 @@ def test_intro_day_matches_tool_schedule():
     assert intro_day(DiscrepancyKind.LEAKED_PASSWORD) == 3          # hashcrack
     assert intro_day(DiscrepancyKind.BRUTE_FORCE_IN_LOG) == 4       # logwatch
     assert intro_day(DiscrepancyKind.STEGO_PAYLOAD_PRESENT) == 5    # stegotool
+
+
+# ─── Per-day candidate spec (#32) ────────────────────────────────────────────
+
+
+def test_day_spec_fields_default_on_pre32_files():
+    """A day file without the #32 keys loads with harmless defaults."""
+    day = load_day(1)
+    assert day.allowed_violations == ()
+    assert day.difficulty_band == "easy"
+    assert day.forced_includes == {}
+
+
+def test_forced_includes_pins_archetype_to_slot():
+    """forced_includes puts the chosen archetype in the chosen slot, and it's
+    deterministic (#32 AC)."""
+    import dataclasses
+    day = dataclasses.replace(load_day(1), number=5,
+                              forced_includes={0: Archetype.SNEAKY_BUGGER})
+    assert candidate_gen.generate(SEED, day, 0).archetype == Archetype.SNEAKY_BUGGER
+    # same spec + seed → same pick
+    assert candidate_gen.generate(SEED, day, 0).archetype == Archetype.SNEAKY_BUGGER
+
+
+def test_forced_include_preserves_declared_mix():
+    """Pinning a slot must not distort the day's overall archetype counts —
+    the forced pick is subtracted from the bag, not added on top."""
+    import dataclasses
+    from collections import Counter
+    day = dataclasses.replace(load_day(1), number=5,
+                              forced_includes={0: Archetype.SNEAKY_BUGGER})
+    got = [candidate_gen.generate(SEED, day, i).archetype
+           for i in range(day.candidate_count)]
+    assert got[0] == Archetype.SNEAKY_BUGGER
+    assert dict(Counter(got)) == {
+        Archetype.OBVIOUS_ADMIT: 2, Archetype.DAY_TO_DAY: 1,
+        Archetype.CLUMSY_CUTIE: 1, Archetype.BAD_ACTOR: 1,
+        Archetype.SNEAKY_BUGGER: 1,
+    }
+
+
+def test_allowed_violations_whitelist_restricts_planted_kinds():
+    """When a day sets allowed_violations, no candidate may carry a kind
+    outside it (it intersects with the #31 gate)."""
+    import dataclasses
+    day = dataclasses.replace(
+        load_day(1), number=5,
+        allowed_violations=(DiscrepancyKind.AFFILIATION_UNVERIFIED,),
+    )
+    for i in range(day.candidate_count):
+        c = candidate_gen.generate(SEED, day, i)
+        for d in c.truth.discrepancies:
+            assert d.kind == DiscrepancyKind.AFFILIATION_UNVERIFIED, (
+                f"slot {i} planted {d.kind} outside the day whitelist"
+            )

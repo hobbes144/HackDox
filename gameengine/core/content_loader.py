@@ -14,6 +14,7 @@ from .. import config
 from .models import (
     Archetype,
     Day,
+    DiscrepancyKind,
     Performance,
     Quotas,
     Rule,
@@ -44,6 +45,16 @@ def load_day(day_number: int) -> Day:
     outro_keys = {
         Performance(k): v for k, v in raw["overseer_outro_keys"].items()
     }
+    # Per-day candidate spec (#32) — all optional so pre-#32 files load as-is.
+    allowed_violations = tuple(
+        DiscrepancyKind(k) for k in raw.get("allowed_violations", [])
+    )
+    difficulty_band = raw.get("difficulty_band", "easy")
+    # forced_includes JSON: {"<slot index>": "<archetype value>"}.
+    forced_includes = {
+        int(slot): Archetype(arch)
+        for slot, arch in raw.get("forced_includes", {}).items()
+    }
     return Day(
         number=raw["number"],
         title=raw["title"],
@@ -53,6 +64,9 @@ def load_day(day_number: int) -> Day:
         quotas=quotas,
         overseer_intro_key=raw["overseer_intro_key"],
         overseer_outro_keys=outro_keys,
+        allowed_violations=allowed_violations,
+        difficulty_band=difficulty_band,
+        forced_includes=forced_includes,
     )
 
 

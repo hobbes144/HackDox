@@ -538,6 +538,7 @@ def _roll_discrepancies(
     rng: random.Random,
     spec: ArchetypeSpec,
     day_number: int,
+    allowed_violations: tuple[DiscrepancyKind, ...] = (),
 ) -> list[Discrepancy]:
     """Pick discrepancies for this candidate.
 
@@ -545,17 +546,26 @@ def _roll_discrepancies(
     that none of the eligible kinds can satisfy, the slot is skipped — the
     archetype specs above are written so this shouldn't happen.
 
-    The evidence-tier gate (#31) filters out any kind whose revealing tool
-    hasn't been taught by `day_number` before rolling, so an early-campaign
-    candidate never carries evidence the player can't yet read. NOTE: for a
-    tool-only archetype (e.g. Sneaky Bugger) this can empty the eligible pool
-    on very early days — that's a day-CONTENT concern (the day's archetype
-    mix should suit the tools taught so far, handled by #32/#15), not a bug in
-    this gate.
+    Two filters run before rolling:
+      • The evidence-tier gate (#31) drops any kind whose revealing tool
+        hasn't been taught by `day_number`, so an early-campaign candidate
+        never carries evidence the player can't yet read.
+      • The per-day whitelist (#32, `allowed_violations`) — when non-empty,
+        only kinds in it may be planted. It INTERSECTS with the gate: a kind
+        must be both whitelisted AND already taught.
+
+    NOTE: for a tool-only archetype (e.g. Sneaky Bugger) these filters can
+    empty the eligible pool on very early days — that's a day-CONTENT concern
+    (the day's archetype mix should suit the tools taught so far, handled by
+    #32/#15), not a bug here.
     """
     chosen: list[Discrepancy] = []
     used: set[DiscrepancyKind] = set()
-    eligible = [k for k in spec.eligible_kinds if intro_day(k) <= day_number]
+    eligible = [
+        k for k in spec.eligible_kinds
+        if intro_day(k) <= day_number
+        and (not allowed_violations or k in allowed_violations)
+    ]
     rng.shuffle(eligible)
 
     def take(severity: str, count: int) -> None:
@@ -639,22 +649,39 @@ def _pick_archetype_for_slot(
     day_number: int,
     archetype_mix: dict[Archetype, int],
     slot_index: int,
+    forced_includes: dict[int, Archetype] | None = None,
 ) -> Archetype:
-    """Deterministic archetype selection respecting the day's mix.
+    """Deterministic archetype selection respecting the day's mix and any
+    forced_includes (#32).
 
-    The bag is shuffled with a *day-scoped* RNG (no slot salt) so the
-    walk is consistent across slots; the slot index is just an index
-    into the shared ordering.
+    forced_includes pins specific slots to a chosen archetype (e.g. the
+    scripted White Hat on its day). Those picks are subtracted from the mix,
+    and the remaining slots are filled from the day-scoped shuffled bag walked
+    by NON-forced position — so the realized mix still equals the declared mix
+    and generation stays deterministic (same spec + seed → same set).
+
+    The bag is shuffled with a *day-scoped* RNG (no slot salt) so the walk is
+    consistent across slots.
     """
+    forced_includes = forced_includes or {}
+    if slot_index in forced_includes:
+        return forced_includes[slot_index]
+    # Remove forced picks from the mix so the bag covers only free slots.
+    remaining = dict(archetype_mix)
+    for arch in forced_includes.values():
+        if remaining.get(arch, 0) > 0:
+            remaining[arch] -= 1
     day_rng = random.Random(stable_hash(game_seed, day_number, "archetype_bag") & 0xFFFFFFFF)
-    bag = _shuffled_archetype_bag(day_rng, archetype_mix)
-    return bag[slot_index % len(bag)]
+    bag = _shuffled_archetype_bag(day_rng, remaining)
+    non_forced_pos = sum(1 for s in range(slot_index) if s not in forced_includes)
+    return bag[non_forced_pos % len(bag)]
 
 
 def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     """Generate the candidate for one slot of one day. Deterministic."""
 
-    archetype = _pick_archetype_for_slot(game_seed, day.number, day.archetype_mix, slot_index)
+    archetype = _pick_archetype_for_slot(game_seed, day.number, day.archetype_mix,
+                                          slot_index, day.forced_includes)
     spec = ARCHETYPE_SPECS[archetype]
 
     rng_id = _seeded_rng(game_seed, day.number, slot_index, "identity")
@@ -674,7 +701,8 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     email = _make_email(rng_id, first, last, affiliation, disposable=is_incompatible)
 
     rng_disc = _seeded_rng(game_seed, day.number, slot_index, "discrepancies")
-    discrepancies = _roll_discrepancies(rng_disc, spec, day.number)
+    discrepancies = _roll_discrepancies(rng_disc, spec, day.number,
+                                        day.allowed_violations)
 
     rng_chat = _seeded_rng(game_seed, day.number, slot_index, "chat")
     chat = _build_chat(rng_chat, spec, discrepancies)
