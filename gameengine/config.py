@@ -137,6 +137,19 @@ def tools_unlocked_by(day_number: int) -> set[str]:
     }
 
 
+def tool_introduced_on(day_number: int) -> str | None:
+    """The tool (if any) whose unlock day is exactly `day_number`.
+
+    Drives the Overseer's unlock narration (#34): the day a tool is introduced,
+    the briefing announces it and flips it on. Dossier is excluded (always
+    available). Returns a ToolName value string, or None if no tool debuts.
+    """
+    for tool, intro in TOOL_UNLOCK_DAY.items():
+        if tool != "dossier" and intro == day_number:
+            return tool
+    return None
+
+
 # ─── Tool base costs (⏱ per invocation) ─────────────────────────────────────
 
 TOOL_COSTS: dict[str, int] = {

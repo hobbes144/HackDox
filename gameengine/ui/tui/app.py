@@ -1753,26 +1753,40 @@ def _play_overseer(log: "TypewriterLog", narrative: str, *, triggers_on_last=Non
         log.post("", line, triggers=(triggers_on_last if last else None))
 
 
+# Placeholder Overseer unlock narration, one line per tool (#34). PLACEHOLDER —
+# the final, day-by-day wording is authored with the tutorial script (#15); this
+# is a stand-in so the mechanism (and its teaching order) is in place now. The
+# `triggers` payload on this line is the tool value string, which the briefing's
+# Finished handler uses to flip GameState.unlocked_tools.
+_UNLOCK_LINES: dict[str, str] = {
+    "ghostscan": "New capability authorized: GHOSTSCAN. Public traces don't lie the way people do.",
+    "hashcrack": "New capability authorized: HASHCRACK. If they reused a breached password, we'll see it.",
+    "logwatch":  "New capability authorized: LOGWATCH. The logs remember every step they took.",
+    "stegotool": "New capability authorized: STEGOTOOL. They hide payloads in plain sight now. Look closer.",
+}
+
+
 class BriefingScreen(Screen):
     BINDINGS = [
         Binding("space", "begin_day", "Begin shift"),
         Binding("q", "quit_app", "Quit"),
     ]
 
-    def __init__(self, day: Day, narrative: str) -> None:
+    def __init__(self, day: Day, narrative: str, state: GameState) -> None:
         super().__init__()
         self._day       = day
         self._narrative = narrative
+        self._state     = state
         self._overseer_log: TypewriterLog | None = None
+        # The tool (if any) this day introduces — its unlock line + trigger.
+        self._unlock_tool = config.tool_introduced_on(day.number)
 
     def compose(self) -> ComposeResult:
         yield Static(f"[b][#7dd3c0]{self._day.title}[/][/]", classes="screen-title")
         with Container(id="overseer-panel"):
             yield Static("[b]Overseer:[/]", classes="speaker")
-            # #3: the briefing dialogue now types out through the TypewriterLog.
-            # The log is NOT focused, so the screen keeps its Space=begin binding
-            # (the beat auto-plays); #34 will hand `triggers` to post() here so a
-            # tool-unlock fires when the beat lands.
+            # #3: the briefing dialogue types out through the TypewriterLog.
+            # The log is NOT focused, so the screen keeps its Space=begin binding.
             self._overseer_log = TypewriterLog(id="briefing-overseer")
             yield self._overseer_log
         yield Static(
@@ -1781,9 +1795,31 @@ class BriefingScreen(Screen):
         )
 
     def on_mount(self) -> None:
+        # Play the day's intro beat, then — on a tool-unlock day (#34) — the
+        # Overseer's unlock line, carrying the tool as its `triggers` payload so
+        # the flip lands exactly when that line finishes.
         _play_overseer(self._overseer_log, self._narrative)
+        if self._unlock_tool:
+            line = _UNLOCK_LINES.get(self._unlock_tool,
+                                     f"New capability authorized: {self._unlock_tool.upper()}.")
+            self._overseer_log.post("", line, color="#00ff9f",
+                                    triggers=self._unlock_tool)
+
+    def on_typewriter_log_finished(self, msg: "TypewriterLog.Finished") -> None:
+        # #34: the unlock beat flips the tool on — not just cosmetically.
+        if isinstance(msg.triggers, str):
+            self._state.unlocked_tools.add(msg.triggers)
+
+    def _ensure_unlocked(self) -> None:
+        # Belt-and-suspenders: if the player presses Space to begin before the
+        # unlock line has finished typing, the tool must still be granted for
+        # the day to be playable. Adding to a set is idempotent, so this never
+        # double-applies with the Finished trigger above.
+        if self._unlock_tool:
+            self._state.unlocked_tools.add(self._unlock_tool)
 
     def action_begin_day(self) -> None:
+        self._ensure_unlocked()
         self.app.begin_intake()
 
     def action_quit_app(self) -> None:
@@ -2962,7 +2998,7 @@ class HackDoxApp(App):
         self._day = load_day(self._state.current_day)
         narrative = self._narratives[self._day.overseer_intro_key]
         self.pop_screen()
-        self.push_screen(BriefingScreen(self._day, narrative))
+        self.push_screen(BriefingScreen(self._day, narrative, self._state))
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
@@ -3038,7 +3074,7 @@ class HackDoxApp(App):
         self._day_start_health = st.site_health
         narrative = self._narratives.get(self._day.overseer_intro_key, "")
         self.pop_screen()
-        self.push_screen(BriefingScreen(self._day, narrative))
+        self.push_screen(BriefingScreen(self._day, narrative, self._state))
 
     def _evaluate_performance(self) -> Performance:
         assert self._state is not None and self._day is not None

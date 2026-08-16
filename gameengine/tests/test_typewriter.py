@@ -148,9 +148,13 @@ def test_briefing_screen_plays_overseer_beat():
     """The BriefingScreen Overseer region (a TypewriterLog host) auto-plays a
     multi-line beat to completion without a keypress (#3)."""
     async def go():
+        from gameengine.core.models import GameState
         app = _BriefingHost()
         async with app.run_test() as pilot:
-            await app.push_screen(BriefingScreen(load_day(1), "Line one.\nLine two."))
+            # Day 1 unlocks no tool, so the beat is just the two narrative lines.
+            await app.push_screen(
+                BriefingScreen(load_day(1), "Line one.\nLine two.",
+                               GameState(seed=0xC0FFEE)))
             await pilot.pause(1.5)
             log = app.screen.query_one("#briefing-overseer", TypewriterLog)
             assert log.is_idle          # both lines chained and finished
