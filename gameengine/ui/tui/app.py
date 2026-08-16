@@ -293,6 +293,11 @@ _ERROR_MSGS: tuple[str, ...] = (
 _PAGE_NAMES = ["CANDIDATE", "GHOSTSCAN", "HASHCRACK", "LOGWATCH", "STEGOTOOL"]
 _PAGE_IDS   = ["page-candidate", "page-ghostscan", "page-hashcrack",
                "page-logwatch",  "page-stegotool"]
+# Page index → tool value string. Page 0 (Candidate/Dossier) is never gated;
+# the four tool pages map to a ToolName value. Used by progressive unlock (#33)
+# to grey locked tabs and refuse navigation/shortcuts for not-yet-unlocked
+# tools. Kept in step with _PAGE_NAMES / _PAGE_IDS.
+_PAGE_TOOL = [None, "ghostscan", "hashcrack", "logwatch", "stegotool"]
 
 
 # ─── Widgets ─────────────────────────────────────────────────────────────────
@@ -391,10 +396,17 @@ class StatusHeader(Static):
         bar    = ""
         for v in range(-4, 5):
             bar += "●" if v == max(-4, min(4, align)) else "·"
-        tabs = "  ".join(
-            f"[b]◉ [{i+1}]{n}[/]" if i == self.page_index else f"[dim]○ [{i+1}]{n}[/]"
-            for i, n in enumerate(_PAGE_NAMES)
-        )
+        def _tab(i: int, n: str) -> str:
+            tool = _PAGE_TOOL[i]
+            if tool is not None and tool not in self.state.unlocked_tools:
+                # Locked tool (#33): dim + ⊘, visibly distinct from an
+                # unlocked-but-inactive tab (○) and the active tab (◉).
+                return f"[#3d4450]⊘ [{i+1}]{n}[/]"
+            if i == self.page_index:
+                return f"[b]◉ [{i+1}]{n}[/]"
+            return f"[dim]○ [{i+1}]{n}[/]"
+
+        tabs = "  ".join(_tab(i, n) for i, n in enumerate(_PAGE_NAMES))
         # Two-line layout: player resources & standings up top, the page
         # tab strip on its own line beneath.
         return (
@@ -2044,6 +2056,17 @@ class IntakeScreen(Screen):
             self.board.repaint()
 
     def _goto_page(self, index: int) -> None:
+        # Progressive unlock (#33): a locked tool page can't be entered — no
+        # switch, no ⏱, just an Overseer-flavoured note. Candidate page (0) and
+        # any already-unlocked tool pass straight through.
+        tool = _PAGE_TOOL[index]
+        if tool is not None and tool not in self._state.unlocked_tools:
+            self.command_bar.set_response(
+                f"{_PAGE_NAMES[index]} is locked — the Overseer grants it in a "
+                f"later briefing.",
+                error=False,
+            )
+            return
         # Leaving the stego page (or arriving anywhere) drops stamp mode.
         if self._stamp_mode and index != 4:
             self._exit_stamp_mode(quiet=True)
@@ -2172,6 +2195,15 @@ class IntakeScreen(Screen):
         # trip at shift end (#20 rework).
 
     def _run_tool(self, tool: ToolName, *, filtered: bool = False) -> None:
+        # Progressive unlock (#33): a locked tool is fully inert — the shortcut
+        # keys (G/L/H/S/F) route here, so this is the single choke-point that
+        # guarantees a locked tool never runs and never charges ⏱.
+        if tool.value not in self._state.unlocked_tools:
+            self.command_bar.set_response(
+                f"{tool.value.upper()} is locked — not available yet.",
+                error=False,
+            )
+            return
         if self._candidate is None or self._verdict_locked:
             return
         if tool in self._spent and not filtered:
@@ -2250,6 +2282,13 @@ class IntakeScreen(Screen):
     # ── Stegotool stamp minigame ──────────────────────────────────────────
 
     def _enter_stamp_mode(self) -> None:
+        # Progressive unlock (#33): the stego stamp minigame is the Stegotool's
+        # run surface, so it's inert until Stegotool is unlocked. (_goto_page(4)
+        # already refuses the page, but the 's' shortcut calls this directly.)
+        if "stegotool" not in self._state.unlocked_tools:
+            self.command_bar.set_response(
+                "STEGOTOOL is locked — not available yet.", error=False)
+            return
         if self._candidate is None or self._verdict_locked:
             self.command_bar.set_response(
                 "Verdict locked — stamping disabled", error=True)
