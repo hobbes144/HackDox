@@ -2040,6 +2040,13 @@ class StegoImageData:
     height: int
     file_kb: int
     img_type: str
+    # #54: the GENERAL area the Spectral Lens upgrade advertises — the zone
+    # dilated by STEGO_HINT_BUFFER cells and clamped to the grid. Deliberately
+    # coarser than `zone`: the upgrade narrows the player's search, it does not
+    # answer it. None when the image is clean, so a clean image never lights up
+    # and the tint can never be a false positive. Declared last because it has a
+    # default and every field above it does not.
+    hint_region: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -2111,14 +2118,80 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         hz_h = rng.randint(max(3, rows // 4), rows // 2)
         zone = (hz_x, hz_y, hz_w, hz_h)
         carrier_rng = _random.Random(int(candidate.id, 16) ^ 0x57A3B007)
-        carrier = frozenset(
-            (x, y)
-            for y in range(hz_y, hz_y + hz_h)
-            for x in range(hz_x, hz_x + hz_w)
-            if carrier_rng.random() < density
-        )
+        # #54: carrier cells are CLUMPED into segmented rectangles rather than
+        # scattered by an independent per-cell coin flip. The old uniform fill
+        # produced static: revealing a cell told the player nothing about where
+        # the next one was. Blocks that abut and overlap irregularly read as a
+        # deliberately embedded payload, and a partial reveal becomes a lead.
+        #
+        # Block count and shape come from the payload type, matching the carrier
+        # descriptions in _STAMP_KIND_META - a plaintext payload is a dense
+        # single-channel block, a C2 beacon a sparse multi-channel scatter.
+        #
+        # NOTE on `density`: it does NOT affect resolve balance. `evaluate_stamp`
+        # computes coverage from ZONE cells, so STEGO_STAMP_RESOLVE_COVERAGE is
+        # untouched by how many carrier cells exist. density only feeds the
+        # displayed "% fill" and whether a given stamp lands on a carrier cell at
+        # all - so it is measured FROM the generated blocks below rather than
+        # forced to a target. An earlier version of this forced an exact match by
+        # padding with random spare cells, which silently destroyed the very
+        # clumping it was meant to preserve.
+        zone_area = hz_w * hz_h
+        # More segments for the sparse types - "segmented rectangles grouped
+        # together in strange ways" needs enough pieces to read as segmented.
+        if has_c2:
+            n_blocks, fill = carrier_rng.randint(5, 8), 0.30
+        elif has_enc:
+            n_blocks, fill = carrier_rng.randint(3, 5), 0.45
+        else:
+            n_blocks, fill = carrier_rng.randint(2, 3), 0.55
+
+        # Cap each block well short of the zone in BOTH axes. Without this, a
+        # large per-block area with a short height clamps bw to the full zone
+        # width and the payload renders as flat bands spanning the image - which
+        # reads as a scanline artifact, not an embedded object.
+        max_bw = max(2, int(hz_w * 0.55))
+        max_bh = max(1, int(hz_h * 0.55))
+        per_block = max(2, int(zone_area * fill / max(1, n_blocks)))
+
+        cells: set[tuple[int, int]] = set()
+        # Start at the zone CENTRE, not a random corner. A systematic sweep
+        # crosses the middle of the zone, so anchoring here means the player
+        # reliably lands on a carrier cell and sees the signature colour before
+        # coverage resolves. Starting from a random edge could put every block in
+        # one corner and let a sweep resolve the zone having touched nothing -
+        # observed for STEGO_PAYLOAD_PRESENT with the first version of this.
+        wx = hz_x + hz_w // 2
+        wy = hz_y + hz_h // 2
+        for _ in range(n_blocks):
+            bh = max(1, min(max_bh, carrier_rng.randint(1, max_bh)))
+            bw = max(2, min(max_bw, per_block // bh + carrier_rng.randint(0, 2)))
+            bx = max(hz_x, min(hz_x + hz_w - bw, wx - bw // 2))
+            by = max(hz_y, min(hz_y + hz_h - bh, wy - bh // 2))
+            for yy in range(by, min(by + bh, hz_y + hz_h)):
+                for xx in range(bx, min(bx + bw, hz_x + hz_w)):
+                    cells.add((xx, yy))
+            # Walk to a random edge of the block just placed, so the next block
+            # abuts or overlaps it from an unpredictable side. Always advancing
+            # to the same corner marched the whole group into one edge.
+            wx = bx + carrier_rng.choice([-1, 0, bw // 2, bw, bw + 1])
+            wy = by + carrier_rng.choice([-1, 0, bh // 2, bh, bh + 1])
+            wx = max(hz_x, min(hz_x + hz_w - 1, wx))
+            wy = max(hz_y, min(hz_y + hz_h - 1, wy))
+
+        carrier = frozenset(sorted(cells))
+        # Report the density we actually produced, not the one we hoped for.
+        density = len(carrier) / max(1, zone_area)
+
+        # #54: the advertised region — zone dilated by a buffer, clamped.
+        buf = config.STEGO_HINT_BUFFER
+        hx = max(0, hz_x - buf)
+        hy = max(0, hz_y - buf)
+        hint_region = (hx, hy,
+                       min(cols - hx, hz_w + 2 * buf),
+                       min(rows - hy, hz_h + 2 * buf))
     else:
-        zone, carrier = None, frozenset()
+        zone, carrier, hint_region = None, frozenset(), None
 
     def _base_rgb(x: int, y: int) -> tuple[int, int, int]:
         fx = x / max(1, cols - 1)
@@ -2154,6 +2227,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
     return StegoImageData(
         cols=cols, rows=rows, style=style, base_rgb=base_rgb,
         zone=zone, carrier=carrier, kind=kind, density=density,
+        hint_region=hint_region,
         filename=img_file, width=width, height=height,
         file_kb=file_kb, img_type=img_type,
     )

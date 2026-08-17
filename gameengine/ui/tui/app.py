@@ -221,10 +221,12 @@ _REF_STEGOTOOL = """[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]
 [#00ff9f]GREEN[/]    region clean
 
 [dim]── reading the image ───────────────[/]
-[dim]hot zones carry a faint blue tint
-before any ⏱ is spent — stamp where
-the noise looks wrong. reveal ~60%
-of a zone to resolve its ▲ signature[/]
+[dim]nothing is marked for you — sweep
+the grid and stamp where the noise
+looks wrong. reveal ~60% of a zone
+to resolve its ▲ signature.
+the Spectral Lens upgrade tints a
+rough area blue — close, not exact[/]
 
 [dim]── verdict ─────────────────────────[/]
 [#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
@@ -1422,6 +1424,12 @@ class StegoImagePanel(VerticalScroll):
         sx, sy, sw, sh = self.stamp_rect
         in_zone = (lambda x, y: False) if img.zone is None else (
             lambda x, y, z=img.zone: z[0] <= x < z[0] + z[2] and z[1] <= y < z[1] + z[3])
+        # #54: the Spectral Lens advertises a BUFFERED region, not the exact
+        # zone. Before this, the free tier tinted exact zone membership, which
+        # solved the stamp sweep for nothing and left the 30 HD$ upgrade with
+        # only "the same rectangle, bluer" to sell.
+        in_hint = (lambda x, y: False) if img.hint_region is None else (
+            lambda x, y, h=img.hint_region: h[0] <= x < h[0] + h[2] and h[1] <= y < h[1] + h[3])
 
         lines: list[str] = []
         for y in range(img.rows):
@@ -1430,6 +1438,7 @@ class StegoImagePanel(VerticalScroll):
                 r, g, b = img.base_rgb[y][x]
                 revealed = (x, y) in self._revealed
                 zone_cell = in_zone(x, y)
+                hint_cell = in_hint(x, y)
 
                 if revealed and (x, y) in img.carrier:
                     # Payload-type color with deterministic jitter
@@ -1446,13 +1455,14 @@ class StegoImagePanel(VerticalScroll):
                 elif revealed:
                     # Confirmed clean — faint green wash
                     g = min(255, g + 45); r = max(0, r - 10); b = max(0, b - 10)
-                elif zone_cell:
-                    # Free-tier tell: subtle blue push over the hot zone.
-                    # The Spectral Lens upgrade (issue #23) strengthens it.
-                    if self.tint_boost:
-                        b = min(255, b + 70); r = max(0, r - 30)
-                    else:
-                        b = min(255, b + 35); r = max(0, r - 15)
+                elif hint_cell and self.tint_boost:
+                    # #54: the Spectral Lens (issue #23) is now the ONLY thing
+                    # that tints, and it tints the buffered region rather than
+                    # the exact zone — it narrows the search, it doesn't answer
+                    # it. Base tier deliberately shows nothing: sweeping blind
+                    # is the stamp minigame, and disclosing the exact rectangle
+                    # for free was the reason it had no bite.
+                    b = min(255, b + 55); r = max(0, r - 22)
 
                 # Stamp cursor overlay
                 if self._stamp_mode and sx <= x < sx + sw and sy <= y < sy + sh:

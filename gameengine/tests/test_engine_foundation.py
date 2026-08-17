@@ -1359,3 +1359,138 @@ def test_typosquat_generation_is_deterministic():
         assert a == b
         assert a.handle == b.handle
         assert a.dossier.handle_squats == b.dossier.handle_squats
+
+
+# ─── Issue #54 — clumped stego carriers, buffered hint region ───────────────
+
+
+def _stego_images(limit=30, day_n=6):
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+    base = load_day(1)
+    out = []
+    for archetype in (Archetype.SNEAKY_BUGGER, Archetype.BAD_ACTOR,
+                      Archetype.WHITE_HAT):
+        day = replace(base, number=day_n,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(400):
+            c = candidate_gen.generate(seed, day, 0)
+            if {d.kind for d in c.truth.discrepancies} & candidate_gen._STEGO_ARTIFACT_KINDS:
+                out.append(tools_bridge.build_stego_image(c, day_n))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def test_stego_carrier_is_clumped_not_uniform_noise():
+    """#54: carrier cells must form blocks, not per-cell coin flips.
+
+    Discriminator is mean orthogonal carrier-neighbour count. For an
+    independent per-cell fill at probability p the expectation is ~4p — about
+    1.6 at the densities used here. Contiguous blocks sit far above that, so
+    this fails loudly if the uniform fill ever comes back.
+    """
+    imgs = _stego_images()
+    assert imgs, "no stego images generated — test is inert"
+    for img in imgs:
+        cells = img.carrier
+        assert cells, f"{img.kind} produced no carrier cells"
+        neighbours = sum(
+            sum(1 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                if (x + dx, y + dy) in cells)
+            for (x, y) in cells
+        ) / len(cells)
+        uniform_expectation = 4 * img.density
+        assert neighbours > max(2.0, uniform_expectation * 1.5), (
+            f"{img.kind.name} carrier looks uniform: mean neighbours "
+            f"{neighbours:.2f} vs uniform expectation {uniform_expectation:.2f}")
+
+
+def test_hint_region_is_a_buffered_superset_of_the_zone():
+    """The Spectral Lens advertises a general area, never the exact zone."""
+    for img in _stego_images():
+        zx, zy, zw, zh = img.zone
+        hx, hy, hw, hh = img.hint_region
+        # Strictly contains the zone...
+        assert hx <= zx and hy <= zy
+        assert hx + hw >= zx + zw and hy + hh >= zy + zh
+        # ...and is genuinely larger, or it would disclose the exact rectangle.
+        assert (hw, hh) != (zw, zh) or (hx, hy) != (zx, zy), (
+            "hint region equals the zone — the upgrade would hand over the "
+            "answer instead of narrowing the search")
+        # Never leaves the grid.
+        assert hx >= 0 and hy >= 0
+        assert hx + hw <= img.cols and hy + hh <= img.rows
+
+
+def test_clean_image_has_no_zone_and_no_hint_region():
+    """A clean candidate must never light up — the tint can't be a false
+    positive."""
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+
+    base = load_day(1)
+    day = replace(base, number=6,
+                  forced_includes={0: Archetype.OBVIOUS_ADMIT},
+                  archetype_mix={**base.archetype_mix,
+                                 Archetype.OBVIOUS_ADMIT: 1})
+    checked = 0
+    for seed in range(30):
+        c = candidate_gen.generate(seed, day, 0)
+        assert not c.truth.discrepancies
+        img = tools_bridge.build_stego_image(c, 6)
+        assert img.zone is None and img.hint_region is None
+        assert img.carrier == frozenset()
+        checked += 1
+    assert checked
+
+
+def test_every_stego_payload_can_be_found_before_it_resolves():
+    """Regression on a bug the first clumping attempt introduced.
+
+    With blocks anchored at a random corner, a systematic sweep could push zone
+    coverage past the resolve threshold without ever landing on a carrier cell —
+    so the player never saw the signature colour that identifies the payload
+    type. Blocks now anchor at the zone centre, which a sweep must cross.
+    """
+    from gameengine.core import tools_bridge
+
+    imgs = _stego_images(limit=40)
+    for img in imgs:
+        revealed: set = set()
+        zx, zy, zw, zh = img.zone
+        saw_signature = False
+        done = False
+        for yy in range(zy, zy + zh, config.STEGO_STAMP_H):
+            for xx in range(zx, zx + zw, config.STEGO_STAMP_W):
+                res = tools_bridge.evaluate_stamp(
+                    img, xx, yy, config.STEGO_STAMP_W, config.STEGO_STAMP_H,
+                    revealed)
+                if res.signature:
+                    saw_signature = True
+                if res.resolved:
+                    done = True
+                    break
+            if done:
+                break
+        assert saw_signature, (
+            f"{img.kind.name} resolved without the player ever revealing a "
+            f"carrier cell — the signature colour was unreachable")
+
+
+def test_stego_image_is_deterministic():
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+
+    base = load_day(1)
+    day = replace(base, number=6,
+                  forced_includes={0: Archetype.SNEAKY_BUGGER},
+                  archetype_mix={**base.archetype_mix, Archetype.SNEAKY_BUGGER: 1})
+    for seed in range(40):
+        c = candidate_gen.generate(seed, day, 0)
+        a = tools_bridge.build_stego_image(c, 6)
+        b = tools_bridge.build_stego_image(c, 6)
+        assert a.carrier == b.carrier
+        assert a.zone == b.zone and a.hint_region == b.hint_region
+        assert a.density == b.density

@@ -257,6 +257,14 @@ STEGO_STAMP_RESOLVE_COVERAGE = 0.60  # fraction of zone cells revealed → resol
 STEGO_STAMP_W                = 8     # stamp width  (cells)
 STEGO_STAMP_H                = 4     # stamp height (cells; terminal cells ≈ 2:1)
 
+# ── Spectral Lens hint region (#54) ───────────────────────────────────────
+# How far beyond the real payload zone the Spectral Lens upgrade's blue tint
+# extends, in cells. The tint advertises a GENERAL area, never the exact zone —
+# larger buffer = vaguer hint. Before #54 the free tier tinted the exact zone,
+# which solved the stamp minigame for nothing and left the 30 HD$ upgrade with
+# almost nothing to sell; base tier now tints nothing at all.
+STEGO_HINT_BUFFER            = 3     # cells of slack around the zone
+
 # ── Filter (payload-type reveal) ──────────────────────────────────────────
 # The stamp shows the carrier's *color* for free; naming the payload TYPE
 # (plaintext / encrypted / C2) requires activating the filter, at this cost.

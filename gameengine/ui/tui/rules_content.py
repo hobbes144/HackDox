@@ -118,7 +118,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.LEAKED_PASSWORD:        "crack reveals plaintext + BREACH_MATCH names the corpus",
     DiscrepancyKind.WEAK_CREDENTIAL:        "weak encryption (MD5) cracks to a weak plaintext — minor hygiene flag",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND breach-corpus match — cross-check the breach panel",
-    DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp for AMBER cells in a dense block; ≥60% coverage resolves ▲",
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "CRIMSON mid-density cells — filter (F) names the payload type",
 }
@@ -643,9 +643,12 @@ def build_stego_text(day: Day | None) -> str:
         f"  [#00ff9f]{_fit('GREEN', 10)}[/]{_fit('clean region', 21)}no carrier under the stamp",
         f"[#1c2733]{'─' * _W}[/]",
         "",
-        "  [dim]Hot zones carry a faint blue tint before any ⏱ is spent — aim",
-        "  your first stamps where the noise looks wrong. The Spectral Lens",
-        "  upgrade strengthens that tint.[/]",
+        # #54: was "hot zones carry a faint blue tint before any ⏱ is spent",
+        # which stopped being true when the free exact-zone tint was removed.
+        "  [dim]Nothing is marked for you. Sweep the grid and stamp where the",
+        "  noise looks wrong — carrier cells sit in clumped blocks, so a hit",
+        "  tells you where to look next. The Spectral Lens upgrade tints a",
+        "  rough area blue: close to the payload, never exactly on it.[/]",
     ]
     lines.append("")
     lines += violation_table(day, "STEGO")
