@@ -27,9 +27,11 @@ from rich.table import Table
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gameengine import config
-from gameengine.core import candidate_gen, rules_engine, scoring
-from gameengine.core.content_loader import load_day, load_narratives
-from gameengine.core.models import Archetype, GameState, Verdict
+from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
+from gameengine.core.content_loader import load_day, load_narratives, synthesize_day
+from gameengine.core.models import (
+    Archetype, DiscrepancyKind, GameState, ToolName, Verdict,
+)
 
 
 app = typer.Typer(add_completion=False, help="HackDox game engine.")
@@ -152,6 +154,208 @@ def inspect(
     for line in candidate.chat_script:
         chat_table.add_row(f"[dim]{line.timestamp}[/]", f"[italic]{line.text}[/]")
     console.print(chat_table)
+
+
+# ─── lab — controlled candidate generation (issue #52) ───────────────────────
+#
+# Chasing a generation or rendering bug used to mean rolling seeds until the
+# case you wanted appeared. Every audit sweep in this codebase was written by
+# hand with dataclasses.replace to pin an archetype and a day — which is the
+# friction this command removes.
+#
+# It deliberately builds its day through content_loader.synthesize_day (#17) and
+# runs the REAL filtered tool output, rather than reimplementing either. A lab
+# that doesn't exercise the same code path as play would happily show a case
+# that works here and breaks in a shift.
+
+
+def _lab_day(day_number: int, archetypes: list[str], violations: list[str],
+             count: int):
+    """A synthesized day constrained to the requested archetypes/violations."""
+    from dataclasses import replace
+
+    day = synthesize_day(day_number) if day_number > 1 else load_day(1)
+    forced = {i: Archetype(a) for i, a in enumerate(archetypes[:count])}
+    mix = dict(day.archetype_mix)
+    for arch in forced.values():
+        mix[arch] = mix.get(arch, 0) + 1
+    allowed = tuple(DiscrepancyKind(v) for v in violations)
+    return replace(day, number=day_number, candidate_count=count,
+                   forced_includes=forced, archetype_mix=mix,
+                   allowed_violations=allowed)
+
+
+def _lab_tool_output(candidate, tool: ToolName, day, seed: int) -> list[str]:
+    """The real filtered output of `tool` for this candidate.
+
+    The shared Logwatch/Hashcrack day logs are built per (seed, day) and contain
+    a block per candidate in the roster, so the seed must be the one the
+    candidate came from — passing a different one yields a log the candidate
+    simply is not in, which looks exactly like a rendering bug and isn't.
+    """
+    state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
+    if tool == ToolName.GHOSTSCAN:
+        return list(tools_bridge.run_ghostscan_filtered_shared(candidate, state).raw_lines)
+    if tool == ToolName.HASHCRACK:
+        entries = tools_bridge.generate_hashcrack_day_log(seed, day)
+        return list(tools_bridge.run_hashcrack_filtered_shared(entries, candidate, state).raw_lines)
+    if tool == ToolName.LOGWATCH:
+        entries = tools_bridge.generate_day_log(seed, day)
+        return list(tools_bridge.run_logwatch_filtered_shared(entries, candidate, state).raw_lines)
+    if tool == ToolName.STEGOTOOL:
+        img = tools_bridge.build_stego_image(candidate, day.number)
+        return list(tools_bridge.stamp_signature_lines(img, reveal_type=True))
+    return []
+
+
+@app.command("lab")
+def lab(
+    archetype: list[str] = typer.Option(
+        [], "--archetype", "-a",
+        help="Pin an archetype into a slot. Repeatable, one per slot."),
+    violation: list[str] = typer.Option(
+        [], "--violation", "-v",
+        help="Restrict planted violations to these kinds. Repeatable."),
+    tool: str = typer.Option(
+        None, "--tool", "-t",
+        help="Restrict violations to those this tool reveals, and show its "
+             "filtered output. One of: ghostscan, hashcrack, logwatch, stegotool."),
+    day_number: int = typer.Option(5, "--day", "-d", help="Which day to build."),
+    count: int = typer.Option(1, "--count", "-n", help="Candidates to generate."),
+    seed: int = typer.Option(
+        None, "--seed", "-s",
+        help="Fix the RNG seed. Omitted: search for one satisfying the "
+             "constraints and report which was used."),
+    play: bool = typer.Option(
+        False, "--play", help="Launch the TUI on this constrained day instead "
+                              "of dumping text."),
+) -> None:
+    """Generate candidates under explicit constraints, for debugging.
+
+    Examples:
+
+        hackdox lab -a sneaky_bugger -v typosquat_handle --day 5
+        hackdox lab -a clumsy_cutie --tool hashcrack -n 3
+        hackdox lab -a sneaky_bugger --tool stegotool --play
+    """
+    # Validate up front — a typo'd archetype should say so, not roll 500 seeds
+    # and report "no match", which is what a bare enum lookup deeper in would
+    # effectively do.
+    try:
+        archetypes = [Archetype(a).value for a in archetype] or None
+    except ValueError:
+        console.print("[red]Unknown archetype.[/] Valid: "
+                      + ", ".join(a.value for a in Archetype))
+        raise typer.Exit(code=1)
+    tool_name: ToolName | None = None
+    if tool:
+        try:
+            tool_name = ToolName(tool)
+        except ValueError:
+            console.print("[red]Unknown tool.[/] Valid: "
+                          + ", ".join(t.value for t in ToolName if t != ToolName.DOSSIER))
+            raise typer.Exit(code=1)
+
+    violations = list(violation)
+    if tool_name and not violations:
+        # --tool alone means "any violation this tool reveals", so the caller
+        # doesn't have to remember which kinds belong to which tool.
+        violations = [k.value for k, (t, _s) in candidate_gen._SEVERITY_REVEAL.items()
+                      if t == tool_name]
+    try:
+        for v in violations:
+            DiscrepancyKind(v)
+    except ValueError:
+        console.print("[red]Unknown violation kind.[/] Valid: "
+                      + ", ".join(k.value for k in DiscrepancyKind))
+        raise typer.Exit(code=1)
+
+    archetypes = archetypes or [Archetype.SNEAKY_BUGGER.value]
+    if len(archetypes) < count:
+        archetypes = (archetypes * count)[:count]
+
+    day = _lab_day(day_number, archetypes, violations, count)
+
+    # Seed search. The constraints are a filter on a random roll, not a
+    # guarantee, so with no --seed we look for one that actually satisfies them
+    # and print it — the whole point is a reproducible case.
+    wanted = {DiscrepancyKind(v) for v in violations}
+    used_seed = seed
+    if seed is None:
+        used_seed = None
+        for trial in range(2000):
+            cands = [candidate_gen.generate(trial, day, i) for i in range(count)]
+            if not wanted or all(
+                    {d.kind for d in c.truth.discrepancies} & wanted for c in cands):
+                used_seed = trial
+                break
+        if used_seed is None:
+            console.print(
+                "[red]No seed in 2000 tries satisfied those constraints.[/]\n"
+                "The evidence-tier gate (#31) may be excluding the violation on "
+                f"day {day_number} — check its tool's unlock day, or raise --day.")
+            raise typer.Exit(code=1)
+
+    if play:
+        try:
+            from gameengine.ui.tui.app import run as run_tui
+        except ImportError as e:
+            console.print(f"[red]Could not import Textual UI:[/] {e}")
+            raise typer.Exit(code=1)
+        console.print(Panel.fit(
+            f"Lab shift — day {day_number}, {count} candidate(s), "
+            f"seed [cyan]{used_seed}[/]\n"
+            f"archetypes: {', '.join(archetypes)}",
+            title="HackDox lab", border_style="magenta"))
+        run_tui(seed=used_seed, lab_day=day)
+        return
+
+    console.print(Panel.fit(
+        f"day [cyan]{day_number}[/] · band [cyan]{day.difficulty_band}[/] · "
+        f"seed [cyan]{used_seed}[/]  [dim](reproduce with --seed "
+        f"{used_seed})[/]\n"
+        f"constraints: archetypes={', '.join(archetypes)} · "
+        f"violations={', '.join(violations) or 'any'}",
+        title="HackDox lab", border_style="magenta"))
+
+    for slot in range(count):
+        c = candidate_gen.generate(used_seed, day, slot)
+        evaluation = rules_engine.evaluate(c, day)
+
+        body = Table.grid(padding=(0, 2))
+        body.add_row("Name / handle:", f"{c.display_name}  [cyan]{c.handle}[/]")
+        body.add_row("Email:", c.email)
+        body.add_row("Affiliation:", c.claimed_affiliation)
+        body.add_row("GitHub:", str(c.dossier.claimed_github))
+        body.add_row("Archetype:", f"[yellow]{c.archetype.value}[/]")
+        body.add_row("Correct verdict:", f"[yellow]{c.truth.correct_verdict.value}[/]")
+        body.add_row("Rules verdict:",
+                     "deny" if evaluation.triggered_disqualifying else "admit")
+        if c.dossier.handle_squats:
+            body.add_row("Handle squats:", f"[magenta]{c.dossier.handle_squats}[/]")
+        console.print(Panel(body, title=f"slot {slot}", border_style="cyan"))
+
+        if c.truth.discrepancies:
+            dt = Table(show_header=True, box=None)
+            dt.add_column("Kind"); dt.add_column("Sev"); dt.add_column("Revealed by")
+            for d in c.truth.discrepancies:
+                dt.add_row(d.kind.value, d.severity, d.revealed_by.value)
+            console.print(dt)
+        else:
+            console.print("[dim]no discrepancies planted[/]")
+
+        # The pairing that matters: ground truth beside what the tool actually
+        # renders. Showing them together is how a violation that is planted but
+        # invisible — or worse, contradicted — becomes obvious immediately.
+        tools_to_show = ([tool_name] if tool_name else
+                         sorted({d.revealed_by for d in c.truth.discrepancies
+                                 if d.revealed_by != ToolName.DOSSIER},
+                                key=lambda t: t.value))
+        for t in tools_to_show:
+            out = _lab_tool_output(c, t, day, used_seed)
+            console.print(Panel("\n".join(out) or "[dim](no output)[/]",
+                                title=f"{t.value} — filtered",
+                                border_style="green"))
 
 
 @app.command("play")

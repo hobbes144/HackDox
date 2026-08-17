@@ -3229,9 +3229,14 @@ class HackDoxApp(App):
     TITLE    = "HackDox Terminal"
     SUB_TITLE = "Cybersecurity Access Review"
 
-    def __init__(self, seed: int = 0xC0FFEE) -> None:
+    def __init__(self, seed: int = 0xC0FFEE, lab_day: "Day | None" = None) -> None:
         super().__init__()
         self._seed       = seed
+        # #52: `hackdox lab --play` hands in a pre-constrained Day so a shift can
+        # be played with a pinned archetype / violation set. When set it replaces
+        # the loaded day everywhere, and advance_day ends the run after it rather
+        # than rolling into normal content — a lab shift is one shift on purpose.
+        self._lab_day    = lab_day
         self._state: GameState | None = None
         self._day:   Day        | None = None
         self._narratives: dict[str, str] = {}
@@ -3254,9 +3259,17 @@ class HackDoxApp(App):
             hackdollars=config.STARTING_HACKDOLLARS,
             hackdox_credits=config.STARTING_HACKDOX_CREDITS,
         )
+        if self._lab_day is not None:
+            self._state.current_day = self._lab_day.number
+            self._state.compute_hours = config.daily_compute_budget(
+                self._lab_day.number, config.STARTING_COMPUTE)
+            # A lab shift skips the unlock schedule: pinning a stegotool case on
+            # day 5 is pointless if stegotool is still locked.
+            self._state.unlocked_tools = config.tools_unlocked_by(
+                max(self._lab_day.number, max(config.TOOL_UNLOCK_DAY.values())))
         self._day_start_health = self._state.site_health
-        self._day = load_day(self._state.current_day)
-        narrative = self._narratives[self._day.overseer_intro_key]
+        self._day = self._lab_day or load_day(self._state.current_day)
+        narrative = self._narratives.get(self._day.overseer_intro_key, "")
         self.pop_screen()
         self.push_screen(BriefingScreen(self._day, narrative, self._state))
 
@@ -3320,6 +3333,11 @@ class HackDoxApp(App):
         # #36: hold on to yesterday's ruleset before loading today's, so the
         # briefing can diff the two and announce what the Overseer moved.
         prev_day = self._day
+        if self._lab_day is not None:
+            # One shift, then out — a lab run has no day 2.
+            self.pop_screen()
+            self.push_screen(CampaignEndScreen(st.current_day))
+            return
         st.current_day += 1
         st.current_slot_index = 0
         st.pending_results = []
@@ -3365,8 +3383,8 @@ class HackDoxApp(App):
         return Performance.PASSING
 
 
-def run(seed: int = 0xC0FFEE) -> None:
-    HackDoxApp(seed=seed).run()
+def run(seed: int = 0xC0FFEE, lab_day: "Day | None" = None) -> None:
+    HackDoxApp(seed=seed, lab_day=lab_day).run()
 
 
 if __name__ == "__main__":
