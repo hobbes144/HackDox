@@ -311,7 +311,14 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[s
     if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW):
         affil_flag = "[#ff5470]✗  known threat actor community[/]"
     elif any(kw in affil_lower for kw in _GS_TRUSTED_AFFIL_KW):
-        affil_flag = "[#00ff9f]✓  in trusted organisation list[/]"
+        # #56: this is a GUARANTEE now, not a hint. A trusted organisation cannot
+        # be faked on a dossier - the generator refuses to plant an affiliation
+        # violation on a candidate claiming one - so the sweep will always
+        # confirm it. Worded as the guarantee it is, because that is the
+        # player's reward: a trusted domain plus a trusted org means the
+        # ghostscan step can be skipped entirely.
+        affil_flag = ("[#00ff9f]✓  trusted organisation — cannot be faked, "
+                      "sweep will confirm[/]")
     elif affil_lower in ("independent", "freelance", "self-employed", ""):
         affil_flag = "[#ffd93d]?  unverifiable — needs corroboration[/]"
     else:
@@ -363,7 +370,16 @@ def _ghostscan_sweep_lines(
       - Same legit section but commit email highlighted if mismatch
       - Threat forum section reveals candidate entries + ▲ annotations
     """
-    has_affil    = any(d.kind == DiscrepancyKind.AFFILIATION_UNVERIFIED for d in candidate.truth.discrepancies)
+    # #56 - three affiliation violations, three different things on screen. They
+    # used to collapse: a6ad3b0 gave the old UNVERIFIED and MISMATCH a shared
+    # "(no org listed)" render, so the two kinds were indistinguishable in the
+    # one place they were supposed to be told apart.
+    #   UNLISTED  -> profiles carry no org tag
+    #   MISMATCH  -> profiles carry a DIFFERENT org (the difference IS the tell)
+    #   NOT_STATED-> a dossier violation; the sweep shows their real org normally,
+    #                because the point is they simply never said what it was
+    has_unlisted = any(d.kind == DiscrepancyKind.AFFILIATION_UNLISTED
+                       for d in candidate.truth.discrepancies)
     # AFFILIATION_MISMATCH is the "faked elite org" variant (Sneaky Bugger,
     # elite affiliation pool). It was previously not checked here at ALL, which
     # meant the sweep fell through to the generic branch and printed the claimed
@@ -375,7 +391,7 @@ def _ghostscan_sweep_lines(
                          for d in candidate.truth.discrepancies)
     # Both affiliation kinds suppress the org on the sweep; they differ in what
     # the filter says about it (unverifiable small org vs. unbacked elite claim).
-    has_no_org   = has_affil or has_affil_fake
+    has_no_org   = has_unlisted
     has_mismatch = any(d.kind == DiscrepancyKind.EMAIL_GITHUB_MISMATCH  for d in candidate.truth.discrepancies)
     has_missing  = any(d.kind == DiscrepancyKind.MISSING_PUBLIC_PROFILE for d in candidate.truth.discrepancies)
     has_sock     = any(d.kind == DiscrepancyKind.SOCK_PUPPET_ACCOUNTS   for d in candidate.truth.discrepancies)
@@ -412,11 +428,17 @@ def _ghostscan_sweep_lines(
         # Candidate's entry on this platform
         if in_cand_set:
             if has_no_org:
-                # The sweep must never print an org the ground truth says isn't
-                # there. This is the observable half of both AFFILIATION_
-                # UNVERIFIED and AFFILIATION_MISMATCH: the dossier claims an
-                # org, the platform profiles list none.
+                # AFFILIATION_UNLISTED: profiles exist, none carry an org.
                 org_str = "[dim](no org listed)[/]"
+            elif candidate.dossier.actual_affiliation:
+                # The org the sweep ACTUALLY shows, when the generator recorded
+                # one. Two cases reach here: AFFILIATION_MISMATCH (it differs
+                # from the dossier - that difference IS the violation, and
+                # rendering "no org" here before #56 hid the only thing
+                # separating it from UNLISTED), and AFFILIATION_NOT_STATED
+                # (the dossier is blank, so the sweep simply shows where they
+                # really work - a dossier violation with no sweep signature).
+                org_str = f"[[{candidate.dossier.actual_affiliation}]"
             elif claimed_affil in _GS_LEGIT_ORGS:
                 org_str = f"[[{claimed_affil}]"
             else:
@@ -438,7 +460,7 @@ def _ghostscan_sweep_lines(
 
             # Suspicious signals — only highlight and annotate on filter run.
             # Base run: entry shown plain so the player must spot it themselves.
-            is_affil_suspicious   = has_no_org
+            is_affil_suspicious   = has_no_org or has_affil_fake
             is_mismatch_suspicious = has_mismatch and platform == "GitHub"
 
             if (is_affil_suspicious or is_mismatch_suspicious) and show_forums:
@@ -448,10 +470,10 @@ def _ghostscan_sweep_lines(
                     # confirmed" is too soft when the candidate claimed to work
                     # somewhere specific and prestigious.
                     lines.append(
-                        f"    [#ff8c42]▲ claimed [b]{claimed_affil}[/] — no profile "
-                        f"on any platform lists this org[/]"
+                        f"    [#ff8c42]▲ dossier says [b]{claimed_affil}[/] — "
+                        f"profile says [b]{candidate.dossier.actual_affiliation}[/][/]"
                         if has_affil_fake else
-                        f"    [#ff8c42]▲ claimed org not confirmed on platform[/]")
+                        f"    [#ffd93d]▲ no organisation listed on any profile[/]")
                     prev_affil_ann = True
                 if is_mismatch_suspicious:
                     lines.append(f"    [#ff8c42]▲ commit email differs from dossier[/]")
@@ -563,7 +585,7 @@ def _ghostscan_filter_summary_lines(candidate: Candidate) -> list[str]:
     has_sock     = DiscrepancyKind.SOCK_PUPPET_ACCOUNTS  in _ks
     has_breach   = DiscrepancyKind.BREACH_HIT            in _ks
     has_missing  = DiscrepancyKind.MISSING_PUBLIC_PROFILE  in _ks   # #51
-    has_affil    = DiscrepancyKind.AFFILIATION_UNVERIFIED in _ks
+    has_unlisted = DiscrepancyKind.AFFILIATION_UNLISTED   in _ks
     has_affil_fake = DiscrepancyKind.AFFILIATION_MISMATCH in _ks
     has_mismatch = DiscrepancyKind.EMAIL_GITHUB_MISMATCH  in _ks
     has_forum    = DiscrepancyKind.THREAT_FORUM_MATCH     in _ks   # v2
@@ -603,16 +625,15 @@ def _ghostscan_filter_summary_lines(candidate: Candidate) -> list[str]:
         lines.append("  [#ffd93d][b]▲ MISSING_PUBLIC_PROFILE[/][/]  — no meaningful "
                      "public presence for the claimed handle")
         found = True
-    if has_affil:
-        lines.append("  [#ff8c42][b]▲ AFFILIATION_UNVERIFIED[/][/]  — claimed org absent from platform sweep")
+    if has_unlisted:
+        lines.append("  [#ffd93d][b]▲ AFFILIATION_UNLISTED[/][/]  — profiles exist "
+                     "but list no organisation at all")
         found = True
     if has_affil_fake:
-        # Was missing entirely: AFFILIATION_MISMATCH is ghostscan-revealed and
-        # major, and the rules page tells the player the "claim surfaces as
-        # AFFILIATION_MISMATCH on the filter" — but nothing ever surfaced it.
         lines.append(
-            f"  [#ff8c42][b]▲ AFFILIATION_MISMATCH[/][/]  — claimed "
-            f"[b]{candidate.claimed_affiliation}[/] not found in any platform profile")
+            f"  [#ff8c42][b]▲ AFFILIATION_MISMATCH[/][/]  — dossier says "
+            f"[b]{candidate.claimed_affiliation}[/], profiles say "
+            f"[b]{candidate.dossier.actual_affiliation}[/]")
         found = True
     if has_mismatch:
         lines.append("  [#ff8c42][b]▲ EMAIL_GITHUB_MISMATCH[/][/]  — commit email ≠ dossier email")

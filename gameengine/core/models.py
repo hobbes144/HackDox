@@ -61,13 +61,23 @@ class DiscrepancyKind(str, Enum):
     # Dossier-level (no tool needed)
     MISSING_PUBLIC_PROFILE = "missing_public_profile"
     HOSTILE_CHAT           = "hostile_chat"
-    AFFILIATION_UNVERIFIED = "affiliation_unverified"
+    # #56: renamed from AFFILIATION_UNVERIFIED. "Unverified" said nothing about
+    # WHERE the evidence is, and the old catch hint even described ghostscan
+    # evidence while the kind was dossier-tier. This one means exactly one thing:
+    # the affiliation field is not stated on the dossier. Nothing to verify
+    # because nothing was claimed.
+    AFFILIATION_NOT_STATED = "affiliation_not_stated"
 
     # Ghostscan-revealed
     EMAIL_GITHUB_MISMATCH  = "email_github_mismatch"
     BREACH_HIT             = "breach_hit"
     SOCK_PUPPET_ACCOUNTS   = "sock_puppet_accounts"
-    AFFILIATION_MISMATCH   = "affiliation_mismatch"   # claimed elite org doesn't match ghostscan
+    # #56: the dossier's org and the org on their platform profiles disagree.
+    # The sweep shows a DIFFERENT org - that difference is the whole violation,
+    # and it is what separates this from AFFILIATION_UNLISTED below.
+    AFFILIATION_MISMATCH   = "affiliation_mismatch"
+    # #56: profiles exist, none of them carry any org tag at all.
+    AFFILIATION_UNLISTED   = "affiliation_unlisted"
 
     # Dossier-level (disposable email — no tool needed)
     DISPOSABLE_EMAIL       = "disposable_email"        # email domain is a known throwaway service
@@ -206,6 +216,12 @@ class Dossier:
     # truth, same stance as password_plain above: never rendered on the dossier,
     # only named by Ghostscan's filter. None when no squat was planted.
     handle_squats:         str | None = None
+    # Issue #56 - the org the ghostscan sweep actually shows for this candidate,
+    # when it differs from the claimed one (AFFILIATION_MISMATCH). ENGINE-ONLY
+    # ground truth, same stance as password_plain and handle_squats: never
+    # rendered on the dossier, only in the sweep and the filter. None when there
+    # is no mismatch.
+    actual_affiliation:    str | None = None
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────

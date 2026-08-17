@@ -201,7 +201,7 @@ def test_gate_keeps_dossier_evidence_for_bad_actor_day1(day1):
 def test_intro_day_matches_tool_schedule():
     """intro_day derives from the revealing tool's unlock day (the answer to
     the gate's design question), keeping gate and UI schedule in lockstep."""
-    assert intro_day(DiscrepancyKind.AFFILIATION_UNVERIFIED) == 1   # dossier
+    assert intro_day(DiscrepancyKind.AFFILIATION_NOT_STATED) == 1   # dossier
     assert intro_day(DiscrepancyKind.BREACH_HIT) == 2               # ghostscan
     assert intro_day(DiscrepancyKind.LEAKED_PASSWORD) == 3          # hashcrack
     assert intro_day(DiscrepancyKind.BRUTE_FORCE_IN_LOG) == 4       # logwatch
@@ -253,12 +253,12 @@ def test_allowed_violations_whitelist_restricts_planted_kinds():
     import dataclasses
     day = dataclasses.replace(
         load_day(1), number=5,
-        allowed_violations=(DiscrepancyKind.AFFILIATION_UNVERIFIED,),
+        allowed_violations=(DiscrepancyKind.AFFILIATION_NOT_STATED,),
     )
     for i in range(day.candidate_count):
         c = candidate_gen.generate(SEED, day, i)
         for d in c.truth.discrepancies:
-            assert d.kind == DiscrepancyKind.AFFILIATION_UNVERIFIED, (
+            assert d.kind == DiscrepancyKind.AFFILIATION_NOT_STATED, (
                 f"slot {i} planted {d.kind} outside the day whitelist"
             )
 
@@ -972,6 +972,7 @@ EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
     # MISSING_PUBLIC_PROFILE joined this tier in #51; it was tiered DOSSIER and
     # so sat in this guard's blind spot while having no dossier evidence at all.
     DiscrepancyKind.MISSING_PUBLIC_PROFILE: "MISSING_PUBLIC_PROFILE",
+    DiscrepancyKind.AFFILIATION_UNLISTED:  "AFFILIATION_UNLISTED",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH: "EMAIL_GITHUB_MISMATCH",
     DiscrepancyKind.BREACH_HIT:            "BREACH_HIT",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:  "SOCK_PUPPET_ACCOUNTS",
@@ -1573,3 +1574,161 @@ def test_no_hint_text_tells_the_player_to_flag_a_nonexistent_violation():
                 assert "flag" not in lines.lower(), (
                     f"privacy-provider hint still instructs a flag: {lines}")
     assert seen_privacy, "no privacy-domain candidate generated — test is inert"
+
+
+# ─── Issue #56 — the four affiliation violations are distinct ───────────────
+
+
+AFFIL_KINDS = (
+    DiscrepancyKind.AFFILIATION_NOT_STATED,
+    DiscrepancyKind.AFFILIATION_MISMATCH,
+    DiscrepancyKind.AFFILIATION_UNLISTED,
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE,
+)
+
+
+def _affil_case(kind):
+    """A candidate carrying `kind`, plus the seed and day it came from."""
+    from dataclasses import replace
+    base = load_day(1)
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=5,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1},
+                      allowed_violations=(kind,))
+        for seed in range(300):
+            c = candidate_gen.generate(seed, day, 0)
+            if any(d.kind == kind for d in c.truth.discrepancies):
+                return c, day, seed
+    raise AssertionError(f"could not generate a candidate carrying {kind.name}")
+
+
+def test_one_name_per_violation_everywhere():
+    """#56: the dev ground-truth window showed `affiliation_mismatch` while the
+    evidence board showed "Faked elite affiliation" — same violation, two names,
+    no way to connect them. VIOLATION_CATALOG is now the single source and every
+    surface reads it."""
+    from gameengine.ui.tui import rules_content
+
+    labels = {}
+    for kind in DiscrepancyKind:
+        label = rules_content.label_for(kind)
+        assert label, kind.name
+        assert label not in labels, (
+            f"{kind.name} and {labels[label].name} share the label {label!r}")
+        labels[label] = kind
+    # The affiliation four must be named apart from each other, which is the
+    # complaint that started this.
+    affil_labels = {rules_content.label_for(k) for k in AFFIL_KINDS}
+    assert len(affil_labels) == len(AFFIL_KINDS), affil_labels
+
+
+def test_each_affiliation_violation_has_its_own_tier_and_hint():
+    """Dossier violations under the dossier, ghostscan violations under
+    ghostscan — and every hint names the tool its evidence comes from."""
+    from gameengine.core.models import ToolName
+    from gameengine.ui.tui import rules_content
+
+    expected = {
+        DiscrepancyKind.AFFILIATION_NOT_STATED: ToolName.DOSSIER,
+        DiscrepancyKind.AFFILIATION_MISMATCH:   ToolName.GHOSTSCAN,
+        DiscrepancyKind.AFFILIATION_UNLISTED:   ToolName.GHOSTSCAN,
+        DiscrepancyKind.MISSING_PUBLIC_PROFILE: ToolName.GHOSTSCAN,
+    }
+    for kind, tool in expected.items():
+        assert candidate_gen._SEVERITY_REVEAL[kind][0] == tool, kind.name
+        hint = rules_content._CATCH[kind]
+        assert tool.value.upper() in hint.upper(), (
+            f"{kind.name}'s hint must name its tool; got {hint!r}")
+        # And the rules-page group must match the tier.
+        group = next(g for g, k, _l in rules_content.VIOLATION_CATALOG if k == kind)
+        assert group == ("DOSSIER" if tool == ToolName.DOSSIER else "OSINT"), (
+            f"{kind.name} is {tool.value}-tier but filed under {group}")
+
+
+def test_the_three_ghostscan_affiliation_kinds_render_differently():
+    """The bug that started this: a6ad3b0 gave two of them the same
+    "(no org listed)" render, so they were indistinguishable in the one place
+    they had to be told apart."""
+    from gameengine.core import tools_bridge
+
+    def sweep_org_rows(c, day, seed):
+        state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
+        out = tools_bridge.run_ghostscan_filtered_shared(c, state).raw_lines
+        start = next(i for i, l in enumerate(out) if "PLATFORM SWEEP" in l)
+        stop  = next(i for i, l in enumerate(out) if "account registry" in l)
+        return [l for l in out[start:stop] if c.handle in l]
+
+    # MISMATCH: sweep names a DIFFERENT org than the dossier.
+    c, day, seed = _affil_case(DiscrepancyKind.AFFILIATION_MISMATCH)
+    actual = c.dossier.actual_affiliation
+    assert actual and actual != c.claimed_affiliation
+    rows = "\n".join(sweep_org_rows(c, day, seed))
+    assert actual in rows, "the mismatched org must appear in the sweep"
+    assert "no org listed" not in rows, (
+        "a mismatch must show the other org, not an absence — that was the "
+        "collapse this issue exists to fix")
+
+    # UNLISTED: sweep shows no org at all.
+    c2, day2, seed2 = _affil_case(DiscrepancyKind.AFFILIATION_UNLISTED)
+    rows2 = "\n".join(sweep_org_rows(c2, day2, seed2))
+    assert "no org listed" in rows2
+
+    # NOT_STATED: a dossier violation. The sweep shows their real org, and must
+    # never echo the blank dossier sentinel as though it were one.
+    c3, day3, seed3 = _affil_case(DiscrepancyKind.AFFILIATION_NOT_STATED)
+    assert c3.claimed_affiliation == candidate_gen.NO_AFFILIATION_STATED
+    rows3 = "\n".join(sweep_org_rows(c3, day3, seed3))
+    assert candidate_gen.NO_AFFILIATION_STATED not in rows3, (
+        "the sweep must not render the blank sentinel as an organisation")
+    assert "no org listed" not in rows3, (
+        "NOT_STATED has no ghostscan signature — that is what makes it a "
+        "dossier violation")
+
+
+def test_a_trusted_affiliation_can_never_be_faked():
+    """#56's bypass: a claimed elite/trusted org always confirms in the sweep,
+    so a player who recognises one can skip the ghostscan step. Enforced in
+    generation, not just rendering, so the ground truth cannot contradict it."""
+    from dataclasses import replace
+
+    base = load_day(1)
+    checked = 0
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=5,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(150):
+            c = candidate_gen.generate(seed, day, 0)
+            if c.claimed_affiliation not in candidate_gen.AFFILIATIONS_ELITE:
+                continue
+            checked += 1
+            kinds = {d.kind for d in c.truth.discrepancies}
+            assert not (kinds & {DiscrepancyKind.AFFILIATION_MISMATCH,
+                                 DiscrepancyKind.AFFILIATION_UNLISTED}), (
+                f"{archetype.value} claims the trusted org "
+                f"{c.claimed_affiliation!r} and still carries "
+                f"{sorted(k.name for k in kinds)} — the bypass has to be a "
+                f"guarantee or it is a trap")
+    assert checked, "no elite-claiming candidate generated — test is inert"
+
+
+def test_affiliation_violations_are_mutually_exclusive():
+    """One affiliation field, one set of profiles — at most one of these can be
+    true, and some combinations are outright contradictory (NOT_STATED means
+    nothing was claimed, so there is nothing for MISMATCH to disagree with)."""
+    from dataclasses import replace
+
+    base = load_day(1)
+    group = candidate_gen._AFFILIATION_KINDS
+    for day_n in (2, 5):
+        for archetype in candidate_gen.ARCHETYPE_SPECS:
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in range(60):
+                c = candidate_gen.generate(seed, day, 0)
+                kinds = {d.kind for d in c.truth.discrepancies} & group
+                assert len(kinds) <= 1, (
+                    f"{archetype.value} seed {seed} carries "
+                    f"{sorted(k.name for k in kinds)}")

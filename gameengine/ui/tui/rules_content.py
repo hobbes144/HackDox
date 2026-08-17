@@ -33,7 +33,7 @@ from gameengine.core.models import Day, DiscrepancyKind, Performance, ToolName
 VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     # DOSSIER (no tool)
     ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
-    ("DOSSIER",     DiscrepancyKind.AFFILIATION_UNVERIFIED, "Unverified affiliation"),
+    ("DOSSIER",     DiscrepancyKind.AFFILIATION_NOT_STATED, "Affiliation not stated"),
     ("DOSSIER",     DiscrepancyKind.DISPOSABLE_EMAIL,       "Disposable email domain"),
     ("DOSSIER",     DiscrepancyKind.WEAK_ENCRYPTION,        "Weak password encryption"),
     ("DOSSIER",     DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
@@ -43,7 +43,8 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("OSINT",       DiscrepancyKind.EMAIL_GITHUB_MISMATCH,  "Email / GitHub mismatch"),
     ("OSINT",       DiscrepancyKind.BREACH_HIT,             "Breach hit"),
     ("OSINT",       DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,   "Sock puppet accounts"),
-    ("OSINT",       DiscrepancyKind.AFFILIATION_MISMATCH,   "Faked elite affiliation"),
+    ("OSINT",       DiscrepancyKind.AFFILIATION_MISMATCH,   "Affiliation mismatch"),
+    ("OSINT",       DiscrepancyKind.AFFILIATION_UNLISTED,   "Affiliation unlisted"),
     ("OSINT",       DiscrepancyKind.BURNER_IDENTITY,        "Burner identity"),
     ("OSINT",       DiscrepancyKind.THREAT_FORUM_MATCH,     "Threat-forum handle match"),
     ("OSINT",       DiscrepancyKind.TYPOSQUAT_HANDLE,       "Typosquatted handle"),
@@ -75,6 +76,40 @@ _TOOL: dict[DiscrepancyKind, ToolName] = {
 _DESC = candidate_gen._DISCREPANCY_DESCRIPTIONS
 _LABEL: dict[DiscrepancyKind, str] = {k: lbl for _g, k, lbl in VIOLATION_CATALOG}
 
+
+def label_for(kind: DiscrepancyKind) -> str:
+    """The one and only player-facing name for a violation (#56).
+
+    VIOLATION_CATALOG is the single source of that name, and EVERY surface must
+    read it from here - the evidence board, the rules page, the HackDox Credit
+    reveal and the dev ground-truth window. Before this the dev window printed
+    the raw enum (`affiliation_mismatch`) while the board printed an authored
+    label ("Faked elite affiliation"), and there was no way to tell they were
+    the same violation.
+
+    Deliberately NOT mechanically derived from the enum name. A first pass
+    asserted label == kind.name.replace("_"," ").capitalize() and rejected
+    thirteen existing labels that are simply better prose - "Email / GitHub
+    mismatch" beats "Email github mismatch", "Covert C2 channel" beats "Covert
+    c2 channel". What matters is that there is exactly ONE name per violation,
+    not that a machine invented it. The fallback below only fires for a kind
+    nobody has catalogued yet.
+    """
+    return _LABEL.get(kind, kind.name.replace("_", " ").capitalize())
+
+
+# #56: every kind must be catalogued exactly once. A missing entry silently
+# falls back to a machine-made name that will not match the rules page; a
+# duplicate means two rows of the evidence board claim the same violation.
+_UNCATALOGUED = sorted(k.name for k in DiscrepancyKind if k not in _LABEL)
+if _UNCATALOGUED:
+    raise AssertionError(
+        f"DiscrepancyKinds missing from VIOLATION_CATALOG (#56): {_UNCATALOGUED}")
+_DUPES = sorted(lbl for lbl in _LABEL.values()
+                if list(_LABEL.values()).count(lbl) > 1)
+if _DUPES:
+    raise AssertionError(f"duplicate violation labels (#56): {sorted(set(_DUPES))}")
+
 SEV_COLOR   = {"minor": "#ffd93d", "major": "#ff8c42", "critical": "#ff5470"}
 _SEV_RANK   = {"minor": 0, "major": 1, "critical": 2}
 GROUP_ACCENT = {
@@ -95,16 +130,17 @@ _TOOL_LABEL = {
 # How each violation is actually caught (reveal tier / mechanic). Short —
 # rendered as the dim second line of a table row after the trigger text.
 _CATCH: dict[DiscrepancyKind, str] = {
-    DiscrepancyKind.MISSING_PUBLIC_PROFILE: "free — sparse platform sweep; weighted signal, never auto-disqualifying",
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: "GHOSTSCAN — handle barely appears on the platform sweep at all",
     DiscrepancyKind.HOSTILE_CHAT:           "free — read the chat panel (Sentiment Scanner upgrade ⚠-marks it)",
-    DiscrepancyKind.AFFILIATION_UNVERIFIED: "base recon — handle appears without the claimed org tag",
+    DiscrepancyKind.AFFILIATION_NOT_STATED: "DOSSIER — the affiliation field is blank; nothing was claimed",
     DiscrepancyKind.DISPOSABLE_EMAIL:       "free — domain visible on the dossier, no tool needed (quick deny)",
     DiscrepancyKind.WEAK_ENCRYPTION:        "free — MD5 shown on the dossier's strength chip; a crack (if attempted) reveals a fine password — the algorithm is the problem, not the value",
     DiscrepancyKind.UNSALTED_STORAGE:       "free — the ⚠ UNSALTED marker on the dossier shows the stored password in the clear; no crack needed at all",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "base recon shows commit email · filter highlights the mismatch",
     DiscrepancyKind.BREACH_HIT:             "base recon highlights breach panel · filter confirms ▲ BREACH_HIT",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "handle on a CRITICAL forum — blended in base run, filter labels it",
-    DiscrepancyKind.AFFILIATION_MISMATCH:   "elite org claimed but absent from the sweep — filter confirms",
+    DiscrepancyKind.AFFILIATION_MISMATCH:   "GHOSTSCAN — sweep shows a DIFFERENT org than the dossier claims",
+    DiscrepancyKind.AFFILIATION_UNLISTED:   "GHOSTSCAN — profiles exist but carry no org tag at all",
     DiscrepancyKind.BURNER_IDENTITY:        "account registry: creation dates clustered within days — filter labels",
     DiscrepancyKind.THREAT_FORUM_MATCH:     "handle in the threat-forum list — filter reveals with [CRITICAL] tag",
     DiscrepancyKind.TYPOSQUAT_HANDLE:       "free cue on identity check · filter confirms the lookalike",

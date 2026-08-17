@@ -1517,7 +1517,11 @@ class DebugPanel(Static):
         t  = c.truth
         sev = {"minor": "#ffd93d", "major": "#ff8c42", "critical": "#ff5470"}
         d_lines = [
-            f"  [{sev.get(d.severity,'#c8d4e1')}]●[/] [b]{d.kind.value}[/]"
+            # #56: the shared label, not the raw enum. This window used to print
+            # `affiliation_mismatch` while the evidence board printed "Faked
+            # elite affiliation" for the same violation, which made dev
+            # observations impossible to line up against what the player sees.
+            f"  [{sev.get(d.severity,'#c8d4e1')}]●[/] [b]{rules_content.label_for(d.kind)}[/]"
             f" via [#7dd3c0]{d.revealed_by.value}[/] — {d.description}"
             for d in t.discrepancies
         ] or ["  [dim](none)[/]"]
@@ -1770,7 +1774,9 @@ class CreditRevealScreen(ModalScreen):
         if t.discrepancies:
             for d in t.discrepancies:
                 col = sev.get(d.severity, "#c8d4e1")
-                rows.append(f"  [{col}]▲ {d.kind.value}[/]  [dim]({d.severity})[/]")
+                # #56: same shared label as the board and the dev window.
+                rows.append(f"  [{col}]▲ {rules_content.label_for(d.kind)}[/]"
+                            f"  [dim]({d.severity})[/]")
         else:
             rows.append("  [dim](clean — no violations planted)[/]")
         rows += [

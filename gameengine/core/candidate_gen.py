@@ -59,6 +59,11 @@ AFFILIATIONS_LEGIT = [
     "Cordova College — Independent Study",
 ]
 
+# #56: the sentinel the dossier shows when AFFILIATION_NOT_STATED is planted.
+# Named rather than inlined because the sweep has to recognise it and refuse to
+# render it as though it were an organisation.
+NO_AFFILIATION_STATED = "(none listed)"
+
 AFFILIATIONS_THIN = [
     "Freelance Security Researcher",
     "(none listed)",
@@ -196,7 +201,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         moral_modifier=0,
         budget=DiscrepancyBudget(minor=1),
         eligible_kinds=(
-            DiscrepancyKind.AFFILIATION_UNVERIFIED,
+            DiscrepancyKind.AFFILIATION_NOT_STATED,
             DiscrepancyKind.AFTER_HOURS_ACCESS,   # v2: benign minor noise
             DiscrepancyKind.CLAIMED_IP_MISMATCH,  # v2: benign minor noise
             DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
@@ -227,7 +232,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         moral_modifier=0,
         budget=DiscrepancyBudget(minor=2, major=1),
         eligible_kinds=(
-            DiscrepancyKind.AFFILIATION_UNVERIFIED,
+            DiscrepancyKind.AFFILIATION_NOT_STATED,
             DiscrepancyKind.MISSING_PUBLIC_PROFILE,
             DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
             # v2: competence / hygiene failures, not malice
@@ -290,6 +295,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.INSIDER_BEHAVIOR,
             DiscrepancyKind.IMPOSSIBLE_TRAVEL,
             DiscrepancyKind.AFFILIATION_MISMATCH,
+            DiscrepancyKind.AFFILIATION_UNLISTED,
             # v2: subtle, tool-only evasion craft + optional breadcrumbs
             # (budget has no minor slot, so the minor breadcrumbs only appear
             #  if the budget is later widened — kept eligible for variety)
@@ -302,7 +308,11 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.WEAK_ENCRYPTION,
         ),
         handle_style="academic",
-        affiliation_pool="elite",       # the camouflage — faked prestigious affiliation
+        # #56: moved elite -> legit. A claimed elite/trusted affiliation is now
+        # unfakeable - it always confirms in the sweep, which is the player's
+        # quick-admit bypass. A Sneaky Bugger claiming one could therefore never
+        # mismatch. It now claims a small legit org and fakes THAT instead.
+        affiliation_pool="legit",       # the camouflage — a plausible small org
         purpose_pool="legit",
         tone="warm",                    # the camouflage
         chat_pool=_CHAT_PROFESSIONAL,   # borrows the professional tone for extra credibility
@@ -314,7 +324,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         budget=DiscrepancyBudget(critical=1),
         eligible_kinds=(
             DiscrepancyKind.MISSING_PUBLIC_PROFILE,
-            DiscrepancyKind.AFFILIATION_UNVERIFIED,
+            DiscrepancyKind.AFFILIATION_NOT_STATED,
             # v2: the same evasion craft as the Sneaky Bugger, in service of the cause
             DiscrepancyKind.LOW_AND_SLOW,
             DiscrepancyKind.ENCRYPTED_PAYLOAD,
@@ -368,7 +378,13 @@ _SEVERITY_REVEAL = {
     # an unflaggable violation that still counted for scoring.
     DiscrepancyKind.MISSING_PUBLIC_PROFILE: (ToolName.GHOSTSCAN,  "minor"),
     DiscrepancyKind.HOSTILE_CHAT:           (ToolName.DOSSIER,    "major"),
-    DiscrepancyKind.AFFILIATION_UNVERIFIED: (ToolName.DOSSIER,    "minor"),
+    # #56 - the four affiliation violations, one evidence location each:
+    #   NOT_STATED  dossier   the field is blank on the dossier
+    #   MISMATCH    ghostscan sweep shows a DIFFERENT org than claimed
+    #   UNLISTED    ghostscan profiles exist, none carry an org tag
+    #   MISSING_PUBLIC_PROFILE (below) ghostscan  handle barely appears at all
+    DiscrepancyKind.AFFILIATION_NOT_STATED: (ToolName.DOSSIER,    "minor"),
+    DiscrepancyKind.AFFILIATION_UNLISTED:   (ToolName.GHOSTSCAN,  "minor"),
     DiscrepancyKind.DISPOSABLE_EMAIL:       (ToolName.DOSSIER,    "major"),
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  (ToolName.GHOSTSCAN,  "major"),
     DiscrepancyKind.BREACH_HIT:             (ToolName.GHOSTSCAN,  "critical"),
@@ -443,9 +459,22 @@ _STEGO_ARTIFACT_KINDS: frozenset[DiscrepancyKind] = frozenset({
 # about that artifact can be observable. Picking any member removes the whole
 # group from contention for the candidate's remaining severity slots.
 # Add a group here whenever a new violation family shares a single artifact.
+# #56: a candidate has ONE affiliation field and ONE set of platform profiles,
+# so at most one affiliation violation can be true of them. These are not merely
+# redundant together, they are contradictory: NOT_STATED means nothing was
+# claimed, which leaves nothing for MISMATCH to disagree with, and MISMATCH
+# (sweep shows a different org) and UNLISTED (sweep shows no org) are mutually
+# exclusive statements about the same profiles.
+_AFFILIATION_KINDS: frozenset[DiscrepancyKind] = frozenset({
+    DiscrepancyKind.AFFILIATION_NOT_STATED,
+    DiscrepancyKind.AFFILIATION_MISMATCH,
+    DiscrepancyKind.AFFILIATION_UNLISTED,
+})
+
 _EXCLUSIVE_ARTIFACT_GROUPS: tuple[frozenset[DiscrepancyKind], ...] = (
     _CREDENTIAL_ARTIFACT_KINDS,
     _STEGO_ARTIFACT_KINDS,
+    _AFFILIATION_KINDS,
 )
 
 
@@ -476,12 +505,13 @@ def intro_day(kind: DiscrepancyKind) -> int:
 _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.MISSING_PUBLIC_PROFILE: "No public profile found for the claimed handle.",
     DiscrepancyKind.HOSTILE_CHAT:           "Candidate threatened the service operator.",
-    DiscrepancyKind.AFFILIATION_UNVERIFIED: "Claimed affiliation could not be verified.",
+    DiscrepancyKind.AFFILIATION_NOT_STATED: "No affiliation stated on the dossier.",
     DiscrepancyKind.DISPOSABLE_EMAIL:       "Email domain is a known disposable / throwaway service.",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "GitHub commit email does not match the claimed email.",
     DiscrepancyKind.BREACH_HIT:             "Email appears in a known breach corpus.",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "Identical handle pattern found across suspicious platforms.",
-    DiscrepancyKind.AFFILIATION_MISMATCH:   "Claimed elite affiliation not found — ghostscan returned no match.",
+    DiscrepancyKind.AFFILIATION_MISMATCH:   "Dossier affiliation does not match the org on their platform profiles.",
+    DiscrepancyKind.AFFILIATION_UNLISTED:   "Platform profiles exist but list no organisation at all.",
     DiscrepancyKind.BRUTE_FORCE_IN_LOG:     "Submitted log shows clear brute-force pattern from this account.",
     DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "Logins from geographically impossible locations.",
     DiscrepancyKind.INSIDER_BEHAVIOR:       "After-hours access pattern consistent with insider misuse.",
@@ -597,6 +627,15 @@ _ELITE_ORG_HANDLE: dict[str, str] = {
     "DeepMind Safety Research":             "deepmindsafety",
     "Carnegie Mellon CyLab":                "cmucylab",
     "ETH Zurich Information Security Group": "ethzsec",
+    # #56: the small legit orgs joined this map when Sneaky Bugger moved off the
+    # elite pool. Without them, #53's typosquat falls back to squatting an org
+    # the candidate never claimed, which loses the handle-versus-claim
+    # comparison that made the violation readable in the first place.
+    "Univ. of Fictional CS Dept.":           "fictionalcs",
+    "Westmore Polytechnic Security Lab":     "westmoresec",
+    "Reston Public Library Tech Branch":     "restontech",
+    "Aegir Cybersecurity Cooperative":       "aegircyber",
+    "Cordova College — Independent Study":   "cordovacs",
 }
 
 
@@ -682,6 +721,7 @@ def _roll_discrepancies(
     day_number: int,
     allowed_violations: tuple[DiscrepancyKind, ...] = (),
     difficulty_band: str = "easy",
+    claimed_affiliation: str = "",
 ) -> list[Discrepancy]:
     """Pick discrepancies for this candidate.
 
@@ -718,6 +758,17 @@ def _roll_discrepancies(
         if intro_day(k) <= day_number
         and (not allowed_violations or k in allowed_violations)
     ]
+    # #56 - the trusted-organisation bypass. A claimed elite/trusted affiliation
+    # can never be faked: it ALWAYS confirms in the sweep. That is deliberate and
+    # is the player's reward for recognising one - a trusted domain plus a
+    # trusted affiliation lets them skip the ghostscan step entirely, which is
+    # The Professional's quick-admit read. Enforced here rather than in the
+    # renderer so the ground truth itself can never contradict the guarantee.
+    if claimed_affiliation in AFFILIATIONS_ELITE:
+        eligible = [k for k in eligible
+                    if k not in (DiscrepancyKind.AFFILIATION_MISMATCH,
+                                 DiscrepancyKind.AFFILIATION_UNLISTED)]
+
     rng.shuffle(eligible)
 
     # #4, detection complexity: on a tool-biased band, prefer evidence that
@@ -870,12 +921,35 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     rng_disc = _seeded_rng(game_seed, day.number, slot_index, "discrepancies")
     discrepancies = _roll_discrepancies(rng_disc, spec, day.number,
                                         day.allowed_violations,
-                                        day.difficulty_band)
+                                        day.difficulty_band,
+                                        affiliation)
 
     # #53: a typosquat handle can only be built once we know the kind was
     # actually planted, so the handle is overridden here rather than inside
     # _make_handle. Nothing derived earlier depends on it - the email comes from
     # first/last/affiliation, and claimed_github is assigned further down.
+    # #56 - make the affiliation evidence real rather than implied.
+    #   NOT_STATED: the dossier field is literally blank. Previously this kind
+    #     was planted on any "thin" affiliation ("Freelance Security Researcher"
+    #     etc.), which is a stated-but-modest claim, not a missing one.
+    #   MISMATCH:  the sweep will show a DIFFERENT org, recorded here so the
+    #     renderer and the filter agree on which one.
+    _kinds = {d.kind for d in discrepancies}
+    actual_affiliation: str | None = None
+    rng_affil = _seeded_rng(game_seed, day.number, slot_index, "affiliation")
+    if DiscrepancyKind.AFFILIATION_NOT_STATED in _kinds:
+        affiliation = NO_AFFILIATION_STATED
+        # They do work somewhere - they just never said where. The sweep shows
+        # their real org, which is what keeps this a purely DOSSIER violation
+        # with no ghostscan signature of its own. Echoing the blank sentinel
+        # into the sweep (as a first pass did) rendered "[[(none listed)]" as
+        # though it were an organisation, which is nonsense and reads like the
+        # UNLISTED violation.
+        actual_affiliation = rng_affil.choice(sorted(AFFILIATIONS_LEGIT))
+    elif DiscrepancyKind.AFFILIATION_MISMATCH in _kinds:
+        others = [o for o in AFFILIATIONS_LEGIT if o != affiliation]
+        actual_affiliation = rng_affil.choice(sorted(others))
+
     handle_squats: str | None = None
     if any(d.kind == DiscrepancyKind.TYPOSQUAT_HANDLE for d in discrepancies):
         rng_squat = _seeded_rng(game_seed, day.number, slot_index, "typosquat")
@@ -977,6 +1051,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     dossier = Dossier(
         claimed_github=handle if has_github else None,
         handle_squats=handle_squats,   # #53 - engine-only, filter names it
+        actual_affiliation=actual_affiliation,   # #56 - engine-only
         claimed_breaches=(),
         notes="Submitted via standard intake form. Self-reported.",
         commit_email=commit_email,
