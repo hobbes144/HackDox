@@ -294,7 +294,14 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[s
     if email_domain in _GS_SUSPICIOUS_DOMAINS:
         email_flag = "[#ff5470]✗  disposable provider — flag immediately[/]"
     elif email_domain in _GS_PRIVACY_DOMAINS:
-        email_flag = "[#ffd93d]?  privacy provider — flag if other issues present[/]"
+        # #58: was "privacy provider — flag if other issues present", which told
+        # the player to flag something with no matching DiscrepancyKind. The
+        # nearest thing to flag is DISPOSABLE_EMAIL, a different domain class, and
+        # board_accuracy_bonus counts that as a false positive — so the UI was
+        # instructing an action the scoring model punishes. Context, not an
+        # instruction: it is real corroboration, it is not itself a violation.
+        email_flag = ("[#ffd93d]?  anonymous mail provider — legitimate, but "
+                      "offers no identity trail[/]")
     elif email_domain in _GS_TRUSTED_DOMAINS or email_domain.endswith((".edu", ".ac.uk")):
         email_flag = "[#00ff9f]✓  recognised provider[/]"
     else:

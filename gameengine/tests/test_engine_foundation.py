@@ -1545,3 +1545,31 @@ def test_domain_classes_are_disjoint():
         for b in names[i + 1:]:
             overlap = classes[a] & classes[b]
             assert not overlap, f"{a} and {b} both claim {sorted(overlap)}"
+
+
+def test_no_hint_text_tells_the_player_to_flag_a_nonexistent_violation():
+    """#58: the privacy-provider line said "flag if other issues present", but
+    there is no privacy DiscrepancyKind — so following it means flagging
+    DISPOSABLE_EMAIL, which board_accuracy_bonus scores as a false positive.
+
+    Guards the shape, not the one string: any identity-block line that tells the
+    player to flag must correspond to a real violation.
+    """
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+
+    base = load_day(1)
+    seen_privacy = False
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=2,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(25):
+            c = candidate_gen.generate(seed, day, 0)
+            cls = tools_bridge.classify_email_domain(c.email)
+            lines = " ".join(tools_bridge._ghostscan_identity_lines(c, hint=False))
+            if cls == "privacy":
+                seen_privacy = True
+                assert "flag" not in lines.lower(), (
+                    f"privacy-provider hint still instructs a flag: {lines}")
+    assert seen_privacy, "no privacy-domain candidate generated — test is inert"
