@@ -1732,3 +1732,130 @@ def test_affiliation_violations_are_mutually_exclusive():
                 assert len(kinds) <= 1, (
                     f"{archetype.value} seed {seed} carries "
                     f"{sorted(k.name for k in kinds)}")
+
+
+# ─── Issue #59 — credential algorithm and plaintext are orthogonal ──────────
+
+
+def _algo(h: str | None) -> str:
+    if not h:
+        return "none"
+    if h.startswith("$2b$"):
+        return "bcrypt"
+    return "sha256" if len(h) == 64 else "md5"
+
+
+def _credential_sweep(days=(5,), seeds=300):
+    from dataclasses import replace
+    base = load_day(1)
+    for day_n in days:
+        for archetype in candidate_gen.ARCHETYPE_SPECS:
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in range(seeds):
+                yield candidate_gen.generate(seed, day, 0)
+
+
+def test_weak_encryption_is_exactly_the_md5_candidates():
+    """#59: WEAK_ENCRYPTION means "the weakest algorithm is used", so it must
+    track the hash exactly — every md5 candidate carries it, no other candidate
+    does.
+
+    Both directions are real bugs that existed. Only 199 of 432 md5 candidates
+    flagged it (so the dossier's WEAK ENC chip sometimes meant a violation and
+    sometimes didn't), and 62 of 2700 carried it on a *sha256* hash — a
+    weak-encryption violation on a medium-encryption credential, with nothing
+    for the player to observe.
+    """
+    md5_without = sha_with = 0
+    checked = 0
+    for c in _credential_sweep():
+        checked += 1
+        has = any(d.kind == DiscrepancyKind.WEAK_ENCRYPTION
+                  for d in c.truth.discrepancies)
+        algo = _algo(c.dossier.submitted_hash)
+        if algo == "md5" and not has:
+            md5_without += 1
+        if algo != "md5" and has:
+            sha_with += 1
+    assert checked
+    assert md5_without == 0, f"{md5_without} md5 candidates without WEAK_ENCRYPTION"
+    assert sha_with == 0, f"{sha_with} non-md5 candidates carrying WEAK_ENCRYPTION"
+
+
+def test_weak_credential_is_reachable_on_medium_encryption():
+    """#59: "anything but the strongest requires a crack to confirm complexity"
+    only works if a sha256 hash can actually crack to a weak password. It never
+    could — WEAK_CREDENTIAL forced md5, so cracking medium could only ever
+    surface a *leaked* password, never a merely weak one."""
+    seen = set()
+    for c in _credential_sweep():
+        if any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL
+               for d in c.truth.discrepancies):
+            seen.add(_algo(c.dossier.submitted_hash))
+    assert "sha256" in seen, (
+        "WEAK_CREDENTIAL never occurs on medium encryption — cracking a sha256 "
+        "hash can then never reveal a weak password")
+    assert "md5" in seen, "WEAK_CREDENTIAL should still be possible on md5"
+
+
+def test_weak_encryption_and_weak_credential_stack():
+    """The most interesting candidate in the set: bad algorithm AND bad
+    password. Unreachable before #59 because both sat in the same
+    mutual-exclusion group."""
+    both = 0
+    for c in _credential_sweep():
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if {DiscrepancyKind.WEAK_ENCRYPTION,
+                DiscrepancyKind.WEAK_CREDENTIAL} <= kinds:
+            both += 1
+            assert _algo(c.dossier.submitted_hash) == "md5"
+            assert c.dossier.password_plain in candidate_gen._HC_WEAK_PASSWORDS
+    assert both, "md5 + weak password never produces both violations"
+
+
+def test_plaintext_kinds_stay_mutually_exclusive():
+    """One submitted password, so only one kind may describe what it IS.
+    WEAK_ENCRYPTION is excluded — it describes the algorithm, not the plaintext,
+    which is the whole point of #59."""
+    assert (DiscrepancyKind.WEAK_ENCRYPTION
+            not in candidate_gen._CREDENTIAL_ARTIFACT_KINDS)
+    for c in _credential_sweep(seeds=120):
+        kinds = {d.kind for d in c.truth.discrepancies}
+        overlap = kinds & candidate_gen._CREDENTIAL_ARTIFACT_KINDS
+        assert len(overlap) <= 1, sorted(k.name for k in overlap)
+
+
+def test_bcrypt_candidates_are_always_clean():
+    """Strong encryption needs no crack — so a bcrypt hash must never carry a
+    credential violation, or the player would be expected to find something in
+    an uncrackable hash."""
+    checked = 0
+    credential_kinds = (candidate_gen._CREDENTIAL_ARTIFACT_KINDS
+                        | {DiscrepancyKind.WEAK_ENCRYPTION})
+    for c in _credential_sweep(seeds=150):
+        if _algo(c.dossier.submitted_hash) != "bcrypt":
+            continue
+        checked += 1
+        assert c.dossier.password_plain is None, "bcrypt must stay uncrackable"
+        assert not ({d.kind for d in c.truth.discrepancies} & credential_kinds)
+    assert checked, "no bcrypt candidates generated — test is inert"
+
+
+def test_derived_weak_encryption_respects_the_day_whitelist():
+    """A derived violation still has to obey the constraints a rolled one would,
+    or `lab -v` and authored day content would both quietly lie."""
+    from dataclasses import replace
+
+    base = load_day(1)
+    day = replace(base, number=5,
+                  forced_includes={0: Archetype.CLUMSY_CUTIE},
+                  archetype_mix={**base.archetype_mix, Archetype.CLUMSY_CUTIE: 1},
+                  allowed_violations=(DiscrepancyKind.UNSALTED_STORAGE,))
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        kinds = {d.kind for d in c.truth.discrepancies}
+        assert DiscrepancyKind.WEAK_ENCRYPTION not in kinds, (
+            "WEAK_ENCRYPTION was derived despite not being whitelisted")
+        assert kinds <= {DiscrepancyKind.UNSALTED_STORAGE}, kinds

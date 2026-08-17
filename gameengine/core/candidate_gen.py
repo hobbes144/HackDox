@@ -431,12 +431,16 @@ _SEVERITY_REVEAL = {
 # The set of kinds that drive submitted_hash/password_plain generation in
 # `generate()` below — a candidate can carry at most one of these (see the
 # exclusivity note in `_roll_discrepancies`).
+# #59: these each determine what the single submitted PASSWORD is, so at most
+# one can be true of a candidate. WEAK_ENCRYPTION deliberately left: it is a
+# fact about the ALGORITHM, which is independent of the plaintext, and keeping
+# it here made the two overlap in a way the design never intended -
+# md5-with-a-weak-password could only ever flag one of them.
 _CREDENTIAL_ARTIFACT_KINDS: frozenset[DiscrepancyKind] = frozenset({
     DiscrepancyKind.LEAKED_PASSWORD,
     DiscrepancyKind.CROSS_BREACH_REUSE,
     DiscrepancyKind.WEAK_CREDENTIAL,
     DiscrepancyKind.UNSALTED_STORAGE,
-    DiscrepancyKind.WEAK_ENCRYPTION,
 })
 
 # Every candidate submits exactly ONE image (Dossier.submitted_image_path), and
@@ -1022,13 +1026,36 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     _has_reuse   = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in discrepancies)
     _has_unsalt  = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in discrepancies)
     _has_weakenc = any(d.kind == DiscrepancyKind.WEAK_ENCRYPTION    for d in discrepancies)
+    # #59: WEAK_ENCRYPTION is ROLLED only as a request for a weak algorithm - it
+    # is never itself an authored fact. Strip it here and re-derive it from the
+    # hash below, so it can only ever describe an artifact that exists.
+    #
+    # Without this strip, a candidate that rolled WEAK_ENCRYPTION but lost the
+    # hash chain to a plaintext-determining kind (LEAKED_PASSWORD and friends
+    # take priority, and they use sha256) kept the flag on a 64-char hash - a
+    # weak-encryption violation on a medium-encryption credential, with nothing
+    # for the player to observe. Measured at 62 of 2700 before the strip.
+    discrepancies = [d for d in discrepancies
+                     if d.kind is not DiscrepancyKind.WEAK_ENCRYPTION]
+
     rng_hc = random.Random(int(cand_id, 16) ^ 0xDEAD_C0DE)
     if _has_leaked or _has_reuse:
         password_plain = rng_hc.choice(_HC_LEAKED_PASSWORDS)
         submitted_hash = _hashlib.sha256(password_plain.encode()).hexdigest()
-    elif _has_weak or _has_unsalt:
+    elif _has_unsalt:
         password_plain = rng_hc.choice(_HC_WEAK_PASSWORDS)
         submitted_hash = _hashlib.md5(password_plain.encode()).hexdigest()
+    elif _has_weak:
+        # #59: WEAK_CREDENTIAL is about the PLAINTEXT, so it can sit under either
+        # crackable algorithm. It used to force md5, which meant a sha256 hash
+        # never cracked to a merely weak password - only to a leaked one - and
+        # the "medium encryption requires a crack to confirm complexity" half of
+        # the design did not exist. Choosing md5 here also earns a derived
+        # WEAK_ENCRYPTION below, so the two genuinely stack.
+        password_plain = rng_hc.choice(_HC_WEAK_PASSWORDS)
+        submitted_hash = (_hashlib.md5(password_plain.encode()).hexdigest()
+                          if rng_hc.random() < 0.5 else
+                          _hashlib.sha256(password_plain.encode()).hexdigest())
     elif _has_weakenc:
         password_plain = rng_hc.choice(_HC_STRONG_PASSWORDS)
         submitted_hash = _hashlib.md5(password_plain.encode()).hexdigest()
@@ -1042,6 +1069,33 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
         # password: crackable, and the reveal confirms there's no issue.
         password_plain = rng_hc.choice(_HC_STRONG_PASSWORDS)
         submitted_hash = _hashlib.sha256(password_plain.encode()).hexdigest()
+
+    # #59: WEAK_ENCRYPTION is DERIVED from the artifact rather than rolled ahead
+    # of it. "The weakest encryption is used" is a property of the hash, so every
+    # md5 candidate carries it - unconditionally, including unsalted ones. Before
+    # this only 199 of 432 md5 candidates flagged it, which meant the dossier's
+    # WEAK ENC chip sometimes corresponded to a violation and sometimes didn't.
+    #
+    # Deriving also inverts the dependency the right way round: the artifact
+    # determines the violation, instead of a violation being asserted and an
+    # artifact built to match. Getting that backwards is the shape behind
+    # several bugs in this file's history.
+    #
+    # Still respects the two filters a rolled kind would: the #31 evidence-tier
+    # gate and the day's allowed_violations whitelist. A clean archetype can
+    # never pick one up because clean candidates are never given an md5 hash.
+    if (submitted_hash and len(submitted_hash) == 32
+            and not submitted_hash.startswith("$2b$")
+            and intro_day(DiscrepancyKind.WEAK_ENCRYPTION) <= day.number
+            and (not day.allowed_violations
+                 or DiscrepancyKind.WEAK_ENCRYPTION in day.allowed_violations)):
+        _rb, _sv = _SEVERITY_REVEAL[DiscrepancyKind.WEAK_ENCRYPTION]
+        discrepancies.append(Discrepancy(
+            kind=DiscrepancyKind.WEAK_ENCRYPTION,
+            severity=_sv,          # type: ignore[arg-type]
+            revealed_by=_rb,
+            description=_DISCREPANCY_DESCRIPTIONS[DiscrepancyKind.WEAK_ENCRYPTION],
+        ))
 
     # Generate claimed_ip — what the candidate says they connect from.
     _rng_ip = random.Random(int(cand_id, 16) ^ 0xFACEB00C)
