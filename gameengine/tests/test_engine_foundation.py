@@ -1494,3 +1494,54 @@ def test_stego_image_is_deterministic():
         assert a.carrier == b.carrier
         assert a.zone == b.zone and a.hint_region == b.hint_region
         assert a.density == b.density
+
+
+# ─── Issues #57 / #58 — domain-class integrity ──────────────────────────────
+
+
+def test_every_generated_disposable_candidate_is_actually_detectable():
+    """#57: the generator pool and the detector list had drifted, so 148 of 400
+    DISPOSABLE_EMAIL candidates classified as "unknown" rather than
+    "prohibited" — the dossier highlight never fired and the archetype's whole
+    fast-DENY read silently failed.
+
+    Sweeps generated candidates rather than just comparing the two constants,
+    because comparing constants is what people already thought they were doing.
+    """
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+
+    base = load_day(1)
+    day = replace(base, number=2,
+                  forced_includes={0: Archetype.THE_INCOMPATIBLE},
+                  archetype_mix={**base.archetype_mix,
+                                 Archetype.THE_INCOMPATIBLE: 1})
+    checked = 0
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        if not any(d.kind == DiscrepancyKind.DISPOSABLE_EMAIL
+                   for d in c.truth.discrepancies):
+            continue
+        checked += 1
+        assert tools_bridge.classify_email_domain(c.email) == "prohibited", (
+            f"{c.email} carries DISPOSABLE_EMAIL but classifies as "
+            f"{tools_bridge.classify_email_domain(c.email)!r} — the player has "
+            f"no way to see it")
+    assert checked, "no DISPOSABLE_EMAIL candidates generated — test is inert"
+
+
+def test_domain_classes_are_disjoint():
+    """A domain in two classes would classify by whichever branch runs first,
+    which is not a decision anyone made on purpose."""
+    from gameengine.core import tools_bridge as tb
+
+    classes = {
+        "prohibited": set(tb._GS_SUSPICIOUS_DOMAINS),
+        "privacy":    set(tb._GS_PRIVACY_DOMAINS),
+        "approved":   set(tb._GS_TRUSTED_DOMAINS),
+    }
+    names = sorted(classes)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            overlap = classes[a] & classes[b]
+            assert not overlap, f"{a} and {b} both claim {sorted(overlap)}"

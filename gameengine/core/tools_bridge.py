@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 
 from .. import config
 from .models import Candidate, Discrepancy, DiscrepancyKind, ToolName
-from .candidate_gen import (_ELITE_ORG_HANDLE as _ORG_HANDLE,
+from .candidate_gen import (DOMAINS_DISPOSABLE as _DISPOSABLE_DOMAINS,
+                            _ELITE_ORG_HANDLE as _ORG_HANDLE,
                             stable_hash as _stable_hash)
 
 
@@ -163,8 +164,18 @@ def classify_affiliation(affiliation: str) -> str:
 
 _GS_TRUSTED_DOMAINS    = {"gmail.com", "outlook.com", "yahoo.com", "icloud.com",
                            "hotmail.com", "live.com"}
-_GS_SUSPICIOUS_DOMAINS = {"mailinator.com", "guerrillamail.com", "tempmail.com",
-                           "yopmail.com", "throwam.com", "dispostable.com"}
+# #57: DERIVED from the generator's pool, not maintained alongside it. These two
+# lists had drifted — the generator produced sharklasers.com, tempmail.org and
+# trashmail.com, none of which were here, while this list carried tempmail.com
+# which was never generated (note .com against the generator's .org). The result
+# was that 148 of 400 generated DISPOSABLE_EMAIL candidates classified as
+# "unknown" rather than "prohibited": the dossier highlight didn't fire, the
+# identity block said "unknown domain", and the archetype's whole fast-DENY read
+# silently failed better than a third of the time.
+#
+# Deriving makes that drift structurally impossible. Re-syncing the values by
+# hand is exactly how they got out of sync in the first place.
+_GS_SUSPICIOUS_DOMAINS = frozenset(_DISPOSABLE_DOMAINS)
 _GS_PRIVACY_DOMAINS    = {"protonmail.com", "tutanota.com", "pm.me", "proton.me"}
 
 _GS_LEGIT_ORGS = {
