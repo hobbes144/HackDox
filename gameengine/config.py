@@ -203,9 +203,89 @@ STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflo
 
 # ─── Day-cycle pacing ────────────────────────────────────────────────────────
 
-DEFAULT_CANDIDATES_PER_DAY = 6
 CINEMATIC_CHAT             = False
 CHAT_LINE_DELAY            = 0.04
+
+# ─── Campaign shape (#17) ────────────────────────────────────────────────────
+#
+# CAMPAIGN_LAST_DAY is the ceiling for procedurally-synthesized days: past it,
+# content_loader stops synthesizing and the campaign-end screen fires. The
+# candidate-count cap below and #4's reward-decay floors are both tuned to
+# bottom out shortly before this, so the campaign's last stretch plays at its
+# hardest rather than easing off.
+CAMPAIGN_LAST_DAY = 20
+
+# Days 1..TUTORIAL_LAST_DAY are the teaching days (#15): one tool introduced
+# per day, and the difficulty levers deliberately stay flat across them.
+TUTORIAL_LAST_DAY = 5
+
+# ─── Candidate volume ramp (#17) ─────────────────────────────────────────────
+#
+# The "volume" difficulty lever, complementing #4's economy/complexity levers.
+# Curve shape lives entirely in DAY_CANDIDATE_COUNT so there is one place to
+# retune it:
+#
+#   days 1-5 : 6 6 6 6 6                      (flat — teaching, not grinding)
+#   days 6+  : 7 7 8 8 9 9 10 10 11 11 12 …   (+1 every two days)
+#   cap      : 12, reached on day 16
+#
+# A day_NN.json that declares candidate_count explicitly always overrides this.
+CANDIDATE_COUNT_TUTORIAL = 6     # flat count across the tutorial days
+CANDIDATE_COUNT_BASE     = 6     # where the post-tutorial ramp starts
+CANDIDATE_COUNT_GROWTH   = 0.5   # extra candidates per day after the tutorial
+CANDIDATE_COUNT_CAP      = 12    # sustained late-campaign ceiling
+
+
+def DAY_CANDIDATE_COUNT(day_number: int) -> int:
+    """How many candidates the given day's shift contains.
+
+    Single source of truth for shift length: the intake loop drives off
+    Day.candidate_count, which is either the day file's explicit value or this.
+    """
+    if day_number <= TUTORIAL_LAST_DAY:
+        return CANDIDATE_COUNT_TUTORIAL
+    beyond = day_number - TUTORIAL_LAST_DAY
+    # math.ceil without the import — the first post-tutorial day should already
+    # feel a step longer rather than rounding back down to the tutorial length.
+    grown = CANDIDATE_COUNT_BASE + -int(-beyond * CANDIDATE_COUNT_GROWTH // 1)
+    return min(CANDIDATE_COUNT_CAP, grown)
+
+
+# Quotas scale with volume (#17 AC / issue #12). A 12-candidate shift asking
+# for the same 2 correct admits as a 6-candidate shift would get *easier* as
+# the campaign ramps. The ratio is chosen so Day 1 is numerically unchanged:
+# round(6 * 0.34) == 2, exactly what day_01.json already declares.
+QUOTA_ADMIT_RATIO = 0.34
+# max_false_admits deliberately does NOT scale. Letting more threats through on
+# a longer shift would make late days more forgiving — backwards for a ramp.
+
+
+def DAY_MIN_CORRECT_ADMITS(day_number: int, candidate_count: int,
+                           authored: int | None = None) -> int:
+    """The day's admit quota, scaled to shift length.
+
+    `authored` is the day file's own value where it declares one; the result is
+    never lower than what the content author asked for.
+    """
+    scaled = max(1, round(candidate_count * QUOTA_ADMIT_RATIO))
+    return max(scaled, authored or 0)
+
+
+# ─── Difficulty bands (#4 / #17) ─────────────────────────────────────────────
+#
+# The coarse label a day carries. Authored per-day where a day file exists;
+# synthesized days derive it from here. It drives #4's detection-complexity
+# lever — archetype mix and discrepancy-tier bias.
+DIFFICULTY_BAND_LAST_EASY   = TUTORIAL_LAST_DAY   # days 1-5
+DIFFICULTY_BAND_LAST_MEDIUM = 12                  # days 6-12; 13+ is hard
+
+
+def difficulty_band_for_day(day_number: int) -> str:
+    if day_number <= DIFFICULTY_BAND_LAST_EASY:
+        return "easy"
+    if day_number <= DIFFICULTY_BAND_LAST_MEDIUM:
+        return "medium"
+    return "hard"
 
 # ─── Logwatch shared log — volume scaling ────────────────────────────────────
 #

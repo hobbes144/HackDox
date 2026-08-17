@@ -263,14 +263,14 @@ def test_allowed_violations_whitelist_restricts_planted_kinds():
             )
 
 
-# --- Issue #35 - Rule.mutability + per-day ruleset loading ------------------
+# ─── Issue #35 — Rule.mutability + per-day ruleset loading ──────────────────
 
 
 def test_day1_rules_all_default_to_fixed(day1):
     """Adding `mutability` must not have changed any existing content.
 
     Day 1's rule file predates #35 and never mentions mutability, so every
-    rule must load as "fixed" - the guard that this field is purely additive.
+    rule must load as "fixed" — the guard that this field is additive.
     """
     assert day1.rules, "Day 1 should have rules"
     assert all(r.mutability == "fixed" for r in day1.rules)
@@ -311,11 +311,11 @@ def test_unknown_mutability_raises(tmp_path, monkeypatch):
 
 
 def test_rules_engine_evaluates_against_the_passed_day(day1):
-    """#35 AC: the active ruleset is whatever Day is handed in - not a cached
+    """#35 AC: the active ruleset is whatever Day is handed in — not a cached
     Day-1 ruleset.
 
     This pins behaviour that is already correct (`rules_engine.evaluate` is a
-    pure function of its arguments, and `HackDoxApp.advance_day` reloads the
+    pure function of its arguments and `HackDoxApp.advance_day` reloads the
     Day each shift). The test exists so a future refactor cannot reintroduce a
     module-level or cached ruleset without turning something red: the SAME
     candidate is evaluated against two different rulesets and must produce
@@ -337,3 +337,107 @@ def test_rules_engine_evaluates_against_the_passed_day(day1):
     tomorrow = replace(day1, number=day1.number + 1, rules=())
     assert not rules_engine.evaluate(dirty, tomorrow).triggered_disqualifying
     assert not rules_engine.evaluate(dirty, tomorrow).triggered_weighted
+
+
+# ─── Issue #17 — candidate volume scaling ───────────────────────────────────
+
+
+def test_candidate_count_curve_shape():
+    """Tutorial flat, then a ramp, then a hard cap."""
+    tutorial = [config.DAY_CANDIDATE_COUNT(d)
+                for d in range(1, config.TUTORIAL_LAST_DAY + 1)]
+    assert tutorial == [config.CANDIDATE_COUNT_TUTORIAL] * len(tutorial)
+
+    ramp = [config.DAY_CANDIDATE_COUNT(d) for d in range(1, 21)]
+    # Monotonic non-decreasing, and never above the cap.
+    assert all(b >= a for a, b in zip(ramp, ramp[1:]))
+    assert max(ramp) == config.CANDIDATE_COUNT_CAP
+    # The ramp actually ramps — a late day is strictly longer than a tutorial one.
+    assert config.DAY_CANDIDATE_COUNT(20) > config.DAY_CANDIDATE_COUNT(1)
+
+
+def test_day1_volume_and_quota_are_unchanged(day1):
+    """The tutorial baseline must not move when the curve lands.
+
+    day_01.json declares candidate_count 6 and min_correct_admits 2. The
+    explicit value wins over the curve, and QUOTA_ADMIT_RATIO is chosen so the
+    scaled quota computes to the same 2.
+    """
+    assert day1.candidate_count == 6
+    assert day1.quotas.min_correct_admits == 2
+    assert day1.quotas.max_false_admits == 1
+
+
+def test_candidate_count_falls_back_to_the_curve_when_omitted(tmp_path, monkeypatch):
+    import json
+
+    source = json.loads((config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source["number"] = 9
+    source.pop("candidate_count")            # #17: now optional
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / "day_09.json").write_text(json.dumps(source), encoding="utf-8")
+
+    assert load_day(9).candidate_count == config.DAY_CANDIDATE_COUNT(9)
+
+
+def test_quota_scales_with_volume_but_never_below_the_authored_value():
+    # A longer shift asks for more correct admits...
+    assert (config.DAY_MIN_CORRECT_ADMITS(16, 12)
+            > config.DAY_MIN_CORRECT_ADMITS(1, 6))
+    # ...but an author who wants a harder quota than the curve keeps it.
+    assert config.DAY_MIN_CORRECT_ADMITS(1, 6, authored=5) == 5
+    # max_false_admits deliberately does not scale — see config.
+    assert config.DAY_MIN_CORRECT_ADMITS(1, 6) == 2
+
+
+def test_missing_day_file_synthesizes_inside_the_campaign():
+    """#17: the campaign no longer ends after Day 1 just because day_02.json
+    was never authored."""
+    for n in (2, 8, config.CAMPAIGN_LAST_DAY):
+        day = load_day(n)
+        assert day.number == n
+        assert day.candidate_count == config.DAY_CANDIDATE_COUNT(n)
+        assert day.difficulty_band == config.difficulty_band_for_day(n)
+        # The mix must sum to the shift length, or slots go unfilled.
+        assert sum(day.archetype_mix.values()) == day.candidate_count
+        assert day.rules, "a synthesized day still needs a ruleset"
+
+
+def test_campaign_ends_past_the_last_day():
+    with pytest.raises(FileNotFoundError):
+        load_day(config.CAMPAIGN_LAST_DAY + 1)
+
+
+def test_synthesized_day_generation_is_deterministic():
+    """#17 AC: same seed + day → same candidate set AND order."""
+    day = load_day(16)
+    first  = [candidate_gen.generate(SEED, day, i) for i in range(day.candidate_count)]
+    second = [candidate_gen.generate(SEED, day, i) for i in range(day.candidate_count)]
+    assert first == second
+    assert len({c.id for c in first}) == day.candidate_count
+    # The realized mix must equal the declared mix, as it does for Day 1.
+    realized: dict = {}
+    for c in first:
+        realized[c.archetype] = realized.get(c.archetype, 0) + 1
+    assert realized == day.archetype_mix
+
+
+def test_scale_archetype_mix_preserves_total_and_never_drops_an_archetype():
+    from gameengine.core.content_loader import scale_archetype_mix
+
+    base = load_day(1).archetype_mix
+    for target in range(1, 25):
+        scaled = scale_archetype_mix(base, target)
+        # Exactness is the hard requirement: _pick_archetype_for_slot walks the
+        # bag modulo its length, so a mix that doesn't sum to the shift length
+        # wraps and the realized mix stops matching the declared mix.
+        assert sum(scaled.values()) == target, target
+        assert all(v >= 1 for v in scaled.values()), target
+        if target >= len(base):
+            # With room for everyone, scaling must not delete an archetype the
+            # day was meant to contain.
+            assert set(scaled) == set(base), target
+        else:
+            # A shift shorter than the archetype list has to drop some — it
+            # must drop them, not break the total.
+            assert set(scaled) < set(base), target
