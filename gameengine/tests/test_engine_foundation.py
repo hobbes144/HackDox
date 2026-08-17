@@ -441,3 +441,139 @@ def test_scale_archetype_mix_preserves_total_and_never_drops_an_archetype():
             # A shift shorter than the archetype list has to drop some — it
             # must drop them, not break the total.
             assert set(scaled) < set(base), target
+
+
+# ─── Issue #4 — difficulty curve ────────────────────────────────────────────
+
+
+def test_reward_decay_shape_and_floors():
+    admit = [config.DAY_REWARD_PAYOUT(d, True)  for d in range(1, 30)]
+    deny  = [config.DAY_REWARD_PAYOUT(d, False) for d in range(1, 30)]
+
+    # Tutorial days pay the undecayed rate (#15: days 1-5 stay flat-easy).
+    assert admit[:4] == [config.HACKDOLLAR_PER_CORRECT_ADMIT] * 4
+    assert deny[:4]  == [config.HACKDOLLAR_PER_CORRECT_DENY] * 4
+    # Monotonically non-increasing, and bottoming out at the floors.
+    assert all(b <= a for a, b in zip(admit, admit[1:]))
+    assert all(b <= a for a, b in zip(deny, deny[1:]))
+    assert min(admit) == config.HACKDOLLAR_FLOOR_ADMIT
+    assert min(deny)  == config.HACKDOLLAR_FLOOR_DENY
+    # The floors are reached around the campaign's climax, not mid-run.
+    assert admit[config.CAMPAIGN_LAST_DAY // 2] > config.HACKDOLLAR_FLOOR_ADMIT
+
+
+def test_scoring_applies_reward_decay_by_day(day1):
+    """A correct verdict late in the campaign pays less than the same verdict
+    on day 1 — with the board bonus held constant so only the base rate moves.
+    """
+    clean = next(
+        c for c in (
+            candidate_gen.generate(SEED, day1, slot_index=i)
+            for i in range(day1.candidate_count)
+        )
+        if c.truth.correct_verdict == Verdict.ADMIT
+    )
+    early = scoring.score(clean, Verdict.ADMIT, set(), day_number=1)
+    late  = scoring.score(clean, Verdict.ADMIT, set(), day_number=20)
+    assert early.correct and late.correct
+    assert late.hackdollars < early.hackdollars
+    # The board bonus itself must NOT decay — only the base rate does.
+    assert early.board_bonus == late.board_bonus
+    assert (early.hackdollars - early.board_bonus
+            == config.DAY_REWARD_PAYOUT(1, True))
+    assert (late.hackdollars - late.board_bonus
+            == config.DAY_REWARD_PAYOUT(20, True))
+
+
+def test_apply_reads_the_day_off_game_state(day1):
+    """scoring.apply must pass state.current_day through, or the decay curve
+    silently never fires in the real game."""
+    cand = next(
+        c for c in (
+            candidate_gen.generate(SEED, day1, slot_index=i)
+            for i in range(day1.candidate_count)
+        )
+        if c.truth.correct_verdict == Verdict.ADMIT
+    )
+    early_state = GameState(seed=SEED, current_day=1)
+    late_state  = GameState(seed=SEED, current_day=20)
+    early = scoring.apply(cand, Verdict.ADMIT, early_state)
+    late  = scoring.apply(cand, Verdict.ADMIT, late_state)
+    assert late.hackdollar_delta < early.hackdollar_delta
+
+
+def test_tool_cost_inflation_applies_after_the_upgrade_reduction():
+    """#4 + #23: a purchased optimizer must keep saving its ⏱ in the late game.
+
+    Regression guard on ordering. Inflating first and reducing second would
+    clamp at the max(1, ...) floor once inflation grew comparable to the
+    reduction, silently erasing the purchase.
+    """
+    from gameengine.core import tools_bridge
+
+    plain    = GameState(seed=SEED, current_day=20)
+    upgraded = GameState(seed=SEED, current_day=20)
+    upgraded.upgrades = {"toolcost_ghostscan"}
+
+    day1_plain = GameState(seed=SEED, current_day=1)
+    assert (tools_bridge.tool_cost(day1_plain, "ghostscan")
+            == config.TOOL_COSTS["ghostscan"])          # day 1 is undecayed
+    assert (tools_bridge.tool_cost(plain, "ghostscan")
+            > tools_bridge.tool_cost(day1_plain, "ghostscan"))
+    # The saving is intact and exactly the advertised amount.
+    assert (tools_bridge.tool_cost(plain, "ghostscan")
+            - tools_bridge.tool_cost(upgraded, "ghostscan")
+            == config.TOOLCOST_REDUCTION)
+    # config's read-only twin must agree with the live one.
+    assert (config.DAY_TOOL_COST("ghostscan", 20, upgraded.upgrades)
+            == tools_bridge.tool_cost(upgraded, "ghostscan"))
+
+
+def test_filter_and_stamp_costs_do_not_inflate():
+    """Deliberate design call — see config.TOOL_COST_INFLATION_PERIOD."""
+    assert config.FILTER_COSTS["ghostscan"] == 3
+    assert config.STEGO_STAMP_COST == 1
+    # Neither constant is a function of the day; nothing to inflate them.
+    assert isinstance(config.FILTER_COSTS["ghostscan"], int)
+    assert isinstance(config.STEGO_STAMP_COST, int)
+
+
+def test_hard_band_biases_toward_tool_revealed_evidence():
+    """#4 lever 3: late-game evidence should sit behind the ⏱ economy rather
+    than in plain sight on the dossier."""
+    from gameengine.core.models import ToolName
+
+    def tool_share(day_number: int) -> float:
+        day = load_day(day_number)
+        dossier = tool = 0
+        for i in range(day.candidate_count):
+            for d in candidate_gen.generate(SEED, day, i).truth.discrepancies:
+                if d.revealed_by == ToolName.DOSSIER:
+                    dossier += 1
+                else:
+                    tool += 1
+        return tool / max(1, tool + dossier)
+
+    hard_day = next(d for d in range(1, config.CAMPAIGN_LAST_DAY + 1)
+                    if config.difficulty_band_for_day(d) == "hard")
+    assert load_day(hard_day).difficulty_band == "hard"
+    assert tool_share(hard_day) > tool_share(6)
+
+
+def test_hard_band_keeps_the_quick_case_archetypes():
+    """The GDD wants low-friction pacing beats to survive into the late game;
+    twelve straight deep investigations reads as a wall, not escalation."""
+    hard = config.ARCHETYPE_MIX_BY_BAND["hard"]
+    assert "the_professional" in hard
+    assert "the_incompatible" in hard
+    # ...and Sneaky Bugger is nevertheless the dominant archetype there.
+    assert hard["sneaky_bugger"] == max(hard.values())
+
+
+def test_difficulty_band_generation_stays_deterministic():
+    """The tool-tier bias is a stable sort over an already-seeded shuffle, so
+    it must not disturb determinism."""
+    day = load_day(16)
+    a = [candidate_gen.generate(SEED, day, i) for i in range(day.candidate_count)]
+    b = [candidate_gen.generate(SEED, day, i) for i in range(day.candidate_count)]
+    assert a == b

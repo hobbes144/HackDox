@@ -2661,6 +2661,13 @@ class EODScreen(Screen):
                 f"HackDollar$: [#00ff9f]+{self._hd_earned}[/] earned{hd_bonus_str}"
                 f"  ·  balance [#00ff9f][b]{self._state.hackdollars} HD$[/][/]"
             )
+            # #4: name the rate this shift actually paid at, so the decay is
+            # visible as a number rather than felt as a vague slump.
+            yield Static(
+                f"[dim]Rate today: {config.DAY_REWARD_PAYOUT(self._day.number, True)} HD$ "
+                f"per correct admit · "
+                f"{config.DAY_REWARD_PAYOUT(self._day.number, False)} per correct deny[/]"
+            )
             yield Static(f"Alignment: {self._state.alignment:+d}")
             yield Static("")
             for r in self._state.pending_results:
@@ -2776,6 +2783,39 @@ class BetweenDayScreen(Screen):
         self._summary_w.update(self._summary_text())
         self._shop_w.update(self._shop_text())
 
+    def _next_shift_terms(self) -> str:
+        """#4: what next shift will pay, and what it will charge.
+
+        The difficulty curve is only legible as escalation if the player can
+        see it arriving. Shown here rather than on the EOD screen because this
+        is the screen where they decide what to spend HackDollar$ on — knowing
+        tool costs are about to step up is exactly the input to that decision.
+        Only rates that actually CHANGE are called out, so a mid-tutorial day
+        doesn't nag about a curve that hasn't moved yet.
+        """
+        st   = self._state
+        d    = self._day.number
+        nxt  = d + 1
+        bits: list[str] = []
+
+        pay_now, pay_next = (config.DAY_REWARD_PAYOUT(d, True),
+                             config.DAY_REWARD_PAYOUT(nxt, True))
+        if pay_next != pay_now:
+            bits.append(f"[#ffd93d]correct admit {pay_now} → {pay_next} HD$[/]")
+        else:
+            bits.append(f"[dim]correct admit {pay_next} HD$[/]")
+
+        costs_now  = {t: tools_bridge.tool_cost(st, t) for t in config.TOOL_COSTS}
+        costs_next = {t: config.DAY_TOOL_COST(t, nxt, st.upgrades)
+                      for t in config.TOOL_COSTS}
+        strip = " ".join(
+            f"{t[0].upper()}{costs_next[t]}" for t in sorted(config.TOOL_COSTS))
+        if costs_next != costs_now:
+            bits.append(f"[#ff8c42]tool costs rise → {strip}[/]")
+        else:
+            bits.append(f"[dim]tools {strip}[/]")
+        return "  ·  ".join(bits)
+
     def _summary_text(self) -> str:
         st      = self._state
         results = st.pending_results
@@ -2806,6 +2846,7 @@ class BetweenDayScreen(Screen):
             f"[#6b7785]Verdicts[/]        [b]{correct}[/]/{total} correct",
             f"[#6b7785]⏱ spent[/]         [#ffb454]−{spent}[/] of {budget}"
             f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]",
+            f"[#6b7785]Next shift[/]      {self._next_shift_terms()}",
             f"[#6b7785]Board accuracy[/]  {board_pct}%  [dim](paid as HD$ bonus)[/]",
             f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]",
             "",

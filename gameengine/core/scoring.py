@@ -82,7 +82,16 @@ def score(
     candidate: Candidate,
     player_verdict: Verdict,
     player_flags: set[DiscrepancyKind],
+    day_number: int = 1,
 ) -> ScoreDelta:
+    """Grade one verdict.
+
+    `day_number` drives #4's reward decay: the HD$ paid for a correct verdict
+    shrinks as the campaign runs. It is an explicit parameter rather than
+    something reached off GameState so this stays a pure function of its
+    arguments — `apply()` passes `state.current_day`. It defaults to 1 (the
+    undecayed day-1 rate) so existing callers keep their old numbers.
+    """
     correct = candidate.truth.correct_verdict == player_verdict
     moral   = candidate.truth.moral_modifier
 
@@ -103,11 +112,11 @@ def score(
         site_health = 0.0
 
     # HackDollar$ — persistent currency earned on correct verdicts (issue
-    # #21). The board-accuracy bonus lands here too (issue #27).
-    if correct and player_admit:
-        hackdollars = config.HACKDOLLAR_PER_CORRECT_ADMIT + bonus
-    elif correct:
-        hackdollars = config.HACKDOLLAR_PER_CORRECT_DENY + bonus
+    # #21). The board-accuracy bonus lands here too (issue #27), undecayed:
+    # it is already accuracy-scored, so decaying it on top of the base rate
+    # would penalise the same shift twice (issue #4).
+    if correct:
+        hackdollars = config.DAY_REWARD_PAYOUT(day_number, player_admit) + bonus
     else:
         hackdollars = 0
 
@@ -140,7 +149,10 @@ def apply(
     the Evidence Board. Pass None (or empty set) if the board was not used.
     """
     flags = player_flags or set()
-    delta = score(candidate, player_verdict, flags)
+    # #4: the day number drives reward decay. Read off the state here so every
+    # existing call site picks the curve up without a signature change.
+    delta = score(candidate, player_verdict, flags,
+                  day_number=getattr(state, "current_day", 1))
 
     # Issue #27: verdicts never touch state.compute_hours — ⏱ is a
     # spend-only daily budget consumed exclusively by tools.

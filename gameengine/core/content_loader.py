@@ -120,12 +120,22 @@ def synthesize_day(day_number: int) -> Day:
     """
     template = load_day(1)
     count = config.DAY_CANDIDATE_COUNT(day_number)
+    band  = config.difficulty_band_for_day(day_number)
+    # #4's detection-complexity lever: the band picks the archetype weighting,
+    # so late days load up on the Sneaky Bugger while easy days lean on the
+    # obvious cases the tutorial taught. Falls back to Day 1's own proportions
+    # if a band ever has no table.
+    weights = config.ARCHETYPE_MIX_BY_BAND.get(band)
+    base_mix = (
+        {Archetype(k): v for k, v in weights.items()} if weights
+        else template.archetype_mix
+    )
     return Day(
         number=day_number,
         title=f"Day {day_number}",
         rules=template.rules,
         candidate_count=count,
-        archetype_mix=scale_archetype_mix(template.archetype_mix, count),
+        archetype_mix=scale_archetype_mix(base_mix, count),
         quotas=Quotas(
             min_correct_admits=config.DAY_MIN_CORRECT_ADMITS(day_number, count),
             max_false_admits=template.quotas.max_false_admits,
@@ -139,7 +149,7 @@ def synthesize_day(day_number: int) -> Day:
             p: f"day{day_number}_outro_{p.value}" for p in Performance
         },
         allowed_violations=(),   # no whitelist — only #31's evidence-tier gate
-        difficulty_band=config.difficulty_band_for_day(day_number),
+        difficulty_band=band,
         forced_includes={},
     )
 

@@ -45,13 +45,26 @@ class ToolResult:
 
 
 def tool_cost(state, tool_name: str) -> int:
-    """Effective base ⏱ cost for a tool — honours the toolcost_* upgrades
-    (issue #23): each owned "toolcost_<tool>" upgrade knocks
-    config.TOOLCOST_REDUCTION off the base cost, floored at 1 ⏱."""
+    """Effective base ⏱ cost for a tool on the state's current day.
+
+    Two effects, and the ORDER between them matters (issue #4):
+      1. #23's toolcost_* upgrade knocks config.TOOLCOST_REDUCTION off the
+         base cost, floored at 1 ⏱.
+      2. #4's campaign inflation then adds config.tool_cost_inflation(day).
+
+    Inflation is applied AFTER the reduction and after its floor, so a
+    purchased optimizer keeps saving exactly TOOLCOST_REDUCTION ⏱ for the whole
+    campaign. Inflating first and reducing second is the same arithmetic today,
+    but it would start clamping at the floor once inflation grew comparable to
+    the reduction — quietly erasing a 45 HD$ purchase in the late game.
+
+    Filter costs are deliberately NOT inflated; see config's
+    TOOL_COST_INFLATION_PERIOD block for the reasoning.
+    """
     base = config.TOOL_COSTS[tool_name]
     if f"toolcost_{tool_name}" in getattr(state, "upgrades", ()):
         base = max(1, base - config.TOOLCOST_REDUCTION)
-    return base
+    return base + config.tool_cost_inflation(getattr(state, "current_day", 1))
 
 
 def _charge(state, tool_name: str, *, filter: bool = False) -> None:

@@ -568,6 +568,7 @@ def _roll_discrepancies(
     spec: ArchetypeSpec,
     day_number: int,
     allowed_violations: tuple[DiscrepancyKind, ...] = (),
+    difficulty_band: str = "easy",
 ) -> list[Discrepancy]:
     """Pick discrepancies for this candidate.
 
@@ -606,6 +607,18 @@ def _roll_discrepancies(
         and (not allowed_violations or k in allowed_violations)
     ]
     rng.shuffle(eligible)
+
+    # #4, detection complexity: on a tool-biased band, prefer evidence that
+    # costs ⏱ to read over evidence sitting in plain sight on the dossier.
+    # A late-game candidate's discrepancies then sit behind the tool economy,
+    # which is the whole point of the lever — a player coasting on free
+    # dossier reads starts missing things.
+    #
+    # This is a STABLE sort applied to an already-seeded shuffle, so the
+    # result stays a pure function of (seed, day, slot): within each tier the
+    # shuffled order is preserved, only the tiers are reordered.
+    if difficulty_band in config.DIFFICULTY_BANDS_TOOL_BIASED:
+        eligible.sort(key=lambda k: _SEVERITY_REVEAL[k][0] == ToolName.DOSSIER)
 
     def take(severity: str, count: int) -> None:
         nonlocal eligible
@@ -743,7 +756,8 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
 
     rng_disc = _seeded_rng(game_seed, day.number, slot_index, "discrepancies")
     discrepancies = _roll_discrepancies(rng_disc, spec, day.number,
-                                        day.allowed_violations)
+                                        day.allowed_violations,
+                                        day.difficulty_band)
 
     rng_chat = _seeded_rng(game_seed, day.number, slot_index, "chat")
     chat = _build_chat(rng_chat, spec, discrepancies)

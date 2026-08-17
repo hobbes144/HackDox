@@ -89,10 +89,48 @@ ARCHETYPE_HEALTH_WEIGHTS: dict[str, float] = {
 # menu (upgrades, HackDox Credits, ⏱ capacity). Never spent on tools.
 
 STARTING_HACKDOLLARS          = 0
-HACKDOLLAR_PER_CORRECT_ADMIT  = 10   # HD$ per correct admit
+HACKDOLLAR_PER_CORRECT_ADMIT  = 10   # HD$ per correct admit (day-1 rate)
 HACKDOLLAR_PER_CORRECT_DENY   = 4    # HD$ per correct deny (smaller cut)
 HACKDOLLAR_SITE_HEALTH_BONUS  = 25   # max EOD bonus, scaled by health %
                                      # (paid only above the reward threshold)
+
+# ── Reward decay (#4, lever 1) ───────────────────────────────────────────────
+#
+# The issue originally specified ⏱ decay — `max(8, 15 - floor(day/3))` per
+# correct verdict. That is obsolete: #27 made verdicts grant ZERO ⏱ (the pool
+# is a spend-only daily budget), so there is no ⏱ reward left to decay. The
+# lever is reframed onto HackDollar$, keeping the original's shape — step down
+# every N days, then floor — and its floor ratio (the original bottomed out at
+# 8/15 ≈ 53%; admit lands at 6/10 = 60%, deny at 2/4 = 50%).
+#
+# floor(day/5) is 0 across days 1–4, so the tutorial pays the flat rate and
+# #15's "difficulty stays flat-easy across Days 1–5" holds. Both curves reach
+# their floor around day 20–24, i.e. at the campaign's climax rather than
+# bottoming out mid-run.
+#
+# The board-accuracy bonus and the EOD Site Health bonus deliberately do NOT
+# decay: both are already scored on performance, so decaying them on top would
+# penalise a player twice for the same shift.
+HACKDOLLAR_DECAY_ADMIT_PERIOD = 5    # admit rate steps down every N days
+HACKDOLLAR_DECAY_DENY_PERIOD  = 10   # deny rate steps down every N days
+HACKDOLLAR_FLOOR_ADMIT        = 6
+HACKDOLLAR_FLOOR_DENY         = 2
+
+
+def DAY_REWARD_PAYOUT(day_number: int, admit: bool) -> int:
+    """HD$ paid for one correct verdict on the given day.
+
+    `admit` selects the admit or deny rate — correct denials have always paid
+    the smaller cut, and they decay on a slower clock because there is less
+    there to take away.
+    """
+    if admit:
+        return max(HACKDOLLAR_FLOOR_ADMIT,
+                   HACKDOLLAR_PER_CORRECT_ADMIT
+                   - day_number // HACKDOLLAR_DECAY_ADMIT_PERIOD)
+    return max(HACKDOLLAR_FLOOR_DENY,
+               HACKDOLLAR_PER_CORRECT_DENY
+               - day_number // HACKDOLLAR_DECAY_DENY_PERIOD)
 
 # ─── HackDox Credits — ground-truth reveal consumable (issues #19/#25) ───────
 #
@@ -168,6 +206,43 @@ FILTER_COSTS: dict[str, int] = {
     "hashcrack":  4,   # extended wordlist + full mutation rules
     "stegotool":  2,   # legacy — stego page now uses the stamp mechanic
 }
+
+# ─── Tool cost inflation (#4, lever 2) ───────────────────────────────────────
+#
+# Tool base costs creep up as the campaign runs, so the same shift budget buys
+# fewer scans. Applied in tools_bridge.tool_cost() AFTER #23's toolcost_*
+# upgrade reduction, so a purchased optimizer keeps saving its ⏱ at day 20
+# instead of being quietly erased by inflation.
+#
+# Two things deliberately do NOT inflate:
+#   • FILTER costs. The GDD wants players pushed *into* filters as rewards
+#     shrink (filter-avoidance is meant to correlate with lower accuracy).
+#     Inflating only the base makes the filter relatively cheaper over time,
+#     which pushes the right way; inflating both would push against the design.
+#   • The stego STAMP cost. STEGO_GRID_GROWTH_* already grows the image every
+#     day, so the number of stamps needed to reach resolve coverage rises on
+#     its own. Charging more per stamp on top of a bigger grid compounds.
+TOOL_COST_INFLATION_PERIOD = 4   # +1 ⏱ to every tool base cost every N days
+
+
+def tool_cost_inflation(day_number: int) -> int:
+    """Extra ⏱ added to every tool's base cost on the given day."""
+    return day_number // TOOL_COST_INFLATION_PERIOD
+
+
+def DAY_TOOL_COST(tool_name: str, day_number: int,
+                  upgrades: set[str] | None = None) -> int:
+    """The effective ⏱ base cost of a tool on a given day.
+
+    The read-only twin of `tools_bridge.tool_cost()`, for UI that wants to
+    preview next shift's prices without a GameState in hand (#4's end-of-day
+    display). Ordering must match tool_cost() exactly: upgrade reduction and
+    its floor first, inflation second.
+    """
+    base = TOOL_COSTS[tool_name]
+    if upgrades and f"toolcost_{tool_name}" in upgrades:
+        base = max(1, base - TOOLCOST_REDUCTION)
+    return base + tool_cost_inflation(day_number)
 
 # ─── Stegotool stamp mechanic ────────────────────────────────────────────────
 #
@@ -286,6 +361,70 @@ def difficulty_band_for_day(day_number: int) -> str:
     if day_number <= DIFFICULTY_BAND_LAST_MEDIUM:
         return "medium"
     return "hard"
+
+
+# ─── Detection complexity (#4, lever 3) ──────────────────────────────────────
+#
+# Band-weighted archetype mixes for procedurally-synthesized days. An authored
+# day_NN.json's own archetype_mix always overrides this, so writing real day
+# content never has to fight the curve.
+#
+# The shift the issue asks for is "toward Sneaky Bugger dominance late-game":
+# easy days lean on the obvious cases the tutorial taught, hard days load up
+# on the archetype that punishes not using tools. Values are relative weights,
+# not counts — content_loader.scale_archetype_mix apportions them to the day's
+# actual candidate count.
+#
+# Keyed by Archetype.value strings so config stays import-free of models, the
+# same convention ARCHETYPE_HEALTH_WEIGHTS already uses.
+ARCHETYPE_MIX_BY_BAND: dict[str, dict[str, int]] = {
+    # Day-1-like: the bread-and-butter admits, one of each threat.
+    "easy": {
+        "obvious_admit":    3,
+        "day_to_day":       1,
+        "the_professional": 1,
+        "clumsy_cutie":     1,
+        "the_incompatible": 1,
+        "bad_actor":        1,
+        "sneaky_bugger":    1,
+    },
+    # Fewer freebies, the subtle threat starts to outnumber the loud one.
+    "medium": {
+        "obvious_admit":    2,
+        "day_to_day":       2,
+        "the_professional": 1,
+        "clumsy_cutie":     1,
+        "the_incompatible": 1,
+        "bad_actor":        1,
+        "sneaky_bugger":    2,
+        "dark_web":         1,
+    },
+    # Sneaky Bugger dominant; the easy reads are scarce and the moral forks
+    # are frequent. This is the band where coasting on dossier reads fails.
+    #
+    # The Professional and The Incompatible are deliberately KEPT here even
+    # though they are the two "quick case" archetypes. The GDD wants those as
+    # pacing beats — low-friction cases that interrupt a run of heavy
+    # investigation and let the player bank ⏱. Dropping them from the hard band
+    # made a late shift twelve straight deep investigations with no breathing
+    # room, which reads as a wall rather than escalation.
+    "hard": {
+        "obvious_admit":    1,
+        "day_to_day":       2,
+        "the_professional": 1,
+        "the_incompatible": 1,
+        "clumsy_cutie":     1,
+        "bad_actor":        1,
+        "sneaky_bugger":    4,
+        "dark_web":         2,
+    },
+}
+
+# On "hard" days the generator prefers evidence that needs a tool over evidence
+# readable free off the dossier, so a late-game candidate's discrepancies sit
+# behind the ⏱ economy rather than in plain sight. See
+# candidate_gen._roll_discrepancies.
+DIFFICULTY_BANDS_TOOL_BIASED: frozenset[str] = frozenset({"hard"})
 
 # ─── Logwatch shared log — volume scaling ────────────────────────────────────
 #
