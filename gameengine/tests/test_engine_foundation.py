@@ -833,3 +833,109 @@ def test_apply_records_both_tracks_on_the_result(day1):
     assert result.rules_verdict is not None
     assert result.rules_correct is not None
     assert isinstance(result.tracks_diverge, bool)
+
+
+# ─── Ghostscan evidence integrity (playtest bug, 2026-08-17) ────────────────
+#
+# Found in play: a Sneaky Bugger carrying AFFILIATION_MISMATCH ("claimed elite
+# affiliation not found — ghostscan returned no match") had its claimed org
+# printed next to its handle on three platforms by the very tool the violation
+# is revealed by. The evidence CORROBORATED the lie. Root cause: the sweep and
+# the filter summary both keyed only off AFFILIATION_UNVERIFIED and had no
+# branch for AFFILIATION_MISMATCH at all.
+#
+# Same class as the credential-artifact exclusivity bug (2026-08-16): a planted
+# ground-truth violation the player can never observe. These tests guard the
+# whole ghostscan tier rather than the one kind, so the next unrendered kind
+# fails here instead of in a playtest.
+
+
+def _elite_faker(archetype, kind):
+    """Generate a candidate carrying `kind`, searching seeds/days for one."""
+    from dataclasses import replace
+    base = load_day(1)
+    for day_n in range(1, 8):
+        day = replace(base, number=day_n,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(40):
+            c = candidate_gen.generate(seed, day, 0)
+            if any(d.kind == kind for d in c.truth.discrepancies):
+                return c
+    raise AssertionError(f"could not generate a {archetype} carrying {kind}")
+
+
+def test_ghostscan_never_corroborates_an_unbacked_affiliation_claim():
+    """The sweep must not print an org the ground truth says isn't there."""
+    from gameengine.core import tools_bridge
+    import random as _r
+
+    c = _elite_faker(Archetype.SNEAKY_BUGGER, DiscrepancyKind.AFFILIATION_MISMATCH)
+    org = c.claimed_affiliation
+    assert org, "the faked-elite-org case needs a claimed org to fake"
+
+    for show_forums in (False, True):
+        lines = tools_bridge._ghostscan_sweep_lines(
+            c, _r.Random(1234), show_forums=show_forums)
+        # Find the rows that are the CANDIDATE's own entries (they carry the
+        # handle); none of them may attribute the claimed org to them.
+        own = [ln for ln in lines if c.handle in ln and "target" not in ln]
+        assert own, "candidate should appear on at least one platform"
+        for ln in own:
+            assert f"[{org}]" not in ln, (
+                f"sweep corroborated the faked org (show_forums={show_forums}): {ln}")
+
+
+def test_ghostscan_filter_names_every_ghostscan_violation_it_planted():
+    """Every ghostscan-revealed kind must be nameable from the filter summary.
+
+    This is the general guard. A kind that is generated, tiered to GHOSTSCAN,
+    and listed on the rules page but never rendered is an unflaggable
+    violation — the player is scored on evidence that does not exist.
+    """
+    from gameengine.core import tools_bridge
+    from gameengine.core.models import ToolName
+
+    checked = set()
+    for archetype in Archetype:
+        spec = candidate_gen.ARCHETYPE_SPECS[archetype]
+        for kind in spec.eligible_kinds:
+            if candidate_gen._SEVERITY_REVEAL[kind][0] != ToolName.GHOSTSCAN:
+                continue
+            if kind in checked:
+                continue
+            try:
+                c = _elite_faker(archetype, kind)
+            except AssertionError:
+                continue          # this archetype can't roll it; another will
+            checked.add(kind)
+            summary = "\n".join(tools_bridge._ghostscan_filter_summary_lines(c))
+            assert kind.name in summary, (
+                f"{kind.name} is planted on {archetype.value} and revealed by "
+                f"ghostscan, but the filter summary never names it:\n{summary}")
+    # Guard the guard: if generation changes so nothing is exercised, fail.
+    assert DiscrepancyKind.AFFILIATION_MISMATCH in checked
+
+
+def test_the_professional_still_gets_its_affiliation_confirmed():
+    """The other side of the fix. The Professional draws from the same elite
+    pool and is SUPPOSED to have ghostscan corroborate the claim — that is the
+    whole 'quick admit' read. Suppressing the org for everyone would have
+    broken it."""
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+    import random as _r
+
+    base = load_day(1)
+    day = replace(base, number=1,
+                  forced_includes={0: Archetype.THE_PROFESSIONAL},
+                  archetype_mix={**base.archetype_mix,
+                                 Archetype.THE_PROFESSIONAL: 1})
+    c = candidate_gen.generate(SEED, day, 0)
+    assert c.archetype == Archetype.THE_PROFESSIONAL
+    assert not c.truth.discrepancies, "The Professional should be clean"
+
+    lines = tools_bridge._ghostscan_sweep_lines(c, _r.Random(1234))
+    own = [ln for ln in lines if c.handle in ln and "target" not in ln]
+    assert any(f"[{c.claimed_affiliation}]" in ln for ln in own), (
+        "The Professional's elite org must still be confirmed by the sweep")
