@@ -939,3 +939,222 @@ def test_the_professional_still_gets_its_affiliation_confirmed():
     own = [ln for ln in lines if c.handle in ln and "target" not in ln]
     assert any(f"[{c.claimed_affiliation}]" in ln for ln in own), (
         "The Professional's elite org must still be confirmed by the sweep")
+
+
+# ─── Evidence integrity across every tool tier ──────────────────────────────
+#
+# Generalised from the AFFILIATION_MISMATCH playtest bug (2026-08-17), which
+# was the third instance of one recurring class: a DiscrepancyKind that is
+# generated and SCORED but has no rendering path in tools_bridge, so the player
+# is graded on evidence that does not exist. The affiliation case was the worst
+# variant — the sweep printed the claimed org, so the tool actively argued
+# AGAINST its own ground truth.
+#
+# EVIDENCE_TOKENS is the contract: for each tool-revealed kind, a snippet that
+# must appear in that tool's filtered output when the kind is planted, and must
+# NOT appear when it isn't. Both directions matter and they catch different
+# bugs:
+#   • present-when-planted  → catches "generated but never rendered"
+#   • absent-when-not       → catches "rendered for everyone", which is how a
+#                             tool ends up corroborating a claim it should
+#                             refute
+#
+# Tokens are matched against the tool's own vocabulary rather than assuming the
+# enum name: Logwatch annotates the IP mismatch in prose, because it is meant to
+# read as an observation about the log rather than a violation code.
+#
+# Dossier-tier kinds are excluded — they have no tool run to assert against;
+# their evidence is structural (the chat panel, the email field, the strength
+# chip) and is covered by the dossier's own rendering.
+
+EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
+    # ── Ghostscan ────────────────────────────────────────────────────────
+    DiscrepancyKind.EMAIL_GITHUB_MISMATCH: "EMAIL_GITHUB_MISMATCH",
+    DiscrepancyKind.BREACH_HIT:            "BREACH_HIT",
+    DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:  "SOCK_PUPPET_ACCOUNTS",
+    DiscrepancyKind.AFFILIATION_MISMATCH:  "AFFILIATION_MISMATCH",
+    DiscrepancyKind.BURNER_IDENTITY:       "BURNER_IDENTITY",
+    DiscrepancyKind.THREAT_FORUM_MATCH:    "THREAT_FORUM_MATCH",
+    DiscrepancyKind.TYPOSQUAT_HANDLE:      "TYPOSQUAT_HANDLE",
+    # ── Hashcrack ────────────────────────────────────────────────────────
+    DiscrepancyKind.LEAKED_PASSWORD:       "LEAKED_PASSWORD",
+    DiscrepancyKind.WEAK_CREDENTIAL:       "WEAK_CREDENTIAL",
+    DiscrepancyKind.CROSS_BREACH_REUSE:    "CROSS_BREACH_REUSE",
+    # ── Logwatch ─────────────────────────────────────────────────────────
+    DiscrepancyKind.BRUTE_FORCE_IN_LOG:    "BRUTE_FORCE_IN_LOG",
+    DiscrepancyKind.IMPOSSIBLE_TRAVEL:     "IMPOSSIBLE_TRAVEL",
+    DiscrepancyKind.INSIDER_BEHAVIOR:      "INSIDER_BEHAVIOR",
+    DiscrepancyKind.CREDENTIAL_STUFFING:   "CREDENTIAL_STUFFING",
+    DiscrepancyKind.AFTER_HOURS_ACCESS:    "AFTER_HOURS_ACCESS",
+    DiscrepancyKind.LOW_AND_SLOW:          "LOW_AND_SLOW",
+    # Prose annotation, not a named label — Logwatch's IP mismatch is meant to
+    # read as an observation about the log, not a violation code.
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:   "login IP differs from dossier claim",
+    # ── Stegotool ────────────────────────────────────────────────────────
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT: "STEGO_PAYLOAD_PRESENT",
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:     "ENCRYPTED_PAYLOAD",
+    DiscrepancyKind.COVERT_C2_CHANNEL:     "COVERT_C2_CHANNEL",
+}
+
+
+def _tool_tier_kinds() -> dict[DiscrepancyKind, "object"]:
+    """Every DiscrepancyKind whose evidence lives behind a tool run."""
+    from gameengine.core.models import ToolName
+    return {
+        kind: candidate_gen._SEVERITY_REVEAL[kind][0]
+        for kind in DiscrepancyKind
+        if candidate_gen._SEVERITY_REVEAL[kind][0] != ToolName.DOSSIER
+    }
+
+
+def test_every_tool_revealed_kind_declares_an_evidence_token():
+    """Adding a tool-tier kind must force a decision about how it renders.
+
+    This is the loop-closer. The recurring bug is that a kind gets generation
+    and scoring but no rendering; failing here means someone added a kind
+    without saying what the player is supposed to see.
+    """
+    missing = sorted(k.name for k in _tool_tier_kinds() if k not in EVIDENCE_TOKENS)
+    assert not missing, (
+        f"tool-revealed kinds with no declared evidence token: {missing}. "
+        f"Add the token here AND the rendering in tools_bridge — a kind that "
+        f"is generated and scored but never rendered is unflaggable."
+    )
+    stale = sorted(k.name for k in EVIDENCE_TOKENS if k not in _tool_tier_kinds())
+    assert not stale, f"tokens declared for non-tool-tier kinds: {stale}"
+
+
+def _filtered_output(candidate, kind, day, seed) -> str:
+    """The filtered output of whichever tool reveals `kind`, as one string.
+
+    `seed` must be the seed the candidate was generated from: the Logwatch and
+    Hashcrack shared day logs are built per (seed, day) and contain a block of
+    entries for each candidate in that day's roster. Passing a different seed
+    silently produces a log the candidate does not appear in — which reads
+    exactly like a rendering bug and isn't one.
+    """
+    from gameengine.core import tools_bridge
+    from gameengine.core.models import ToolName
+
+    tool = candidate_gen._SEVERITY_REVEAL[kind][0]
+    state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
+    if tool == ToolName.GHOSTSCAN:
+        return "\n".join(tools_bridge.run_ghostscan_filtered_shared(
+            candidate, state).raw_lines)
+    if tool == ToolName.HASHCRACK:
+        entries = tools_bridge.generate_hashcrack_day_log(seed, day)
+        return "\n".join(tools_bridge.run_hashcrack_filtered_shared(
+            entries, candidate, state).raw_lines)
+    if tool == ToolName.LOGWATCH:
+        entries = tools_bridge.generate_day_log(seed, day)
+        return "\n".join(tools_bridge.run_logwatch_filtered_shared(
+            entries, candidate, state).raw_lines)
+    if tool == ToolName.STEGOTOOL:
+        img = tools_bridge.build_stego_image(candidate, day.number)
+        return "\n".join(tools_bridge.stamp_signature_lines(img, reveal_type=True))
+    raise AssertionError(f"no output path for {tool}")
+
+
+def _candidates_by_kind(kind, want: bool, limit: int = 3):
+    """Up to `limit` (candidate, day, seed) triples that do / don't carry `kind`."""
+    from dataclasses import replace
+    base = load_day(1)
+    found = []
+    for archetype, spec in candidate_gen.ARCHETYPE_SPECS.items():
+        if want and kind not in spec.eligible_kinds:
+            continue
+        for day_n in range(1, 8):
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in range(30):
+                c = candidate_gen.generate(seed, day, 0)
+                if any(d.kind == kind for d in c.truth.discrepancies) == want:
+                    found.append((c, day, seed))
+                    if len(found) >= limit:
+                        return found
+    return found
+
+
+@pytest.mark.parametrize("kind", sorted(EVIDENCE_TOKENS, key=lambda k: k.name))
+def test_planted_kind_is_visible_in_its_tools_filtered_output(kind):
+    """Present-when-planted: the evidence the player is scored on must exist."""
+    token = EVIDENCE_TOKENS[kind]
+    pairs = _candidates_by_kind(kind, want=True, limit=1)
+    if not pairs:
+        pytest.skip(f"no archetype currently rolls {kind.name}")
+    candidate, day, seed = pairs[0]
+    out = _filtered_output(candidate, kind, day, seed)
+    assert token in out, (
+        f"{kind.name} is planted on {candidate.archetype.value} and revealed by "
+        f"{candidate_gen._SEVERITY_REVEAL[kind][0].value}, but its filtered "
+        f"output never shows {token!r}. The player cannot flag what the tool "
+        f"does not render."
+    )
+
+
+@pytest.mark.parametrize("kind", sorted(EVIDENCE_TOKENS, key=lambda k: k.name))
+def test_absent_kind_is_not_claimed_by_its_tools_filtered_output(kind):
+    """Absent-when-not-planted: a tool must not report evidence it wasn't given.
+
+    The other half, and the one the AFFILIATION_MISMATCH bug tripped from the
+    far side — a tool that renders the same thing regardless of ground truth
+    is just as broken as one that renders nothing, it simply lies in the
+    opposite direction.
+    """
+    token = EVIDENCE_TOKENS[kind]
+    for candidate, day, seed in _candidates_by_kind(kind, want=False, limit=3):
+        out = _filtered_output(candidate, kind, day, seed)
+        assert token not in out, (
+            f"{candidate.archetype.value} does NOT carry {kind.name}, but its "
+            f"{candidate_gen._SEVERITY_REVEAL[kind][0].value} output shows "
+            f"{token!r} anyway — the tool is reporting evidence for a "
+            f"violation that isn't there."
+        )
+
+
+def test_single_artifact_groups_are_mutually_exclusive():
+    """A candidate submits one password and one image, so it can carry at most
+    one violation about each.
+
+    Two kinds from the same group means the loser is planted in ground truth —
+    counting for scoring — with no artifact the player can inspect to find it.
+    This was 16% of stego-carrying candidates before _STEGO_ARTIFACT_KINDS, and
+    had already happened once with credentials (2026-08-16).
+    """
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+
+    # Named explicitly rather than read from _EXCLUSIVE_ARTIFACT_GROUPS. A guard
+    # parameterised on the constant it is guarding cannot fail when that
+    # constant is what regressed — this test originally did exactly that and
+    # passed against a build with stego exclusivity removed.
+    groups = {
+        "credential": candidate_gen._CREDENTIAL_ARTIFACT_KINDS,
+        "stego":      candidate_gen._STEGO_ARTIFACT_KINDS,
+    }
+    base = load_day(1)
+    seen_stego = 0
+    for day_n in (1, 5, 7):
+        for archetype in candidate_gen.ARCHETYPE_SPECS:
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in range(60):
+                c = candidate_gen.generate(seed, day, 0)
+                kinds = {d.kind for d in c.truth.discrepancies}
+                for label, group in groups.items():
+                    assert len(kinds & group) <= 1, (
+                        f"{archetype.value} seed {seed} day {day_n} carries "
+                        f"{sorted(k.name for k in kinds & group)} from the "
+                        f"{label} group — the candidate submits one artifact, "
+                        f"so only one of these can ever be observable")
+                # The image must render THE planted stego kind — exactly one.
+                stego = kinds & groups["stego"]
+                if stego:
+                    seen_stego += 1
+                    img = tools_bridge.build_stego_image(c, day_n)
+                    assert {img.kind} == stego, (
+                        f"planted {sorted(k.name for k in stego)} but the "
+                        f"submitted image carries {img.kind}")
+    assert seen_stego, "sweep never produced a stego candidate — guard is inert"

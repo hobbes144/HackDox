@@ -404,6 +404,31 @@ _CREDENTIAL_ARTIFACT_KINDS: frozenset[DiscrepancyKind] = frozenset({
     DiscrepancyKind.WEAK_ENCRYPTION,
 })
 
+# Every candidate submits exactly ONE image (Dossier.submitted_image_path), and
+# tools_bridge.build_stego_image renders exactly one payload kind for it. Two
+# stego kinds on one candidate therefore means one of them has no carrier the
+# player can ever find — a ground-truth violation that counts for scoring and
+# is impossible to flag. Measured at 73 of 450 stego-carrying candidates (16%)
+# before this was added; the Sneaky Bugger's major+critical budget could fill
+# both slots from this group.
+#
+# Same failure mode, and the same fix, as _CREDENTIAL_ARTIFACT_KINDS above:
+# one submitted artifact means at most one violation about that artifact.
+_STEGO_ARTIFACT_KINDS: frozenset[DiscrepancyKind] = frozenset({
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
+    DiscrepancyKind.ENCRYPTED_PAYLOAD,
+    DiscrepancyKind.COVERT_C2_CHANNEL,
+})
+
+# Groups where the candidate submits ONE artifact, so at most one violation
+# about that artifact can be observable. Picking any member removes the whole
+# group from contention for the candidate's remaining severity slots.
+# Add a group here whenever a new violation family shares a single artifact.
+_EXCLUSIVE_ARTIFACT_GROUPS: tuple[frozenset[DiscrepancyKind], ...] = (
+    _CREDENTIAL_ARTIFACT_KINDS,
+    _STEGO_ARTIFACT_KINDS,
+)
+
 
 # ─── Evidence-tier gate (#31) ────────────────────────────────────────────────
 #
@@ -589,15 +614,14 @@ def _roll_discrepancies(
     (the day's archetype mix should suit the tools taught so far, handled by
     #32/#15), not a bug here.
 
-    Credential-artifact exclusivity: every candidate submits exactly ONE
-    password (issue #29), so at most one of LEAKED_PASSWORD /
-    CROSS_BREACH_REUSE / WEAK_CREDENTIAL / UNSALTED_STORAGE / WEAK_ENCRYPTION
-    may be chosen per candidate — picking two would mean the generator's
-    if/elif hash-selection in `generate()` silently builds an artifact for
-    only the higher-priority one, leaving the other planted in ground truth
-    with no matching hash for the player to ever actually find. Choosing one
-    credential-artifact kind removes the rest from contention for the same
-    candidate's remaining severity slots.
+    Single-artifact exclusivity (`_EXCLUSIVE_ARTIFACT_GROUPS`): some violation
+    families all describe the SAME submitted artifact, and the candidate only
+    submits one of each. Every candidate submits exactly one password (issue
+    #29) and exactly one image, so at most one credential kind and at most one
+    stego kind may be chosen. Picking two from a group would leave the loser
+    planted in ground truth — counting for scoring — with no artifact the
+    player could ever inspect to find it. Choosing any member removes its whole
+    group from contention for this candidate's remaining severity slots.
     """
     chosen: list[Discrepancy] = []
     used: set[DiscrepancyKind] = set()
@@ -636,8 +660,9 @@ def _roll_discrepancies(
                         description=_DISCREPANCY_DESCRIPTIONS[kind],
                     ))
                     used.add(kind)
-                    if kind in _CREDENTIAL_ARTIFACT_KINDS:
-                        used.update(_CREDENTIAL_ARTIFACT_KINDS)
+                    for group in _EXCLUSIVE_ARTIFACT_GROUPS:
+                        if kind in group:
+                            used.update(group)
                     break
 
     take("critical", spec.budget.critical)
