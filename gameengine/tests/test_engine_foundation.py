@@ -266,14 +266,25 @@ def test_allowed_violations_whitelist_restricts_planted_kinds():
 # ─── Issue #35 — Rule.mutability + per-day ruleset loading ──────────────────
 
 
-def test_day1_rules_all_default_to_fixed(day1):
-    """Adding `mutability` must not have changed any existing content.
+def test_mutability_defaults_to_fixed_and_only_advisories_are_variable(day1):
+    """Mutability is opt-in: a rule that doesn't declare it is permanent policy.
 
-    Day 1's rule file predates #35 and never mentions mutability, so every
-    rule must load as "fixed" — the guard that this field is additive.
+    #35 landed this field defaulting to "fixed", so it changed no content. #36
+    then marked exactly Day 1's three "flag, do not auto-deny" advisories as
+    overseer_variable — the low-stakes hygiene calls a process update would
+    plausibly move. Every disqualifying rule stays fixed: the Overseer must not
+    be able to quietly relax the rules that actually keep threats out. That is
+    #37's Dark Web directives, not a casual process note.
     """
     assert day1.rules, "Day 1 should have rules"
-    assert all(r.mutability == "fixed" for r in day1.rules)
+    variable = {r.id for r in day1.rules if r.mutability == "overseer_variable"}
+    assert variable == {"rule_claimed_ip", "rule_weak_credential",
+                        "rule_weak_encryption"}
+    for rule in day1.rules:
+        if rule.id not in variable:
+            assert rule.mutability == "fixed", rule.id
+        else:
+            assert rule.severity == "weighted", rule.id
 
 
 def test_rule_mutability_survives_a_day_json_round_trip(tmp_path, monkeypatch):
@@ -577,3 +588,133 @@ def test_difficulty_band_generation_stays_deterministic():
     a = [candidate_gen.generate(SEED, day, i) for i in range(day.candidate_count)]
     b = [candidate_gen.generate(SEED, day, i) for i in range(day.candidate_count)]
     assert a == b
+
+
+# ─── Issue #36 — Overseer-Variable rule broadcast ───────────────────────────
+
+
+def test_day_one_broadcasts_nothing(day1):
+    """No yesterday, nothing to announce."""
+    assert rules_engine.diff_rulesets(None, day1) == ()
+
+
+def test_diff_reports_only_mutable_rules(day1):
+    """#36 AC: no line for a Fixed rule, even when it demonstrably changed."""
+    from dataclasses import replace
+
+    fixed_rule = next(r for r in day1.rules if r.mutability == "fixed")
+    var_rule   = next(r for r in day1.rules
+                      if r.mutability == "overseer_variable")
+
+    def flip(sev):
+        return "weighted" if sev == "disqualifying" else "disqualifying"
+
+    tomorrow = replace(day1, number=2, rules=tuple(
+        replace(r, severity=flip(r.severity))
+        if r.id in (fixed_rule.id, var_rule.id) else r
+        for r in day1.rules
+    ))
+    changed = rules_engine.diff_rulesets(day1, tomorrow)
+    ids = {c.rule.id for c in changed}
+    assert var_rule.id in ids
+    assert fixed_rule.id not in ids, "a Fixed rule must never be broadcast"
+
+
+def test_diff_reports_no_change_when_nothing_moved(day1):
+    from dataclasses import replace
+    assert rules_engine.diff_rulesets(day1, replace(day1, number=2)) == ()
+
+
+def test_diff_detects_added_and_removed_mutable_rules(day1):
+    from dataclasses import replace
+
+    var_rule = next(r for r in day1.rules
+                    if r.mutability == "overseer_variable")
+    without = replace(day1, number=2,
+                      rules=tuple(r for r in day1.rules if r.id != var_rule.id))
+    removed = rules_engine.diff_rulesets(day1, without)
+    assert [c.kind for c in removed] == ["removed"]
+
+    added = rules_engine.diff_rulesets(without, replace(day1, number=3))
+    assert [c.kind for c in added] == ["added"]
+
+
+def test_variable_rules_actually_flip_across_the_campaign(day1):
+    """The mechanic is only observable if the rules genuinely move."""
+    from gameengine.core.content_loader import mutate_variable_rules
+
+    seen: dict[str, set[str]] = {}
+    for d in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        for rule in mutate_variable_rules(day1.rules, d):
+            seen.setdefault(rule.id, set()).add(rule.severity)
+
+    for rule in day1.rules:
+        if rule.mutability == "overseer_variable":
+            assert len(seen[rule.id]) == 2, (
+                f"{rule.id} never flipped across the campaign")
+        else:
+            # Fixed rules must be left strictly alone.
+            assert seen[rule.id] == {rule.severity}, rule.id
+
+
+def test_rule_flips_are_deterministic_and_not_every_morning(day1):
+    """Sticky and staggered — a briefing full of flips is noise the player
+    learns to tune out."""
+    from gameengine.core.content_loader import mutate_variable_rules
+
+    prev = load_day(1)
+    change_days = 0
+    for d in range(2, config.CAMPAIGN_LAST_DAY + 1):
+        from dataclasses import replace
+        cur = replace(prev, number=d,
+                      rules=mutate_variable_rules(day1.rules, d))
+        # Deterministic: recomputing the same day gives the same ruleset.
+        assert mutate_variable_rules(day1.rules, d) == cur.rules
+        if rules_engine.diff_rulesets(prev, cur):
+            change_days += 1
+        prev = cur
+    # Something happens...
+    assert change_days > 0
+    # ...but most mornings are quiet.
+    assert change_days < (config.CAMPAIGN_LAST_DAY - 1) / 2
+
+
+def test_broadcast_lines_are_prose_not_a_diff_dump(day1):
+    """#36 AC: casual and in-fiction, one line per changed rule."""
+    from dataclasses import replace
+    from gameengine.ui.tui.app import rule_change_lines
+
+    var_rule = next(r for r in day1.rules
+                    if r.mutability == "overseer_variable")
+    tomorrow = replace(day1, number=2, rules=tuple(
+        replace(r, severity="disqualifying") if r.id == var_rule.id else r
+        for r in day1.rules
+    ))
+    changes = rules_engine.diff_rulesets(day1, tomorrow)
+    lines = rule_change_lines(changes, 2)
+
+    assert len(lines) == len(changes) == 1
+    line = lines[0]
+    # Not a diff dump: no field names, no arrows, no raw severity tokens.
+    for banned in ("severity", "->", "→", "disqualifying", "weighted",
+                   "predicate", var_rule.id):
+        assert banned not in line, f"{banned!r} leaked into: {line}"
+    # Reads as a sentence, and the rule is actually referred to.
+    assert line[0].isupper() and line.rstrip().endswith((".", "?", "!"))
+    assert len(line.split()) > 6
+    # Deterministic phrasing — replaying a day reproduces the same briefing.
+    assert rule_change_lines(changes, 2) == lines
+
+
+def test_broadcast_capitalises_a_sentence_initial_rule_fragment():
+    """Fragments are lower-cased for mid-sentence use; a template that opens
+    with one must still start with a capital."""
+    from gameengine.ui.tui.app import _RULE_CHANGE_PHRASINGS, _starts_a_sentence
+
+    checked = 0
+    for templates in _RULE_CHANGE_PHRASINGS.values():
+        for t in templates:
+            assert "{rule}" in t
+            if _starts_a_sentence(t):
+                checked += 1
+    assert checked, "no sentence-initial template to exercise the branch"

@@ -1,6 +1,6 @@
 {
   "number": 1,
-  "title": "Day 1 \u2014 Onboarding",
+  "title": "Day 1 — Onboarding",
   "candidate_count": 6,
   "archetype_mix": {
     "obvious_admit": 2,
@@ -78,21 +78,24 @@
     },
     {
       "id": "rule_claimed_ip",
-      "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs \u2014 corroborate before denying.",
+      "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs — corroborate before denying.",
       "predicate": "has_discrepancy:claimed_ip_mismatch",
-      "severity": "weighted"
+      "severity": "weighted",
+      "mutability": "overseer_variable"
     },
     {
       "id": "rule_weak_credential",
-      "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password \u2014 poor hygiene, not proof of malice.",
+      "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password — poor hygiene, not proof of malice.",
       "predicate": "has_discrepancy:weak_credential",
-      "severity": "weighted"
+      "severity": "weighted",
+      "mutability": "overseer_variable"
     },
     {
       "id": "rule_weak_encryption",
-      "text": "Flag (do not auto-deny) a password stored with weak encryption (MD5) \u2014 a hygiene issue, not proof the password itself is weak.",
+      "text": "Flag (do not auto-deny) a password stored with weak encryption (MD5) — a hygiene issue, not proof the password itself is weak.",
       "predicate": "has_discrepancy:weak_encryption",
-      "severity": "weighted"
+      "severity": "weighted",
+      "mutability": "overseer_variable"
     }
   ],
   "quotas": {

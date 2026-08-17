@@ -8,9 +8,11 @@ dataclass.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from .. import config
+from .candidate_gen import stable_hash
 from .models import (
     Archetype,
     Day,
@@ -103,6 +105,44 @@ def scale_archetype_mix(
     return out
 
 
+def mutate_variable_rules(
+    rules: tuple[Rule, ...],
+    day_number: int,
+) -> tuple[Rule, ...]:
+    """Apply the day's Overseer-Variable rule flips (#36).
+
+    Rules marked `overseer_variable` (#35) swing between "disqualifying" and
+    "weighted" across the campaign — the flips the Overseer announces in the
+    morning briefing. `fixed` and `dark_web` rules pass through untouched.
+
+    Two properties this has to have, both load-bearing:
+
+      • Sticky. A rule that re-rolled every single morning would produce a
+        briefing full of noise and teach the player to ignore it. Each rule
+        holds its state for RULE_FLIP_PERIOD days.
+      • Staggered. Each rule's phase is derived from its own id, so rules do
+        not all flip on the same morning — the design wants the occasional
+        small aside, not a weekly policy dump.
+
+    Seeded on the day number rather than the game seed: a rulebook is content,
+    not a per-playthrough roll, so two players on the same day should be
+    reading the same rules. Uses candidate_gen.stable_hash rather than the
+    builtin hash(), which is salted per process — that exact mistake caused
+    the 2026-07-18 determinism bug.
+    """
+    out: list[Rule] = []
+    for rule in rules:
+        if rule.mutability != "overseer_variable":
+            out.append(rule)
+            continue
+        phase = stable_hash(rule.id, "phase") % config.RULE_FLIP_PERIOD
+        epoch = (day_number + phase) // config.RULE_FLIP_PERIOD
+        strict = stable_hash(rule.id, epoch) % 2 == 0
+        out.append(replace(
+            rule, severity="disqualifying" if strict else "weighted"))
+    return tuple(out)
+
+
 def synthesize_day(day_number: int) -> Day:
     """Build a Day procedurally when no day_NN.json exists (#17).
 
@@ -133,7 +173,9 @@ def synthesize_day(day_number: int) -> Day:
     return Day(
         number=day_number,
         title=f"Day {day_number}",
-        rules=template.rules,
+        # #36: the day's Overseer-Variable rules take their flip for this day,
+        # which is what gives the briefing something to announce.
+        rules=mutate_variable_rules(template.rules, day_number),
         candidate_count=count,
         archetype_mix=scale_archetype_mix(base_mix, count),
         quotas=Quotas(

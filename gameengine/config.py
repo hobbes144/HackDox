@@ -355,6 +355,15 @@ DIFFICULTY_BAND_LAST_EASY   = TUTORIAL_LAST_DAY   # days 1-5
 DIFFICULTY_BAND_LAST_MEDIUM = 12                  # days 6-12; 13+ is hard
 
 
+# ─── Overseer-Variable rule flips (#35 / #36) ────────────────────────────────
+#
+# How many days an `overseer_variable` rule holds its current severity before
+# it may swing again. Bigger = calmer rulebook and rarer briefing asides.
+# Each rule's phase is staggered off its own id, so raising this does not make
+# every rule flip on the same morning — see content_loader.mutate_variable_rules.
+RULE_FLIP_PERIOD = 3
+
+
 def difficulty_band_for_day(day_number: int) -> str:
     if day_number <= DIFFICULTY_BAND_LAST_EASY:
         return "easy"

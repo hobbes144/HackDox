@@ -34,7 +34,8 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import ContentSwitcher, Footer, Static, TabbedContent, TabPane
 
 from gameengine import config
-from gameengine.core import candidate_gen, persistence, scoring, tools_bridge
+from gameengine.core import (candidate_gen, persistence, rules_engine, scoring,
+                             tools_bridge)
 
 # Shortcut so BINDINGS class attributes can be built from config at import time.
 _B = config.KEY_BINDINGS
@@ -1775,13 +1776,110 @@ _UNLOCK_LINES: dict[str, str] = {
 }
 
 
+# ─── Overseer-Variable rule broadcast (#36) ─────────────────────────────────
+#
+# The Overseer mentions rule changes in passing. The design is explicit that a
+# small change should read as a minor process update, not a klaxon — so these
+# are deliberately understated, hedged, and a little bored. Several openers per
+# change kind so a two-change morning doesn't read as a filled-in template.
+#
+# {rule} is the rule's own text, lower-cased at the first character and
+# stripped of its trailing period so it sits inside a sentence.
+_RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
+    # A rule got teeth: advisory → disqualifying.
+    "tightened": (
+        "Oh — one thing before you start. That guidance about {rule}? Policy "
+        "now. Not a suggestion. Don't make me explain it twice.",
+        "Small note. {rule} — that's a hard deny from today. Compliance "
+        "wanted it in writing, so now it's in writing.",
+        "Quick amendment: {rule}. It used to be your judgement. It isn't "
+        "anymore.",
+    ),
+    # A rule lost its teeth: disqualifying → advisory.
+    "relaxed": (
+        "Before I forget — {rule}. That's a note now, not a bar. Flag it, "
+        "wave them through. Don't overthink it.",
+        "Legal's been busy. {rule} is advisory from this morning. Use your "
+        "judgement, which I'm told you have.",
+        "Minor thing. {rule} — we're not denying on that on its own anymore. "
+        "Log it and move on.",
+    ),
+    "added": (
+        "New line in the book today: {rule}. Read it properly at some point.",
+        "They've added one. {rule}. I didn't write it, I just pass it along.",
+    ),
+    "removed": (
+        "That clause about {rule} is gone as of this morning. Don't ask me "
+        "why; I stopped asking.",
+        "We've dropped the line about {rule}. Nobody's said why.",
+    ),
+}
+
+
+def _rule_fragment(text: str) -> str:
+    """Fold a rulebook line into something that can sit mid-sentence."""
+    frag = text.strip().rstrip(".")
+    # Rule text is authored as an instruction ("Deny any candidate whose…").
+    # Strip the leading imperative so the Overseer isn't quoting a form at the
+    # player — she's supposed to sound like she's mentioning it, not reading it.
+    for lead in ("Deny any candidate whose ", "Deny any candidate who ",
+                 "Flag (do not auto-deny) a ", "Flag (do not auto-deny) "):
+        if frag.startswith(lead):
+            frag = frag[len(lead):]
+            break
+    else:
+        frag = frag[:1].lower() + frag[1:]
+    # Rule text often carries its own em-dash aside; it reads badly nested
+    # inside the Overseer's own sentence, so keep only the head clause.
+    return frag.split(" — ")[0].strip()
+
+
+def _starts_a_sentence(template: str) -> bool:
+    """True when {rule} lands at the start of a sentence in this template.
+
+    Rule fragments are lower-cased so they read naturally mid-sentence ("about
+    claimed connection IP…"), which looks wrong when a template opens a
+    sentence with one ("Legal's been busy. claimed connection IP is…"). Cheaper
+    and safer than capitalising the finished line, which would also mangle
+    abbreviations sitting inside the rule text.
+    """
+    head = template.split("{rule}", 1)[0].rstrip()
+    return not head or head[-1] in ".!?"
+
+
+def rule_change_lines(changes, day_number: int) -> list[str]:
+    """One casual Overseer line per changed Overseer-Variable rule (#36).
+
+    Deterministic in the day number and the rule id, so replaying a day
+    reproduces the same briefing rather than re-rolling the Overseer's phrasing.
+    """
+    lines: list[str] = []
+    for change in changes:
+        if change.kind == "severity":
+            bucket = ("tightened" if change.rule.severity == "disqualifying"
+                      else "relaxed")
+        else:
+            bucket = change.kind
+        options = _RULE_CHANGE_PHRASINGS.get(bucket)
+        if not options:
+            continue
+        pick = candidate_gen.stable_hash(change.rule.id, day_number, bucket)
+        template = options[pick % len(options)]
+        fragment = _rule_fragment(change.rule.text)
+        if _starts_a_sentence(template):
+            fragment = fragment[:1].upper() + fragment[1:]
+        lines.append(template.format(rule=fragment))
+    return lines
+
+
 class BriefingScreen(Screen):
     BINDINGS = [
         Binding("space", "begin_day", "Begin shift"),
         Binding("q", "quit_app", "Quit"),
     ]
 
-    def __init__(self, day: Day, narrative: str, state: GameState) -> None:
+    def __init__(self, day: Day, narrative: str, state: GameState,
+                 prev_day: Day | None = None) -> None:
         super().__init__()
         self._day       = day
         self._narrative = narrative
@@ -1789,6 +1887,9 @@ class BriefingScreen(Screen):
         self._overseer_log: TypewriterLog | None = None
         # The tool (if any) this day introduces — its unlock line + trigger.
         self._unlock_tool = config.tool_introduced_on(day.number)
+        # #36: yesterday's ruleset, so the briefing can announce what moved.
+        # None on day 1 — there is no yesterday, so nothing is broadcast.
+        self._rule_changes = rules_engine.diff_rulesets(prev_day, day)
 
     def compose(self) -> ComposeResult:
         yield Static(f"[b][#7dd3c0]{self._day.title}[/][/]", classes="screen-title")
@@ -1808,6 +1909,12 @@ class BriefingScreen(Screen):
         # Overseer's unlock line, carrying the tool as its `triggers` payload so
         # the flip lands exactly when that line finishes.
         _play_overseer(self._overseer_log, self._narrative)
+        # #36: rule changes land AFTER the intro and BEFORE any unlock line, so
+        # a day that both flips a rule and grants a tool reads in the order the
+        # player will need it: today's mood, today's rules, then the new toy.
+        # Amber, not red — this is a process note, not an alarm.
+        for line in rule_change_lines(self._rule_changes, self._day.number):
+            self._overseer_log.post("", line, color="#ffd93d")
         if self._unlock_tool:
             line = _UNLOCK_LINES.get(self._unlock_tool,
                                      f"New capability authorized: {self._unlock_tool.upper()}.")
@@ -3097,6 +3204,9 @@ class HackDoxApp(App):
         if scoring.health_below_loss(st):   # loss trips at end of day (#20)
             self.game_over()
             return
+        # #36: hold on to yesterday's ruleset before loading today's, so the
+        # briefing can diff the two and announce what the Overseer moved.
+        prev_day = self._day
         st.current_day += 1
         st.current_slot_index = 0
         st.pending_results = []
@@ -3114,7 +3224,8 @@ class HackDoxApp(App):
         self._day_start_health = st.site_health
         narrative = self._narratives.get(self._day.overseer_intro_key, "")
         self.pop_screen()
-        self.push_screen(BriefingScreen(self._day, narrative, self._state))
+        self.push_screen(BriefingScreen(self._day, narrative, self._state,
+                                        prev_day=prev_day))
 
     def _evaluate_performance(self) -> Performance:
         assert self._state is not None and self._day is not None
