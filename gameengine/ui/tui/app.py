@@ -2317,9 +2317,13 @@ class IntakeScreen(Screen):
             return
         self._verdict_locked = True
         compute_before = self._state.compute_hours
+        # #38: hand scoring the day's rule evaluation so the LITERAL-RULESET
+        # track is recorded alongside the moral one. Payouts are unaffected -
+        # the economy still keys off ground truth; this is a parallel value.
         result = scoring.apply(
             self._candidate, verdict, self._state,
             player_flags=self.board.get_flags(),
+            evaluation=rules_engine.evaluate(self._candidate, self._day),
         )
         compute_after = self._state.compute_hours
         self.overseer.record_result(result, compute_before, compute_after)
@@ -2336,6 +2340,12 @@ class IntakeScreen(Screen):
         if result.alignment_delta:
             arrow = "→ White Hat" if result.alignment_delta > 0 else "→ Dark Web"
             parts.append(f"Align {arrow}")
+        # #38: the moment being right by the book and right by conscience come
+        # apart is the corruption arc's whole point - say so out loud.
+        if result.tracks_diverge:
+            parts.append("[#c084fc]by the book, not by conscience[/]"
+                         if result.rules_correct else
+                         "[#c084fc]against the book[/]")
 
         self.command_bar.set_response("  ·  ".join(parts), error=not result.correct)
         self.status.refresh_status(self._state, self._state.current_slot_index,
@@ -2934,6 +2944,9 @@ class BetweenDayScreen(Screen):
         spent       = max(0, budget - st.compute_hours)
         next_budget = config.daily_compute_budget(self._day.number + 1,
                                                   st.compute_capacity)
+        # #38: how often the literal ruleset and the moral ground truth pulled
+        # in different directions this shift.
+        diverged = sum(1 for r in results if r.tracks_diverge)
         board   = sum(r.board_bonus for r in results)
         board_max = max(1, total * config.BOARD_ACCURACY_MAX_BONUS)
         board_pct = round(100 * board / board_max)
@@ -2955,7 +2968,9 @@ class BetweenDayScreen(Screen):
             f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]",
             f"[#6b7785]Next shift[/]      {self._next_shift_terms()}",
             f"[#6b7785]Board accuracy[/]  {board_pct}%  [dim](paid as HD$ bonus)[/]",
-            f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]",
+            f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]"
+            + (f"   [#c084fc]· {diverged} verdict(s) where the book and your "
+               f"conscience disagreed[/]" if diverged else ""),
             "",
             f"[#6b7785]HackDollar$[/]     [#00ff9f]+{self._hd_earned}[/] verdicts{hd_bonus_str}",
             f"[#6b7785]Balance[/]         [#00ff9f][b]{st.hackdollars} HD$[/][/]",

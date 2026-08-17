@@ -38,6 +38,7 @@ from .models import (
     Candidate,
     CandidateResult,
     DiscrepancyKind,
+    RuleEvaluation,
     Verdict,
 )
 
@@ -48,7 +49,23 @@ class ScoreDelta:
     site_health: float = 0.0
     hackdollars: int = 0        # total HD$ (verdict payout + board bonus)
     alignment: int = 0
-    correct: bool = False
+    correct: bool = False       # MORAL track — matched GroundTruth
+    # ── Literal-ruleset track (issue #38) ────────────────────────────────
+    # What the day's ACTIVE RULEBOOK said to do, recorded separately from
+    # what the candidate morally deserved. None when no RuleEvaluation was
+    # supplied — an honest "not measured" rather than quietly mirroring the
+    # moral track and claiming the two agreed.
+    rules_verdict: Verdict | None = None
+    rules_correct: bool | None = None
+
+    @property
+    def tracks_diverge(self) -> bool:
+        """True when going by the book and going by conscience disagreed.
+
+        The corruption arc's core tension in one boolean: a player can be
+        correct by the rules and still have done the wrong thing.
+        """
+        return self.rules_correct is not None and self.rules_correct != self.correct
 
 
 def board_accuracy_bonus(
@@ -83,6 +100,7 @@ def score(
     player_verdict: Verdict,
     player_flags: set[DiscrepancyKind],
     day_number: int = 1,
+    evaluation: RuleEvaluation | None = None,
 ) -> ScoreDelta:
     """Grade one verdict.
 
@@ -91,6 +109,11 @@ def score(
     something reached off GameState so this stays a pure function of its
     arguments — `apply()` passes `state.current_day`. It defaults to 1 (the
     undecayed day-1 rate) so existing callers keep their old numbers.
+
+    `evaluation` is the day's RuleEvaluation for this candidate (issue #38).
+    Supplying it records the LITERAL-RULESET track alongside the moral one.
+    It changes no payout: the economy is keyed off the moral `correct` exactly
+    as before, and this is a parallel tracked value, not a scoring override.
     """
     correct = candidate.truth.correct_verdict == player_verdict
     moral   = candidate.truth.moral_modifier
@@ -126,12 +149,35 @@ def score(
     else:
         alignment = 0
 
+    # ── Literal-ruleset track (issue #38) ────────────────────────────────
+    # The rulebook's own answer: DENY if any disqualifying rule fired, ADMIT
+    # otherwise. Weighted rules are advisory by definition — they inform the
+    # player, they don't decide.
+    #
+    # Today this usually agrees with the moral track, because the Dark Web
+    # archetype is generated rules-clean (no discrepancies, so no rule fires)
+    # and admitting it is both by-the-book and a drift toward the Dark Web.
+    # That agreement is a property of the current CONTENT, not of the engine.
+    # The moment #37's Dark Web directives write a rule that permits what the
+    # ground truth condemns, one boolean can no longer express the
+    # disagreement — so the two are recorded separately now, before anything
+    # depends on them coinciding.
+    if evaluation is not None:
+        rules_verdict = (Verdict.DENY if evaluation.triggered_disqualifying
+                         else Verdict.ADMIT)
+        rules_correct = (rules_verdict == player_verdict)
+    else:
+        rules_verdict = None
+        rules_correct = None
+
     return ScoreDelta(
         board_bonus=bonus,
         site_health=site_health,
         hackdollars=hackdollars,
         alignment=alignment,
         correct=correct,
+        rules_verdict=rules_verdict,
+        rules_correct=rules_correct,
     )
 
 
@@ -140,6 +186,7 @@ def apply(
     player_verdict: Verdict,
     state,
     player_flags: set[DiscrepancyKind] | None = None,
+    evaluation: RuleEvaluation | None = None,
 ) -> CandidateResult:
     """Apply scoring to mutable GameState and return the structured result.
 
@@ -152,7 +199,8 @@ def apply(
     # #4: the day number drives reward decay. Read off the state here so every
     # existing call site picks the curve up without a signature change.
     delta = score(candidate, player_verdict, flags,
-                  day_number=getattr(state, "current_day", 1))
+                  day_number=getattr(state, "current_day", 1),
+                  evaluation=evaluation)
 
     # Issue #27: verdicts never touch state.compute_hours — ⏱ is a
     # spend-only daily budget consumed exclusively by tools.
@@ -173,6 +221,8 @@ def apply(
         alignment_delta=delta.alignment,
         site_health_delta=delta.site_health,
         hackdollar_delta=delta.hackdollars,
+        rules_verdict=delta.rules_verdict,
+        rules_correct=delta.rules_correct,
     )
     state.pending_results.append(result)
     return result

@@ -323,11 +323,23 @@ class CandidateResult:
     candidate_id: str
     archetype: Archetype
     player_verdict: Verdict
-    correct: bool
+    correct: bool             # MORAL track - matched the candidate's GroundTruth
     board_bonus: int          # HD$ earned from evidence-board accuracy (issue #27)
     alignment_delta: int
     site_health_delta: float  # % change to Site Health (admits apply archetype weight)
     hackdollar_delta: int     # HD$ earned on this verdict (incl. board bonus)
+    # Literal-ruleset track (issue #38) - what the day's ACTIVE RULEBOOK said,
+    # recorded separately from what the candidate morally deserved. None means
+    # "not measured" (no RuleEvaluation was supplied), which is deliberately
+    # distinct from "the two tracks agreed".
+    rules_verdict: Verdict | None = None
+    rules_correct: bool | None = None
+
+    @property
+    def tracks_diverge(self) -> bool:
+        """True when the rulebook and the ground truth disagreed about this
+        verdict - the corruption arc's whole premise, as a boolean."""
+        return self.rules_correct is not None and self.rules_correct != self.correct
 
 
 @dataclass(frozen=True)

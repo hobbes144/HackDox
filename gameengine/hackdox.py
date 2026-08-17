@@ -93,7 +93,9 @@ def simulate(
         candidate = candidate_gen.generate(seed, day, slot)
         evaluation = rules_engine.evaluate(candidate, day)
         auto = Verdict.DENY if evaluation.triggered_disqualifying else Verdict.ADMIT
-        result = scoring.apply(candidate, auto, state)
+        # #38: simulate already has the evaluation in hand - pass it so the
+        # headless run records both scoring tracks too.
+        result = scoring.apply(candidate, auto, state, evaluation=evaluation)
         rule_ids = ", ".join(r.id for r in evaluation.triggered_disqualifying) or "—"
         table.add_row(
             str(slot + 1),

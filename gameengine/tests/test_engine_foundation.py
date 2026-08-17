@@ -718,3 +718,118 @@ def test_broadcast_capitalises_a_sentence_initial_rule_fragment():
             if _starts_a_sentence(t):
                 checked += 1
     assert checked, "no sentence-initial template to exercise the branch"
+
+
+# ─── Issue #38 — dual-track scoring & alignment ─────────────────────────────
+
+
+def test_alignment_persists_and_clamps(tmp_path, monkeypatch):
+    """#38 AC: GameState.alignment is a persisted field, bounded both ways."""
+    monkeypatch.setattr(config, "SAVE_FILE", tmp_path / "slot.json")
+    state = GameState(seed=SEED)
+    state.alignment = -7
+    persistence.save(state)
+    assert persistence.load().alignment == -7
+
+    day1 = load_day(1)
+    dark = candidate_gen.generate(SEED, day1, 0)
+    for bound, start in ((config.ALIGNMENT_MAX, config.ALIGNMENT_MAX),
+                         (config.ALIGNMENT_MIN, config.ALIGNMENT_MIN)):
+        s = GameState(seed=SEED)
+        s.alignment = start
+        for _ in range(5):
+            scoring.apply(dark, Verdict.ADMIT, s)
+        assert config.ALIGNMENT_MIN <= s.alignment <= config.ALIGNMENT_MAX
+
+
+def test_only_dark_web_and_white_hat_shift_alignment(day1):
+    """#38 AC: verdicts on other archetypes must not move alignment."""
+    from gameengine.core.candidate_gen import ARCHETYPE_SPECS
+
+    aligned = {Archetype.DARK_WEB, Archetype.WHITE_HAT}
+    for archetype, spec in ARCHETYPE_SPECS.items():
+        if archetype in aligned:
+            assert spec.moral_modifier != 0, archetype
+        else:
+            assert spec.moral_modifier == 0, archetype
+
+    # And that flows through scoring: a neutral archetype never moves it.
+    for i in range(day1.candidate_count):
+        c = candidate_gen.generate(SEED, day1, i)
+        if c.archetype in aligned:
+            continue
+        for verdict in (Verdict.ADMIT, Verdict.DENY):
+            assert scoring.score(c, verdict, set()).alignment == 0
+
+
+def test_admitting_a_rules_clean_dark_web_is_correct_and_still_drifts(day1):
+    """#38's headline AC, and the corruption arc's whole premise.
+
+    A Dark Web candidate is generated rules-clean, so the day's ruleset
+    permits them and admitting them is correct on BOTH tracks — and it still
+    moves the player toward Dark Web alignment.
+    """
+    from dataclasses import replace
+
+    # Day 1's authored mix has no Dark Web slot; pin one in.
+    day = replace(day1, forced_includes={0: Archetype.DARK_WEB},
+                  archetype_mix={**day1.archetype_mix, Archetype.DARK_WEB: 1})
+    dark = candidate_gen.generate(SEED, day, 0)
+    assert dark.archetype == Archetype.DARK_WEB
+    assert dark.truth.correct_verdict == Verdict.ADMIT
+    assert dark.truth.moral_modifier == -1
+
+    evaluation = rules_engine.evaluate(dark, day)
+    assert not evaluation.triggered_disqualifying, (
+        "Dark Web must be clean by the rules — that's what makes denying "
+        "them a moral choice rather than a rules call"
+    )
+
+    delta = scoring.score(dark, Verdict.ADMIT, set(), evaluation=evaluation)
+    assert delta.correct is True             # moral track: matched ground truth
+    assert delta.rules_correct is True       # literal track: obeyed the book
+    assert delta.rules_verdict == Verdict.ADMIT
+    assert delta.alignment == -1             # ...and still drifted Dark Web
+    assert delta.hackdollars > 0             # paid exactly like any correct admit
+
+
+def test_literal_track_is_recorded_separately_and_changes_no_payout(day1):
+    """#38 AC: alignment tracking must not disturb the ⏱/HD$ economy."""
+    for i in range(day1.candidate_count):
+        c = candidate_gen.generate(SEED, day1, i)
+        ev = rules_engine.evaluate(c, day1)
+        for verdict in (Verdict.ADMIT, Verdict.DENY):
+            without = scoring.score(c, verdict, set())
+            with_ev = scoring.score(c, verdict, set(), evaluation=ev)
+            # Every economic field is byte-identical with and without the
+            # literal track — it is a parallel value, not a scoring override.
+            assert with_ev.hackdollars == without.hackdollars
+            assert with_ev.site_health == without.site_health
+            assert with_ev.board_bonus == without.board_bonus
+            assert with_ev.alignment   == without.alignment
+            assert with_ev.correct     == without.correct
+            # ...and the literal track is only populated when measured.
+            assert without.rules_verdict is None
+            assert without.rules_correct is None
+            assert with_ev.rules_verdict in (Verdict.ADMIT, Verdict.DENY)
+
+
+def test_tracks_diverge_only_when_the_two_tracks_disagree(day1):
+    """A "not measured" literal track must never register as divergence."""
+    c = candidate_gen.generate(SEED, day1, 0)
+    assert not scoring.score(c, Verdict.ADMIT, set()).tracks_diverge
+
+    ev = rules_engine.evaluate(c, day1)
+    for verdict in (Verdict.ADMIT, Verdict.DENY):
+        d = scoring.score(c, verdict, set(), evaluation=ev)
+        assert d.tracks_diverge == (d.rules_correct != d.correct)
+
+
+def test_apply_records_both_tracks_on_the_result(day1):
+    c = candidate_gen.generate(SEED, day1, 0)
+    state = GameState(seed=SEED)
+    result = scoring.apply(c, Verdict.ADMIT, state,
+                           evaluation=rules_engine.evaluate(c, day1))
+    assert result.rules_verdict is not None
+    assert result.rules_correct is not None
+    assert isinstance(result.tracks_diverge, bool)
