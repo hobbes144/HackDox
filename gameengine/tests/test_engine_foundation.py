@@ -1859,3 +1859,97 @@ def test_derived_weak_encryption_respects_the_day_whitelist():
         assert DiscrepancyKind.WEAK_ENCRYPTION not in kinds, (
             "WEAK_ENCRYPTION was derived despite not being whitelisted")
         assert kinds <= {DiscrepancyKind.UNSALTED_STORAGE}, kinds
+
+
+# ─── Issue #60 — the ruleset expresses the ground truth ─────────────────────
+
+
+def test_every_violation_kind_has_a_rule(day1):
+    """#60: thirteen kinds had no rule in day_01.json, so the rulebook could
+    not express the ground truth at all.
+
+    The worst case was THE_INCOMPATIBLE — its only violation is
+    DISPOSABLE_EMAIL, which had no rule, so a by-the-book player admitted
+    100% of them while the rules page taught "fast DENY" for exactly that
+    archetype.
+
+    This test is the point of the issue: every kind added since the day file
+    was authored silently became unenforceable, and nothing caught it.
+    """
+    ruled = {r.predicate.split(":", 1)[1] for r in day1.rules
+             if r.predicate.startswith("has_discrepancy:")}
+    missing = sorted(k.value for k in DiscrepancyKind if k.value not in ruled)
+    assert not missing, (
+        f"DiscrepancyKinds with no rule in day_01.json: {missing}. A violation "
+        f"the rulebook cannot express is one a by-the-book player can never "
+        f"act on.")
+
+
+def test_rule_severity_matches_violation_tier(day1):
+    """The convention the existing rules already follow: critical and major
+    kinds disqualify, minor kinds are weighted (flag, corroborate first)."""
+    for rule in day1.rules:
+        if not rule.predicate.startswith("has_discrepancy:"):
+            continue
+        kind = DiscrepancyKind(rule.predicate.split(":", 1)[1])
+        _tool, sev = candidate_gen._SEVERITY_REVEAL[kind]
+        expected = "disqualifying" if sev in ("major", "critical") else "weighted"
+        assert rule.severity == expected, (
+            f"{rule.id}: {kind.name} is {sev} so the rule should be "
+            f"{expected}, got {rule.severity}")
+
+
+def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
+    """#60: 503 of 2700 candidates were DENY by ground truth and ADMIT by the
+    rulebook — 19%, and 100% of THE_INCOMPATIBLE.
+
+    Verdict-level agreement is the correct end state. #38's tension is not
+    supposed to live in the verdict: the Dark Web archetype is generated
+    rules-clean on purpose, so admitting it is right by BOTH tracks and the
+    cost is paid in alignment. Divergence in the verdict means the rulebook is
+    incomplete, not that the player faces a moral choice.
+    """
+    from dataclasses import replace
+
+    base = load_day(1)
+    divergent = []
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=5,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(120):
+            c = candidate_gen.generate(seed, day, 0)
+            ev = rules_engine.evaluate(c, day)
+            rules_verdict = (Verdict.DENY if ev.triggered_disqualifying
+                             else Verdict.ADMIT)
+            if rules_verdict != c.truth.correct_verdict:
+                divergent.append(
+                    (archetype.value, seed, c.truth.correct_verdict.value,
+                     rules_verdict.value,
+                     sorted(d.kind.value for d in c.truth.discrepancies)))
+    assert not divergent, (
+        f"{len(divergent)} candidates where the rulebook and the ground truth "
+        f"disagree on the verdict; first few: {divergent[:3]}")
+
+
+def test_the_incompatible_is_deniable_by_the_book():
+    """The archetype whose entire design is a free, instant deny. Before #60 a
+    by-the-book player admitted every single one."""
+    from dataclasses import replace
+
+    base = load_day(1)
+    day = replace(base, number=2,
+                  forced_includes={0: Archetype.THE_INCOMPATIBLE},
+                  archetype_mix={**base.archetype_mix,
+                                 Archetype.THE_INCOMPATIBLE: 1})
+    checked = 0
+    for seed in range(120):
+        c = candidate_gen.generate(seed, day, 0)
+        if c.archetype != Archetype.THE_INCOMPATIBLE:
+            continue
+        checked += 1
+        ev = rules_engine.evaluate(c, day)
+        assert ev.triggered_disqualifying, (
+            f"seed {seed}: The Incompatible trips no disqualifying rule — the "
+            f"rules page teaches 'fast DENY' for exactly this candidate")
+    assert checked

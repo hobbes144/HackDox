@@ -96,6 +96,84 @@
       "predicate": "has_discrepancy:weak_encryption",
       "severity": "weighted",
       "mutability": "overseer_variable"
+    },
+    {
+      "id": "rule_missing_public_profile",
+      "text": "Flag (do not auto-deny) a handle with almost no public presence — corroborate before denying.",
+      "predicate": "has_discrepancy:missing_public_profile",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_affiliation_not_stated",
+      "text": "Flag (do not auto-deny) a dossier with no affiliation stated — an omission, not proof of anything.",
+      "predicate": "has_discrepancy:affiliation_not_stated",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_sock_puppet_accounts",
+      "text": "Deny any candidate whose handle appears across a network of sock-puppet accounts.",
+      "predicate": "has_discrepancy:sock_puppet_accounts",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_affiliation_mismatch",
+      "text": "Deny any candidate whose dossier affiliation does not match the organisation on their public profiles.",
+      "predicate": "has_discrepancy:affiliation_mismatch",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_affiliation_unlisted",
+      "text": "Flag (do not auto-deny) a candidate whose public profiles list no organisation at all.",
+      "predicate": "has_discrepancy:affiliation_unlisted",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_disposable_email",
+      "text": "Deny any candidate whose email domain is a known disposable / throwaway service.",
+      "predicate": "has_discrepancy:disposable_email",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_impossible_travel",
+      "text": "Deny any candidate whose logins occur from locations too far apart to be travelled between.",
+      "predicate": "has_discrepancy:impossible_travel",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_insider_behavior",
+      "text": "Deny any candidate whose logs show after-hours access combined with privilege escalation.",
+      "predicate": "has_discrepancy:insider_behavior",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_covert_c2_channel",
+      "text": "Deny any candidate whose submitted image hides a covert command-and-control beacon.",
+      "predicate": "has_discrepancy:covert_c2_channel",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_burner_identity",
+      "text": "Deny any candidate whose public accounts were all created within days of each other.",
+      "predicate": "has_discrepancy:burner_identity",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_typosquat_handle",
+      "text": "Flag (do not auto-deny) a handle that is a lookalike of a listed organisation's handle.",
+      "predicate": "has_discrepancy:typosquat_handle",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_after_hours_access",
+      "text": "Flag (do not auto-deny) activity outside business hours — common enough to be innocent alone.",
+      "predicate": "has_discrepancy:after_hours_access",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_cross_breach_reuse",
+      "text": "Deny any candidate whose cracked password recurs across multiple breach corpora.",
+      "predicate": "has_discrepancy:cross_breach_reuse",
+      "severity": "disqualifying"
     }
   ],
   "quotas": {
