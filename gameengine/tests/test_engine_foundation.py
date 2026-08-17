@@ -969,6 +969,9 @@ def test_the_professional_still_gets_its_affiliation_confirmed():
 
 EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
     # ── Ghostscan ────────────────────────────────────────────────────────
+    # MISSING_PUBLIC_PROFILE joined this tier in #51; it was tiered DOSSIER and
+    # so sat in this guard's blind spot while having no dossier evidence at all.
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: "MISSING_PUBLIC_PROFILE",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH: "EMAIL_GITHUB_MISMATCH",
     DiscrepancyKind.BREACH_HIT:            "BREACH_HIT",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:  "SOCK_PUPPET_ACCOUNTS",
@@ -1158,3 +1161,56 @@ def test_single_artifact_groups_are_mutually_exclusive():
                         f"planted {sorted(k.name for k in stego)} but the "
                         f"submitted image carries {img.kind}")
     assert seen_stego, "sweep never produced a stego candidate — guard is inert"
+
+
+# ─── Issue #51 — Missing Public Profile is Ghostscan-tier ───────────────────
+
+
+def test_missing_public_profile_is_ghostscan_tier():
+    """#51: it was tiered DOSSIER but has no dossier evidence at all.
+
+    The dossier's claimed_github comes from the archetype's handle style, not
+    from whether this kind was planted, so a carrying candidate still showed a
+    normal GitHub handle. The only tell is the thinned platform count in the
+    Ghostscan sweep.
+    """
+    from gameengine.core.models import ToolName
+
+    tool, sev = candidate_gen._SEVERITY_REVEAL[
+        DiscrepancyKind.MISSING_PUBLIC_PROFILE]
+    assert tool == ToolName.GHOSTSCAN
+    assert sev == "minor"
+    # intro_day derives from the tool, so the gate follows automatically.
+    assert (intro_day(DiscrepancyKind.MISSING_PUBLIC_PROFILE)
+            == config.TOOL_UNLOCK_DAY["ghostscan"])
+
+
+def test_missing_public_profile_never_lands_before_ghostscan_unlocks():
+    """The bug this fixes: 300 of 600 Day-1 Clumsy Cutie / White Hat candidates
+    carried it while Ghostscan was still locked — an unflaggable violation that
+    counted for scoring.
+
+    Sweeps the archetypes that can roll it, on every day before Ghostscan's
+    unlock day, rather than trusting the tier constant alone.
+    """
+    from dataclasses import replace
+
+    base = load_day(1)
+    rollers = [a for a, s in candidate_gen.ARCHETYPE_SPECS.items()
+               if DiscrepancyKind.MISSING_PUBLIC_PROFILE in s.eligible_kinds]
+    assert rollers, "no archetype rolls MISSING_PUBLIC_PROFILE — test is inert"
+
+    unlock = config.TOOL_UNLOCK_DAY["ghostscan"]
+    for day_n in range(1, unlock):
+        for archetype in rollers:
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in range(120):
+                c = candidate_gen.generate(seed, day, 0)
+                assert not any(
+                    d.kind == DiscrepancyKind.MISSING_PUBLIC_PROFILE
+                    for d in c.truth.discrepancies), (
+                    f"{archetype.value} seed {seed} carries "
+                    f"MISSING_PUBLIC_PROFILE on day {day_n}, before Ghostscan "
+                    f"unlocks on day {unlock} — unflaggable")

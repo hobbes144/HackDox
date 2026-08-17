@@ -438,6 +438,17 @@ def _ghostscan_sweep_lines(
             org_s        = f"  [[{noise_org}]" if noise_org else ""
             lines.append(f"[#2e3d4f]    {noise_handle}{org_s}[/]")
 
+    # #51: MISSING_PUBLIC_PROFILE's only evidence is the thinned platform count
+    # above (n_appear 1-2 instead of 3-5), which is invisible unless the player
+    # already knows the normal range. The filter names it explicitly; the base
+    # run leaves the count to be noticed, same stance as every other kind.
+    if has_missing and show_forums:
+        lines.append("")
+        lines.append(
+            f"  [#ff8c42]▲ present on only {len(cand_platforms)} of "
+            f"{len(_GS_LEGIT_PLATFORMS)} platforms — no meaningful public "
+            f"profile[/]")
+
     lines.append("")
     lines.append("[#6ad4ff]-- account registry ----------------------------------------[/]")
     lines.append("[dim](creation dates per platform — clusters suggest a burner identity)[/]")
@@ -523,6 +534,7 @@ def _ghostscan_filter_summary_lines(candidate: Candidate) -> list[str]:
     _ks = {d.kind for d in candidate.truth.discrepancies}
     has_sock     = DiscrepancyKind.SOCK_PUPPET_ACCOUNTS  in _ks
     has_breach   = DiscrepancyKind.BREACH_HIT            in _ks
+    has_missing  = DiscrepancyKind.MISSING_PUBLIC_PROFILE  in _ks   # #51
     has_affil    = DiscrepancyKind.AFFILIATION_UNVERIFIED in _ks
     has_affil_fake = DiscrepancyKind.AFFILIATION_MISMATCH in _ks
     has_mismatch = DiscrepancyKind.EMAIL_GITHUB_MISMATCH  in _ks
@@ -546,6 +558,12 @@ def _ghostscan_filter_summary_lines(candidate: Candidate) -> list[str]:
         found = True
     if has_breach:
         lines.append("  [#ff5470][b]▲ BREACH_HIT[/][/]  — email confirmed in breach corpus")
+        found = True
+    if has_missing:
+        # #51: was tiered DOSSIER and never rendered anywhere. Its evidence has
+        # always been the sparse platform sweep, so it belongs here.
+        lines.append("  [#ffd93d][b]▲ MISSING_PUBLIC_PROFILE[/][/]  — no meaningful "
+                     "public presence for the claimed handle")
         found = True
     if has_affil:
         lines.append("  [#ff8c42][b]▲ AFFILIATION_UNVERIFIED[/][/]  — claimed org absent from platform sweep")

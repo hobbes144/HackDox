@@ -349,7 +349,16 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
 
 
 _SEVERITY_REVEAL = {
-    DiscrepancyKind.MISSING_PUBLIC_PROFILE: (ToolName.DOSSIER,    "minor"),
+    # 2026-08-17 (#51): retiered DOSSIER -> GHOSTSCAN. It was never a dossier
+    # violation: the dossier's claimed_github is set from the archetype's handle
+    # style (see generate()), NOT from whether this kind was planted, so a
+    # candidate carrying it still showed a perfectly normal GitHub handle. The
+    # only evidence is the thinned platform count in the Ghostscan sweep, which
+    # is Ghostscan-only. Being mistiered as DOSSIER also made intro_day() return
+    # 1, so the #31 gate happily planted it on Day 1 with Ghostscan still locked -
+    # measured at 300 of 600 Day-1 Clumsy Cutie / White Hat candidates, every one
+    # an unflaggable violation that still counted for scoring.
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: (ToolName.GHOSTSCAN,  "minor"),
     DiscrepancyKind.HOSTILE_CHAT:           (ToolName.DOSSIER,    "major"),
     DiscrepancyKind.AFFILIATION_UNVERIFIED: (ToolName.DOSSIER,    "minor"),
     DiscrepancyKind.DISPOSABLE_EMAIL:       (ToolName.DOSSIER,    "major"),

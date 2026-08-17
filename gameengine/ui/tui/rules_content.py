@@ -32,13 +32,14 @@ from gameengine.core.models import Day, DiscrepancyKind, Performance, ToolName
 
 VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     # DOSSIER (no tool)
-    ("DOSSIER",     DiscrepancyKind.MISSING_PUBLIC_PROFILE, "Missing public profile"),
     ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
     ("DOSSIER",     DiscrepancyKind.AFFILIATION_UNVERIFIED, "Unverified affiliation"),
     ("DOSSIER",     DiscrepancyKind.DISPOSABLE_EMAIL,       "Disposable email domain"),
     ("DOSSIER",     DiscrepancyKind.WEAK_ENCRYPTION,        "Weak password encryption"),
     ("DOSSIER",     DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
     # OSINT (Ghostscan)
+    # #51: moved out of DOSSIER - confirming it needs the platform sweep.
+    ("OSINT",       DiscrepancyKind.MISSING_PUBLIC_PROFILE, "Missing public profile"),
     ("OSINT",       DiscrepancyKind.EMAIL_GITHUB_MISMATCH,  "Email / GitHub mismatch"),
     ("OSINT",       DiscrepancyKind.BREACH_HIT,             "Breach hit"),
     ("OSINT",       DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,   "Sock puppet accounts"),
