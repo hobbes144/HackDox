@@ -364,6 +364,21 @@ def build_rules_text(day: Day | None) -> str:
 
     # ── Quick cases ────────────────────────────────────────────────────
     lines.append("")
+    return "\n".join(lines)
+
+
+# ─── Tab 2 — DOSSIER (free, no tool) ─────────────────────────────────────────
+#
+# Split out of build_rules_text by #50. That builder had grown to nine sections
+# and ~226 lines while every other tab sat around 60, which is why the rules
+# page read as too long and buried its own reference material. Everything here
+# is what the player can determine from the dossier alone, with no tool run:
+# the quick-case patterns, the dossier-tier violation table, the password
+# encryption chip, and the email-domain / affiliation lists.
+#
+# Pure extraction - no copy was rewritten in the move.
+def build_dossier_text(day: Day | None) -> str:
+    lines: list[str] = []
     lines += _band("QUICK CASES — BANK TIME, SPEND NOTHING", "#7dd3c0")
     lines += [
         "  Two dossier patterns settle instantly, no tools required:",

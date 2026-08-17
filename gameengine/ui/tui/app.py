@@ -302,6 +302,13 @@ _PAGE_IDS   = ["page-candidate", "page-ghostscan", "page-hashcrack",
 # tools. Kept in step with _PAGE_NAMES / _PAGE_IDS.
 _PAGE_TOOL = [None, "ghostscan", "hashcrack", "logwatch", "stegotool"]
 
+# #50: which Rules-page tab each intake page corresponds to, so opening the
+# docs hub from a tool page lands on that tool's reference instead of always
+# dumping the player on the general Rules tab. Parallel to _PAGE_TOOL by
+# index; page 0 (the candidate/dossier page) maps to the new Dossier tab,
+# which is where its free-read reference material now lives.
+_PAGE_TAB = ["tab-dossier", "tab-osint", "tab-creds", "tab-logs", "tab-stego"]
+
 
 # ─── Widgets ─────────────────────────────────────────────────────────────────
 
@@ -1610,9 +1617,17 @@ class RulesScreen(ModalScreen):
         Binding("escape",         "dismiss_rules", "Close"),
     ]
 
-    def __init__(self, day: Day, evidence_state: "EvidenceState | None" = None) -> None:
+    def __init__(self, day: Day, evidence_state: "EvidenceState | None" = None,
+                 initial_tab: str | None = None,
+                 scroll_memory: dict[str, float] | None = None) -> None:
         super().__init__()
         self._day = day
+        # #50: which tab to open on, and where each tab was last scrolled to.
+        # The screen is re-instantiated on every open (it's a ModalScreen that
+        # gets dismissed, not hidden), so scroll state has to be owned by the
+        # app and handed in — keeping it on the screen would reset it every time.
+        self._initial_tab   = initial_tab
+        self._scroll_memory = scroll_memory if scroll_memory is not None else {}
         # Shared evidence record — lets the player flag evidence from the Rules
         # overlay too, so the board is always within reach.
         self._ev_board = (
@@ -1628,6 +1643,10 @@ class RulesScreen(ModalScreen):
                 with TabPane("Rules", id="tab-rules"):
                     with VerticalScroll():
                         yield Static(self._build_rules_text(), classes="rules-section")
+                # #50: the dossier-tier reference split out of the Rules tab.
+                with TabPane("Dossier", id="tab-dossier"):
+                    with VerticalScroll():
+                        yield Static(self._build_dossier_text(), classes="rules-section")
                 with TabPane("OSINT", id="tab-osint"):
                     with VerticalScroll():
                         yield Static(self._build_osint_text(), classes="rules-section")
@@ -1657,6 +1676,9 @@ class RulesScreen(ModalScreen):
     def _build_rules_text(self) -> str:
         return rules_content.build_rules_text(self._day)
 
+    def _build_dossier_text(self) -> str:
+        return rules_content.build_dossier_text(self._day)
+
     def _build_osint_text(self) -> str:
         return rules_content.build_osint_text(self._day)
 
@@ -1669,7 +1691,50 @@ class RulesScreen(ModalScreen):
     def _build_stego_text(self) -> str:
         return rules_content.build_stego_text(self._day)
 
+    def on_mount(self) -> None:
+        """#50: open on the tab matching the page the player came from, and
+        restore that tab's last scroll position."""
+        if self._initial_tab:
+            try:
+                self.query_one("#rules-tabs", TabbedContent).active = self._initial_tab
+            except Exception:
+                # An unknown id would otherwise take the whole overlay down; the
+                # default tab is a perfectly good fallback.
+                pass
+        self._restore_scroll()
+
+    def _active_scroll(self) -> "VerticalScroll | None":
+        """The VerticalScroll inside the currently active TabPane."""
+        try:
+            tabs = self.query_one("#rules-tabs", TabbedContent)
+            pane = tabs.get_pane(tabs.active)
+            return pane.query(VerticalScroll).first()
+        except Exception:
+            return None
+
+    def _restore_scroll(self) -> None:
+        tabs = self.query_one("#rules-tabs", TabbedContent)
+        target = self._scroll_memory.get(tabs.active)
+        view = self._active_scroll()
+        if view is not None and target:
+            # animate=False so the restore is instant rather than visibly
+            # scrolling down from the top every time the overlay opens.
+            view.scroll_to(y=target, animate=False)
+
+    def _remember_scroll(self) -> None:
+        tabs = self.query_one("#rules-tabs", TabbedContent)
+        view = self._active_scroll()
+        if view is not None:
+            self._scroll_memory[tabs.active] = view.scroll_offset.y
+
+    def on_tabbed_content_tab_activated(
+            self, event: "TabbedContent.TabActivated") -> None:
+        # Restore the newly-shown tab's position. Its own offset was saved when
+        # the player last switched away from or closed it.
+        self._restore_scroll()
+
     def action_dismiss_rules(self) -> None:
+        self._remember_scroll()
         self.dismiss()
 
 class CreditRevealScreen(ModalScreen):
@@ -1990,6 +2055,10 @@ class IntakeScreen(Screen):
         self._compute_before = state.compute_hours   # track for overseer stats
         self._spent: set[ToolName] = set()
         self._day_log: list = []   # shared log entries for the full day
+        # #50: per-tab scroll positions for the Rules overlay. Lives here rather
+        # than on RulesScreen because that screen is dismissed and rebuilt on
+        # every open, so anything it owns is lost between views.
+        self._rules_scroll: dict[str, float] = {}
         self._hc_log:  list = []   # shared credential audit log (hashcrack)
 
         # ── Stegotool stamp minigame state ────────────────────────────
@@ -2322,6 +2391,17 @@ class IntakeScreen(Screen):
         self.status.refresh_status(self._state, slot, self._page_index)
         self._refresh_footer()
 
+    def _rules_tab_for_page(self) -> str:
+        """#50: the Rules-overlay tab matching the page the player is on.
+
+        Opening the docs from Logwatch should land on the Logwatch tab — the
+        player is looking something up about the thing in front of them, not
+        re-reading the day's ruleset.
+        """
+        if 0 <= self._page_index < len(_PAGE_TAB):
+            return _PAGE_TAB[self._page_index]
+        return "tab-rules"
+
     def _commit_verdict(self, verdict: Verdict) -> None:
         if self._verdict_locked or self._candidate is None:
             return
@@ -2581,7 +2661,9 @@ class IntakeScreen(Screen):
     # ── Rules overlay (immediate binding) ────────────────────────────────────
 
     def action_open_rules(self) -> None:
-        self.app.push_screen(RulesScreen(self._day, self.evidence_state))
+        self.app.push_screen(RulesScreen(self._day, self.evidence_state,
+                        initial_tab=self._rules_tab_for_page(),
+                        scroll_memory=self._rules_scroll))
 
     # ── Within-page focus navigation (arrow keys) ─────────────────────────────
     # EvidenceBoard consumes up/down when focused; letters still bubble to bar.
@@ -2631,7 +2713,11 @@ class IntakeScreen(Screen):
         if k == "5":
             self._goto_page(4); event.stop(); return
         if k == "0":
-            self.app.push_screen(RulesScreen(self._day, self.evidence_state)); event.stop(); return
+            self.app.push_screen(RulesScreen(
+                self._day, self.evidence_state,
+                initial_tab=self._rules_tab_for_page(),
+                scroll_memory=self._rules_scroll))
+            event.stop(); return
         if k == config.KEY_BINDINGS["toggle_evidence"]:   # Tab
             if 0 <= self._page_index <= 4:
                 # Toggles the editable board in place on every page, including
@@ -2725,7 +2811,9 @@ class IntakeScreen(Screen):
                 self._load_current_candidate()
 
         elif kind == "rules":
-            self.app.push_screen(RulesScreen(self._day, self.evidence_state))
+            self.app.push_screen(RulesScreen(self._day, self.evidence_state,
+                        initial_tab=self._rules_tab_for_page(),
+                        scroll_memory=self._rules_scroll))
 
         elif kind == "evidence":
             self._toggle_evidence()
