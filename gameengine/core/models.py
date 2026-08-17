@@ -201,6 +201,11 @@ class Dossier:
     # unaffected if the player runs it anyway); this flag just tells the dossier
     # to show `password_plain` up front instead of gating it behind a crack.
     credential_unsalted:   bool = False
+    # Issue #53 - which listed professional affiliation this candidate's handle
+    # is a lookalike of, when TYPOSQUAT_HANDLE is planted. ENGINE-ONLY ground
+    # truth, same stance as password_plain above: never rendered on the dossier,
+    # only named by Ghostscan's filter. None when no squat was planted.
+    handle_squats:         str | None = None
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────

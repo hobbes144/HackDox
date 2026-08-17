@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 
 from .. import config
 from .models import Candidate, Discrepancy, DiscrepancyKind, ToolName
-from .candidate_gen import stable_hash as _stable_hash
+from .candidate_gen import (_ELITE_ORG_HANDLE as _ORG_HANDLE,
+                            stable_hash as _stable_hash)
 
 
 class InsufficientCompute(RuntimeError):
@@ -42,6 +43,12 @@ class ToolResult:
     summary: str
     raw_lines: tuple[str, ...] = ()   # verbatim terminal output lines (pre-analysis)
     filtered: bool = False            # True if a filter was applied
+
+
+# #53: the canonical org handles a typosquat imitates, so the filter can show
+# the real handle next to the fake one. Sourced from candidate_gen so the two
+# can never drift apart.
+_ELITE_ORG_HANDLE_HINT: dict[str, str] = dict(_ORG_HANDLE)
 
 
 def tool_cost(state, tool_name: str) -> int:
@@ -302,8 +309,11 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[s
         *_gs_band("IDENTITY CHECK", "#7dd3c0", "passive — no ⏱ spent"),
         f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]"
         f"  [#6b7785]handle[/] [#c8d4e1]{candidate.handle}[/]",
-        *(["  [#ffd93d]?  handle resembles a trusted org/person -- possible typosquat[/]"]
-          if has_typo else []),
+        # #53: the free "possible typosquat" line was removed. It named the
+        # violation before any hours were spent, which is why the violation was
+        # only ever "caught" by reading a label. The handle now genuinely is a
+        # lookalike of a listed org's handle, so the tell is comparing it to the
+        # claimed affiliation two lines below - and the filter names the target.
         "",
         f"  [#6b7785]email[/]        [#c8d4e1]{candidate.email}[/]",
         f"               {email_flag}",
@@ -551,7 +561,17 @@ def _ghostscan_filter_summary_lines(candidate: Candidate) -> list[str]:
         lines.append("  [#ff8c42][b]▲ BURNER_IDENTITY[/][/]  -- accounts all created within days")
         found = True
     if has_typo:
-        lines.append("  [#ff8c42][b]▲ TYPOSQUAT_HANDLE[/][/]  -- handle mimics a trusted org/person")
+        # #53: name WHAT is being squatted. "mimics a trusted org" was useless -
+        # it restated the violation name. The comparison is the content.
+        squatted = candidate.dossier.handle_squats
+        if squatted:
+            lines.append(
+                f"  [#ffd93d][b]▲ TYPOSQUAT_HANDLE[/][/]  — [b]{candidate.handle}[/] "
+                f"is a lookalike of [b]{_ELITE_ORG_HANDLE_HINT.get(squatted, squatted)}[/] "
+                f"([i]{squatted}[/])")
+        else:
+            lines.append("  [#ffd93d][b]▲ TYPOSQUAT_HANDLE[/][/]  — handle is a "
+                         "lookalike of a listed organisation's handle")
         found = True
     if has_sock:
         lines.append("  [#ff5470][b]▲ SOCK_PUPPET_ACCOUNTS[/][/]  — handle on critical threat forum")

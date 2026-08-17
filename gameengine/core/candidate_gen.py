@@ -259,7 +259,10 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.THREAT_FORUM_MATCH,
             DiscrepancyKind.CREDENTIAL_STUFFING,
             DiscrepancyKind.BURNER_IDENTITY,
-            DiscrepancyKind.TYPOSQUAT_HANDLE,
+            # TYPOSQUAT_HANDLE removed by #53: it is minor now and this
+            # archetype has no minor slot, so it could never be selected.
+            # A lookalike handle is subtle deception anyway - a poor fit
+            # for an archetype whose whole read is being obviously hostile.
             DiscrepancyKind.CROSS_BREACH_REUSE,
         ),
         handle_style="noisy",
@@ -272,7 +275,12 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         archetype=Archetype.SNEAKY_BUGGER,
         correct_verdict=Verdict.DENY,
         moral_modifier=0,
-        budget=DiscrepancyBudget(major=1, critical=1),
+        # #53: minor=1 added when TYPOSQUAT_HANDLE was demoted major -> minor.
+        # Without a minor slot a minor kind can never be selected, so the
+        # reworked typosquat would have been unreachable. A subtle, deliberately
+        # deceptive handle is squarely this archetype's register, which is why
+        # the slot went here rather than to the Bad Actor.
+        budget=DiscrepancyBudget(minor=1, major=1, critical=1),
         # Tool-only — never AFFILIATION_UNVERIFIED or HOSTILE_CHAT.
         # AFFILIATION_MISMATCH is the "fake elite org" variant — ghostscan needed to catch it.
         eligible_kinds=(
@@ -378,7 +386,9 @@ _SEVERITY_REVEAL = {
     # ── v2 additions ──────────────────────────────────────────────────
     DiscrepancyKind.BURNER_IDENTITY:        (ToolName.GHOSTSCAN,  "major"),
     DiscrepancyKind.THREAT_FORUM_MATCH:     (ToolName.GHOSTSCAN,  "critical"),
-    DiscrepancyKind.TYPOSQUAT_HANDLE:       (ToolName.GHOSTSCAN,  "major"),
+    # #53: demoted major -> minor. A lookalike handle is a signal to corroborate,
+    # not proof of intent on its own.
+    DiscrepancyKind.TYPOSQUAT_HANDLE:       (ToolName.GHOSTSCAN,  "minor"),
     DiscrepancyKind.CREDENTIAL_STUFFING:    (ToolName.LOGWATCH,   "critical"),
     DiscrepancyKind.AFTER_HOURS_ACCESS:     (ToolName.LOGWATCH,   "minor"),
     DiscrepancyKind.LOW_AND_SLOW:           (ToolName.LOGWATCH,   "critical"),
@@ -560,6 +570,75 @@ def _make_handle(rng: random.Random, first: str, last: str, style: str) -> str:
     if style == "noisy":
         return f"{f}{l}{rng.randint(100, 9999)}"
     return f + l
+
+
+# ─── Typosquat handles (#53) ─────────────────────────────────────────────────
+#
+# Before #53, TYPOSQUAT_HANDLE was a violation in name only: `_make_handle`
+# derives the handle purely from the candidate's own name and their archetype's
+# style, so a "typosquatted" handle looked exactly like anyone else's. The only
+# observable evidence was a free line in the Ghostscan identity block reading
+# "handle resembles a trusted org/person -- possible typosquat", printed before
+# a single hour was spent. The player wasn't detecting anything, they were
+# reading a label — and a MAJOR violation was awarded for it.
+#
+# Now the handle is genuinely a lookalike of the organisation-style handle of a
+# real listed professional affiliation, and the player has to compare the handle
+# against the claimed org to catch it.
+
+# The handle an elite org would plausibly hold. Deliberately short and
+# org-shaped (not person-shaped) so a typosquat of it stands out from the
+# name-derived handles every other candidate carries.
+_ELITE_ORG_HANDLE: dict[str, str] = {
+    "MIT CSAIL":                            "mitcsail",
+    "Google Security Team":                 "googlesec",
+    "Oxford Internet Institute":            "oxfordoii",
+    "Stanford HAI":                         "stanfordhai",
+    "DeepMind Safety Research":             "deepmindsafety",
+    "Carnegie Mellon CyLab":                "cmucylab",
+    "ETH Zurich Information Security Group": "ethzsec",
+}
+
+
+def _typosquat(rng: random.Random, base: str) -> str:
+    """Deterministically mutate an org handle into a near-miss lookalike.
+
+    Each mutation is a real-world typosquat technique, and each is chosen to
+    survive a careless read: the result has to look right at a glance and wrong
+    on inspection. Returns `base` unchanged only if no mutation applies, which
+    the caller treats as "no squat" rather than shipping an exact match.
+    """
+    candidates: list[str] = []
+
+    # Homoglyph substitution — the classic. One occurrence only; replacing
+    # every 'o' with '0' reads as leetspeak, which is a different tell.
+    for real, fake in (("o", "0"), ("l", "1"), ("i", "1"), ("e", "3"), ("s", "5")):
+        i = base.find(real)
+        if i != -1:
+            candidates.append(base[:i] + fake + base[i + 1:])
+
+    # 'rn' for 'm' — near-invisible in most terminal fonts.
+    i = base.find("m")
+    if i != -1:
+        candidates.append(base[:i] + "rn" + base[i + 1:])
+
+    # Doubled letter, dropped letter, adjacent transposition.
+    if len(base) > 4:
+        i = len(base) // 2
+        candidates.append(base[:i] + base[i] + base[i:])
+        candidates.append(base[:i] + base[i + 1:])
+        if base[i] != base[i + 1]:
+            candidates.append(base[:i] + base[i + 1] + base[i] + base[i + 2:])
+
+    # Hyphen insertion — visually plausible for an org handle.
+    if len(base) > 6:
+        i = len(base) // 2
+        candidates.append(base[:i] + "-" + base[i:])
+
+    # Drop exact matches; an exact match is impersonation, not typosquatting,
+    # and would make the violation unfindable by comparison.
+    candidates = [c for c in candidates if c != base]
+    return rng.choice(sorted(set(candidates))) if candidates else base
 
 
 _ELITE_DOMAIN_MAP = {
@@ -793,6 +872,23 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
                                         day.allowed_violations,
                                         day.difficulty_band)
 
+    # #53: a typosquat handle can only be built once we know the kind was
+    # actually planted, so the handle is overridden here rather than inside
+    # _make_handle. Nothing derived earlier depends on it - the email comes from
+    # first/last/affiliation, and claimed_github is assigned further down.
+    handle_squats: str | None = None
+    if any(d.kind == DiscrepancyKind.TYPOSQUAT_HANDLE for d in discrepancies):
+        rng_squat = _seeded_rng(game_seed, day.number, slot_index, "typosquat")
+        # Squat the org the candidate actually claims where that is an elite
+        # org, so the tell is a direct handle-vs-claim comparison. Otherwise
+        # pick one - the handle still impersonates a real listed affiliation.
+        target = (affiliation if affiliation in _ELITE_ORG_HANDLE
+                  else rng_squat.choice(sorted(_ELITE_ORG_HANDLE)))
+        squatted = _typosquat(rng_squat, _ELITE_ORG_HANDLE[target])
+        if squatted != _ELITE_ORG_HANDLE[target]:
+            handle = squatted
+            handle_squats = target
+
     rng_chat = _seeded_rng(game_seed, day.number, slot_index, "chat")
     chat = _build_chat(rng_chat, spec, discrepancies)
 
@@ -880,6 +976,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
 
     dossier = Dossier(
         claimed_github=handle if has_github else None,
+        handle_squats=handle_squats,   # #53 - engine-only, filter names it
         claimed_breaches=(),
         notes="Submitted via standard intake form. Self-reported.",
         commit_email=commit_email,

@@ -1214,3 +1214,148 @@ def test_missing_public_profile_never_lands_before_ghostscan_unlocks():
                     f"{archetype.value} seed {seed} carries "
                     f"MISSING_PUBLIC_PROFILE on day {day_n}, before Ghostscan "
                     f"unlocks on day {unlock} — unflaggable")
+
+
+# ─── Issue #53 — typosquat handles are real lookalikes ──────────────────────
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance — the standard measure of typosquat closeness."""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1,          # deletion
+                           cur[j - 1] + 1,       # insertion
+                           prev[j - 1] + (ca != cb)))   # substitution
+        prev = cur
+    return prev[-1]
+
+
+def _typosquat_candidates(limit=25):
+    from dataclasses import replace
+    base = load_day(1)
+    out = []
+    for day_n in (3, 5, 7):
+        day = replace(base, number=day_n,
+                      forced_includes={0: Archetype.SNEAKY_BUGGER},
+                      archetype_mix={**base.archetype_mix,
+                                     Archetype.SNEAKY_BUGGER: 1})
+        for seed in range(400):
+            c = candidate_gen.generate(seed, day, 0)
+            if any(d.kind == DiscrepancyKind.TYPOSQUAT_HANDLE
+                   for d in c.truth.discrepancies):
+                out.append(c)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def test_typosquat_handle_is_actually_a_lookalike():
+    """#53: before this, the handle was derived purely from the candidate's name
+    and archetype style — a "typosquatted" handle looked exactly like anyone
+    else's, and the violation existed only as a label in the free identity
+    block.
+    """
+    cands = _typosquat_candidates()
+    assert cands, "no typosquat candidates generated — test is inert"
+    for c in cands:
+        target = c.dossier.handle_squats
+        assert target, f"{c.handle} carries the kind but records no squat target"
+        assert target in candidate_gen._ELITE_ORG_HANDLE, target
+        real = candidate_gen._ELITE_ORG_HANDLE[target]
+        # A lookalike, not an exact copy — an exact match would be
+        # impersonation and would make the violation uncatchable by comparison.
+        assert c.handle != real, c.handle
+        # ...and close enough to actually be mistaken for it. Edit distance is
+        # the right measure here, not positional character equality: the rn-for-m
+        # and insert/delete mutations shift every following character, so a
+        # positional comparison of "rnitcsail" against "mitcsail" scores near
+        # zero while being a textbook typosquat.
+        assert _edit_distance(c.handle, real) <= 2, (c.handle, real)
+
+
+def test_squat_target_is_never_recorded_when_the_kind_is_absent():
+    """Engine-only ground truth must not leak onto candidates without it."""
+    from dataclasses import replace
+    base = load_day(1)
+    checked = 0
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=5,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(40):
+            c = candidate_gen.generate(seed, day, 0)
+            if any(d.kind == DiscrepancyKind.TYPOSQUAT_HANDLE
+                   for d in c.truth.discrepancies):
+                continue
+            checked += 1
+            assert c.dossier.handle_squats is None, (
+                f"{archetype.value} seed {seed} has no typosquat but records "
+                f"handle_squats={c.dossier.handle_squats!r}")
+    assert checked, "no clean candidates checked — test is inert"
+
+
+def test_free_identity_block_no_longer_names_the_typosquat():
+    """#53's core complaint: the violation was 'only caught because it is
+    literally spelt out'. The free block must not name it."""
+    from gameengine.core import tools_bridge
+
+    for c in _typosquat_candidates(limit=8):
+        free = " ".join(tools_bridge._ghostscan_identity_lines(c, hint=False)).lower()
+        assert "typosquat" not in free, (
+            f"the free identity block still gives it away: {free}")
+        # The handle is still shown — that IS the evidence, unlabelled.
+        assert c.handle in " ".join(
+            tools_bridge._ghostscan_identity_lines(c, hint=False))
+
+
+def test_typosquat_filter_names_the_squatted_target():
+    """The filter should tell the player WHAT is being imitated, not restate
+    the violation's own name."""
+    from gameengine.core import tools_bridge
+
+    for c in _typosquat_candidates(limit=8):
+        summary = " ".join(tools_bridge._ghostscan_filter_summary_lines(c))
+        assert "TYPOSQUAT_HANDLE" in summary
+        assert c.dossier.handle_squats in summary, (
+            "the filter must name the org being squatted")
+        assert candidate_gen._ELITE_ORG_HANDLE[c.dossier.handle_squats] in summary, (
+            "the filter must show the real handle for comparison")
+
+
+def test_typosquat_is_minor_and_reachable():
+    """#53 demotes it to minor. A minor kind is only selectable by an archetype
+    that HAS a minor budget slot — the reason Sneaky Bugger gained one."""
+    from gameengine.core.models import ToolName
+
+    tool, sev = candidate_gen._SEVERITY_REVEAL[DiscrepancyKind.TYPOSQUAT_HANDLE]
+    assert tool == ToolName.GHOSTSCAN
+    assert sev == "minor"
+
+    sneaky = candidate_gen.ARCHETYPE_SPECS[Archetype.SNEAKY_BUGGER]
+    assert DiscrepancyKind.TYPOSQUAT_HANDLE in sneaky.eligible_kinds
+    assert sneaky.budget.minor >= 1, (
+        "Sneaky Bugger needs a minor slot or the reworked typosquat can never "
+        "be selected")
+
+    # Bad Actor has no minor slot, so the kind was removed from it rather than
+    # left listed-but-unreachable.
+    bad = candidate_gen.ARCHETYPE_SPECS[Archetype.BAD_ACTOR]
+    if bad.budget.minor == 0:
+        assert DiscrepancyKind.TYPOSQUAT_HANDLE not in bad.eligible_kinds, (
+            "Bad Actor lists a minor kind it can never select")
+
+
+def test_typosquat_generation_is_deterministic():
+    from dataclasses import replace
+    base = load_day(1)
+    day = replace(base, number=5,
+                  forced_includes={0: Archetype.SNEAKY_BUGGER},
+                  archetype_mix={**base.archetype_mix, Archetype.SNEAKY_BUGGER: 1})
+    for seed in range(60):
+        a = candidate_gen.generate(seed, day, 0)
+        b = candidate_gen.generate(seed, day, 0)
+        assert a == b
+        assert a.handle == b.handle
+        assert a.dossier.handle_squats == b.dossier.handle_squats
