@@ -243,6 +243,22 @@ def build_rules_text(day: Day | None) -> str:
     title = day.title if day else "No day loaded"
     lines += _band(f"TODAY'S RULESET — {title}", "#7dd3c0",
                    "read every shift — rules change day to day")
+
+    # #49: the day's authored framing, above the machine rules. The rule list
+    # below is exhaustive and near-identical most days, which makes it very easy
+    # to stop reading it; this is the sentence that says what is actually new
+    # today. Rendered verbatim from day_NN.json's rule_sheet — no day file, no
+    # block, and the panel reads exactly as it did before #49.
+    sheet = day.rule_sheet if day is not None else None
+    if sheet is not None and sheet.summary:
+        lines.append("")
+        lines.append(f"  [#e8f0f8][i]{sheet.summary}[/][/]")
+    if sheet is not None and sheet.notes:
+        lines.append("")
+        lines.append("[#7dd3c0][b]  TODAY, IN PLAIN LANGUAGE[/][/]")
+        for note in sheet.notes:
+            lines.append(f"  [#c8d4e1]·[/] {note}")
+
     rules = day.rules if day else ()
     disq  = [r for r in rules if r.severity == "disqualifying"]
     minor = [r for r in rules if r.severity != "disqualifying"]
@@ -448,6 +464,29 @@ def build_dossier_text(day: Day | None) -> str:
         "             (major): no crack needed, the dossier already shows it.",
     ]
 
+    # ── The day's rule sheet (#49) ─────────────────────────────────────
+    # Authored per day in day_NN.json and rendered VERBATIM — this is the
+    # Papers-Please sheet, the thing the player is supposed to be able to apply
+    # without inferring anything. It sits above the engine-wide reference lists
+    # rather than replacing them: the sheet says what matters today, the banks
+    # below stay as the complete catalogue. A day with no authored sheet (every
+    # synthesized day) renders exactly as it did before #49.
+    sheet = day.rule_sheet if day is not None else None
+    if sheet is not None:
+        lines += _sub(f"today's rule sheet — day {day.number}", "#ffd93d")
+        if sheet.approved_domains:
+            lines.append("[#00ff9f]✓  APPROVED DOMAINS[/]")
+            lines += [f"     {d}" for d in sheet.approved_domains]
+        if sheet.denied_domains:
+            lines.append("[#ff5470]✗  DENIED DOMAINS[/]")
+            lines += [f"     {d}" for d in sheet.denied_domains]
+        if sheet.approved_affiliations:
+            lines.append("[#00ff9f]✓  APPROVED AFFILIATIONS[/]")
+            lines += [f"     {a}" for a in sheet.approved_affiliations]
+        if sheet.denied_affiliations:
+            lines.append("[#ff5470]✗  DENIED AFFILIATIONS[/]")
+            lines += [f"     {a}" for a in sheet.denied_affiliations]
+
     # ── Reference lists (dynamic from ghostscan data) ──────────────────
     lines += _sub("email domains", "#7dd3c0")
     trusted    = " · ".join(sorted(tools_bridge._GS_TRUSTED_DOMAINS))
@@ -458,8 +497,14 @@ def build_dossier_text(day: Day | None) -> str:
         "             .edu · .ac.uk · .gov · .mil · verified employers",
         f"[#ff5470]✗  DISPOSABLE[/] {disposable}",
         "             [dim]→ plants DISPOSABLE_EMAIL — the fast-deny signal[/]",
+        # #58, second location. tools_bridge stopped telling the player to flag
+        # a privacy domain because DISPOSABLE_EMAIL is the only thing they could
+        # flag, it is a different domain class, and board_accuracy_bonus scores
+        # it as a false positive — the UI was instructing an action the scoring
+        # model punishes. This copy still said it. Same bug, same fix: context,
+        # not an instruction.
         f"[#ff8c42]?  PRIVACY[/]   {privacy}"
-        "   [dim](flag only with other discrepancies)[/]",
+        "   [dim](legitimate — but leaves no identity trail)[/]",
     ]
     lines += _sub("affiliations", "#7dd3c0")
     orgs   = " · ".join(sorted(tools_bridge._GS_LEGIT_ORGS))

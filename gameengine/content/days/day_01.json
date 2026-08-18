@@ -4,10 +4,10 @@
   "candidate_count": 6,
   "archetype_mix": {
     "obvious_admit": 2,
+    "the_incompatible": 1,
     "day_to_day": 1,
     "clumsy_cutie": 1,
-    "bad_actor": 1,
-    "sneaky_bugger": 1
+    "bad_actor": 1
   },
   "rules": [
     {
@@ -186,5 +186,72 @@
     "passing": "day1_outro_measured",
     "poor": "day1_outro_warning",
     "failed": "day1_outro_failed"
+  },
+  "allowed_violations": [
+    "disposable_email",
+    "hostile_chat",
+    "unsalted_storage",
+    "affiliation_not_stated",
+    "weak_encryption"
+  ],
+  "forced_includes": {
+    "0": "obvious_admit",
+    "1": "the_incompatible",
+    "2": "day_to_day",
+    "3": "clumsy_cutie",
+    "4": "obvious_admit",
+    "5": "bad_actor"
+  },
+  "forced_violations": {
+    "1": [
+      "disposable_email"
+    ],
+    "3": [
+      "unsalted_storage"
+    ],
+    "5": [
+      "hostile_chat"
+    ]
+  },
+  "rule_sheet": {
+    "summary": "Dossier only today. Deny a throwaway email address, a stored password you can read, or anyone who threatens the service. Everything else is an admit.",
+    "approved": {
+      "domains": [
+        "gmail.com",
+        "outlook.com",
+        "yahoo.com",
+        "icloud.com",
+        "any .edu / .ac.uk / .gov / .mil address",
+        "an address at the organisation they claim to work for"
+      ],
+      "affiliations": [
+        "any named employer or institution",
+        "\"independent\" / \"freelance\" — thin, but not disqualifying on its own"
+      ]
+    },
+    "denied": {
+      "domains": [
+        "mailinator.com",
+        "yopmail.com",
+        "guerrillamail.com",
+        "10minutemail.com",
+        "throwawaymail.com",
+        "sharklasers.com",
+        "tempmail.org",
+        "trashmail.com"
+      ],
+      "affiliations": [
+        "BreachForums",
+        "RaidForums",
+        "HackForums",
+        "nulled.to",
+        "exploit.in"
+      ]
+    },
+    "notes": [
+      "A blank affiliation is an omission, not a lie — flag it, don't deny on it.",
+      "MD5 on the strength chip is poor hygiene, not proof of anything. Flag.",
+      "UNSALTED is different: the password is printed in the clear. That is a deny."
+    ]
   }
 }

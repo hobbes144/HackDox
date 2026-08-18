@@ -21,6 +21,7 @@ from .models import (
     Quotas,
     RULE_MUTABILITIES,
     Rule,
+    RuleSheet,
 )
 
 
@@ -47,6 +48,101 @@ def _parse_rule(raw_rule: dict) -> Rule:
         severity=raw_rule.get("severity", "disqualifying"),
         mutability=mutability,
     )
+
+
+def _parse_rule_sheet(raw: dict | None) -> RuleSheet | None:
+    """Build the day's approved/denied sheet from JSON (#49).
+
+    Shape:
+
+        "rule_sheet": {
+          "summary": "...",
+          "approved": {"domains": [...], "affiliations": [...]},
+          "denied":   {"domains": [...], "affiliations": [...]},
+          "notes":    ["..."]
+        }
+
+    Absent or empty returns None rather than a blank RuleSheet, so the
+    reference panel has one unambiguous "nothing authored, use the word banks"
+    signal instead of having to distinguish empty-from-missing.
+    """
+    if not raw:
+        return None
+    approved = raw.get("approved", {}) or {}
+    denied   = raw.get("denied", {}) or {}
+    unknown  = set(raw) - {"summary", "approved", "denied", "notes"}
+    if unknown:
+        # Same fail-loud stance as _parse_rule's mutability check, for the same
+        # reason: a typo'd key that silently means "authored nothing" is a
+        # content bug nobody notices until the rule sheet is mysteriously blank
+        # in play.
+        raise ValueError(
+            f"Unknown rule_sheet key(s) {sorted(unknown)}; expected one of "
+            f"['summary', 'approved', 'denied', 'notes']")
+    sheet = RuleSheet(
+        approved_domains=tuple(approved.get("domains", [])),
+        denied_domains=tuple(denied.get("domains", [])),
+        approved_affiliations=tuple(approved.get("affiliations", [])),
+        denied_affiliations=tuple(denied.get("affiliations", [])),
+        summary=raw.get("summary", ""),
+        notes=tuple(raw.get("notes", [])),
+    )
+    return None if sheet.is_empty() else sheet
+
+
+def _parse_forced_violations(
+    raw: dict, day_number: int, candidate_count: int,
+    allowed_violations: tuple[DiscrepancyKind, ...],
+) -> dict[int, tuple[DiscrepancyKind, ...]]:
+    """Parse and VALIDATE the day's scripted violations (#15).
+
+    JSON shape: {"<slot index>": ["<kind value>", ...]}.
+
+    Validated here rather than in the generator, because this is where the
+    error can name the day file the author actually has open. A script that
+    asks for a violation the day cannot express would otherwise fail silently
+    — the generator drops it and the tutorial day quietly stops demonstrating
+    the mechanic it exists to teach, which is the single worst failure mode for
+    scripted content: it still plays, it just teaches nothing.
+
+    Three ways a script is wrong, all of them fatal:
+      • the slot doesn't exist in this day's shift
+      • the kind's revealing tool hasn't been taught yet (#31's tier gate)
+      • the kind isn't expressible on this day (#61 — e.g. cross-breach reuse
+        before a second breach corpus exists)
+    """
+    from .candidate_gen import _kind_is_expressible_on, intro_day
+
+    out: dict[int, tuple[DiscrepancyKind, ...]] = {}
+    for slot_raw, kinds_raw in (raw or {}).items():
+        slot = int(slot_raw)
+        if not 0 <= slot < candidate_count:
+            raise ValueError(
+                f"day {day_number}: forced_violations names slot {slot}, but "
+                f"the day only has {candidate_count} slots (0-"
+                f"{candidate_count - 1})")
+        kinds: list[DiscrepancyKind] = []
+        for value in kinds_raw:
+            kind = DiscrepancyKind(value)
+            if intro_day(kind) > day_number:
+                raise ValueError(
+                    f"day {day_number}: forced_violations slot {slot} asks for "
+                    f"{kind.name}, but its revealing tool is not taught until "
+                    f"day {intro_day(kind)} — the player would be scored on "
+                    f"evidence they have no tool to read")
+            if not _kind_is_expressible_on(kind, day_number):
+                raise ValueError(
+                    f"day {day_number}: forced_violations slot {slot} asks for "
+                    f"{kind.name}, which cannot be expressed on this day (see "
+                    f"candidate_gen._kind_is_expressible_on)")
+            if allowed_violations and kind not in allowed_violations:
+                raise ValueError(
+                    f"day {day_number}: forced_violations slot {slot} asks for "
+                    f"{kind.name}, which the day's own allowed_violations "
+                    f"whitelist excludes — the two would contradict each other")
+            kinds.append(kind)
+        out[slot] = tuple(kinds)
+    return out
 
 
 def scale_archetype_mix(
@@ -193,6 +289,13 @@ def synthesize_day(day_number: int) -> Day:
         allowed_violations=(),   # no whitelist — only #31's evidence-tier gate
         difficulty_band=band,
         forced_includes={},
+        # A synthesized day scripts nothing and authors no rule sheet: both are
+        # what makes a day AUTHORED, and inheriting Day 1's would be actively
+        # wrong — its scripted slots teach mechanics the player learned fifteen
+        # days ago, and its rule sheet describes a rulebook that has since
+        # moved. Note this is NOT inherited from `template` for that reason.
+        forced_violations={},
+        rule_sheet=None,
     )
 
 
@@ -207,7 +310,27 @@ def load_day(day_number: int) -> Day:
         raise FileNotFoundError(path)
 
     raw = json.loads(path.read_text(encoding="utf-8"))
-    rules = tuple(_parse_rule(r) for r in raw["rules"])
+    # `rules` is optional as of #15. The rulebook is campaign-wide — day_01.json
+    # carries all 27 entries — and requiring every authored day to restate them
+    # would mean five near-identical 190-line files where the only real
+    # differences are the archetype mix, the scripted slots and the rule sheet.
+    # An authored day should contain what is DIFFERENT about that day; a
+    # duplicated rulebook is a merge conflict waiting to happen and a place for
+    # the days to silently drift apart.
+    #
+    # Omitting it inherits Day 1's rules with this day's Overseer-Variable flips
+    # applied (#36), which is exactly what synthesize_day does — so an authored
+    # day and a synthesized one agree about what the rulebook says today.
+    if "rules" in raw:
+        rules = tuple(_parse_rule(r) for r in raw["rules"])
+    elif raw["number"] == 1:
+        # Day 1 is the template every other day inherits from, so it has
+        # nowhere to fall back to. Fail loudly rather than start with an empty
+        # rulebook, which would silently make every candidate a clean admit.
+        raise ValueError("day_01.json must declare 'rules' — every other day "
+                         "inherits from it")
+    else:
+        rules = mutate_variable_rules(load_day(1).rules, raw["number"])
     archetype_mix = {
         Archetype(key): count for key, count in raw["archetype_mix"].items()
     }
@@ -241,6 +364,11 @@ def load_day(day_number: int) -> Day:
         int(slot): Archetype(arch)
         for slot, arch in raw.get("forced_includes", {}).items()
     }
+    # #15/#49 — both optional, so every pre-Batch-4 day file loads unchanged.
+    forced_violations = _parse_forced_violations(
+        raw.get("forced_violations", {}), raw["number"], candidate_count,
+        allowed_violations)
+    rule_sheet = _parse_rule_sheet(raw.get("rule_sheet"))
     return Day(
         number=raw["number"],
         title=raw["title"],
@@ -253,9 +381,65 @@ def load_day(day_number: int) -> Day:
         allowed_violations=allowed_violations,
         difficulty_band=difficulty_band,
         forced_includes=forced_includes,
+        forced_violations=forced_violations,
+        rule_sheet=rule_sheet,
     )
 
 
 def load_narratives() -> dict[str, str]:
     path = config.NARRATIVES_DIR / "overseer.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ─── Narrative resolution (#15 / #44-47) ─────────────────────────────────────
+#
+# synthesize_day assigns narrative keys — "day7_intro", "day7_outro_poor" —
+# that are deliberately allowed not to exist, so an unauthored day still plays.
+# What was NOT intended is what "still plays" turned out to mean: every consumer
+# read them with `dict.get(key, "")`, so days 2 through 20 opened on an Overseer
+# panel containing nothing at all, and the end-of-day beat printed the literal
+# string "...". The mechanism was right; there was simply no second layer for it
+# to fall through TO.
+#
+# resolve_narrative adds that layer. A day-specific key wins; failing that, a
+# generic key authored in the same overseer.json; failing that, a hard-coded
+# last resort so the panel is never empty. Keeping the generic copy in the JSON
+# rather than in Python matters: overseer.json stays the one file to open to
+# change anything the Overseer says.
+
+_GENERIC_INTRO_KEY   = "generic_intro"
+_GENERIC_BETWEEN_KEY = "generic_between"
+
+# Last-resort copy, used only if overseer.json is missing its generic keys.
+# Written to be true on any day rather than evocative on one.
+_LAST_RESORT: dict[str, str] = {
+    _GENERIC_INTRO_KEY:   "Same as yesterday. Read the book, work the line, "
+                          "don't let anything through you can't account for.",
+    "generic_outro_excellent": "Clean shift. Nothing to talk about, which is "
+                               "the best thing I can say about a day here.",
+    "generic_outro_passing":   "That'll do. The line moved and the site's "
+                               "still standing.",
+    "generic_outro_poor":      "Something got past you today. I'd rather it "
+                               "didn't become a pattern.",
+    "generic_outro_failed":    "We need to talk about today. Not here.",
+    _GENERIC_BETWEEN_KEY: "Rest while you can. Tomorrow's list is longer, and "
+                          "the rules won't be getting any kinder. Spend your "
+                          "HackDollar$ wisely.",
+}
+
+
+def resolve_narrative(narratives: dict[str, str], key: str,
+                      generic_key: str) -> str:
+    """The Overseer's line for `key`, falling back to generic copy.
+
+    Empty authored strings fall through too — an author blanking a key means
+    "I haven't written this yet", not "the Overseer says nothing", and a silent
+    panel is indistinguishable from a crash to the player.
+    """
+    return (narratives.get(key)
+            or narratives.get(generic_key)
+            or _LAST_RESORT.get(generic_key, ""))
+
+
+def generic_outro_key(performance: Performance) -> str:
+    return f"generic_outro_{performance.value}"

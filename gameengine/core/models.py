@@ -309,6 +309,36 @@ class Quotas:
 
 
 @dataclass(frozen=True)
+class RuleSheet:
+    """The day's plain-language admit/deny sheet (#16 / #49).
+
+    A Papers-Please rule sheet: what TODAY allows, stated so the player can
+    apply it without guesswork. Deliberately separate from `Day.rules`, which
+    are machine predicates the engine evaluates — these are the human-readable
+    lists the Reference panel prints, and the two answer different questions
+    ("would this candidate trip a rule" vs "what am I supposed to be checking").
+
+    Every field is optional so a day may author only the parts that changed;
+    anything left empty falls back to the engine-wide word banks the reference
+    panel used before #49. `summary` is the one-line framing the Overseer's
+    briefing echoes; `notes` are free-form lines for Overseer-Variable changes
+    the day wants spelled out.
+    """
+
+    approved_domains:      tuple[str, ...] = ()
+    denied_domains:        tuple[str, ...] = ()
+    approved_affiliations: tuple[str, ...] = ()
+    denied_affiliations:   tuple[str, ...] = ()
+    summary:               str = ""
+    notes:                 tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        return not (self.approved_domains or self.denied_domains
+                    or self.approved_affiliations or self.denied_affiliations
+                    or self.summary or self.notes)
+
+
+@dataclass(frozen=True)
 class Day:
     number: int
     title: str
@@ -331,9 +361,23 @@ class Day:
     #     hard-coded generator effect yet (a deliberate tuning hook).
     #   forced_includes — pin a specific archetype into a specific slot index
     #     (e.g. the scripted White Hat on its day). Maps slot index -> Archetype.
+    #   forced_violations — pin specific violation KINDS into a slot (#15).
+    #     forced_includes above picks the archetype; this picks what that
+    #     candidate actually carries. A tutorial day teaching brute-force needs
+    #     a candidate demonstrably carrying BRUTE_FORCE_IN_LOG, and pinning the
+    #     archetype alone does not give you that — a Bad Actor rolls from a
+    #     pool of eight kinds. Maps slot index -> tuple of kinds, each of which
+    #     still has to clear the tier gate and the day's whitelist.
+    #   rule_sheet — the day's plain-language approved/denied copy (#49), which
+    #     the Rules overlay renders verbatim. None means "no authored sheet";
+    #     the reference panel then falls back to the engine-wide word banks, as
+    #     it did before #49.
     allowed_violations: tuple[DiscrepancyKind, ...] = ()
     difficulty_band: str = "easy"
     forced_includes: dict[int, Archetype] = field(default_factory=dict)
+    forced_violations: dict[int, tuple[DiscrepancyKind, ...]] = field(
+        default_factory=dict)
+    rule_sheet: "RuleSheet | None" = None
 
 
 # ─── Day results & game state ───────────────────────────────────────────────

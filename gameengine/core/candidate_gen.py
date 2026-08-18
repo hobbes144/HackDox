@@ -83,6 +83,58 @@ AFFILIATIONS_ELITE = [
     "ETH Zurich Information Security Group",
 ]
 
+# #48: the organisations a Sneaky Bugger may CLAIM when carrying an
+# AFFILIATION_MISMATCH — distinct from AFFILIATIONS_ELITE, and that distinction
+# is load-bearing rather than cosmetic. #56 made a claimed elite organisation
+# un-fakeable: the sweep always confirms it, which is precisely the player's
+# reward for recognising one and the reason a trusted org plus a matching
+# institutional email is a quick admit. So the fakeable pool is the ordinary,
+# unglamorous employers nobody can vouch for at a glance.
+#
+# Derived from AFFILIATIONS_LEGIT rather than restated, so adding an employer
+# there cannot leave this list stale — the drift failure again.
+AFFILIATIONS_FAKED = list(AFFILIATIONS_LEGIT)
+
+# ─── Word banks (#48) ────────────────────────────────────────────────────────
+#
+# These are the canonical lists. tools_bridge DERIVES its classification sets
+# from them rather than keeping its own copies — #57 was two hand-synced domain
+# lists drifting apart badly enough that 37% of DISPOSABLE_EMAIL candidates
+# became undetectable, and the fix there was the same as the shape here: one
+# owner, everyone else derives.
+#
+# Kept as Python constants rather than moved to content/word_banks/*.json. #16
+# asks for the content to be data-driven, and it is — the per-day rule sheets in
+# day_NN.json are where authoring actually happens. Moving these to JSON as well
+# would add a THIRD surface for the same values to drift across, which is the
+# specific failure this section exists to prevent.
+
+# Consumer mail providers. Recognised, unremarkable, no signal either way.
+# fastmail.io is here because _make_email's fallback pool generates it: before
+# #48 it was the one address the generator produced that the sweep classified
+# as "unknown domain — verify affiliation", so a perfectly ordinary candidate
+# picked up a suspicious-looking flag purely from a gap in this list.
+DOMAINS_TRUSTED = [
+    "gmail.com",
+    "outlook.com",
+    "yahoo.com",
+    "icloud.com",
+    "hotmail.com",
+    "live.com",
+    "fastmail.io",
+]
+
+# Anonymous / privacy-focused providers. Legitimate — NOT a violation, and
+# deliberately not merged into DOMAINS_TRUSTED: they are real corroboration
+# that the candidate leaves no identity trail, which is context worth showing.
+# See #58 for why this must never be phrased as an instruction to flag.
+DOMAINS_PRIVACY = [
+    "protonmail.com",
+    "tutanota.com",
+    "pm.me",
+    "proton.me",
+]
+
 # Throwaway / disposable email domains that trigger The Incompatible
 DOMAINS_DISPOSABLE = [
     "mailinator.com",
@@ -747,6 +799,7 @@ def _roll_discrepancies(
     allowed_violations: tuple[DiscrepancyKind, ...] = (),
     difficulty_band: str = "easy",
     claimed_affiliation: str = "",
+    forced_kinds: tuple[DiscrepancyKind, ...] = (),
 ) -> list[Discrepancy]:
     """Pick discrepancies for this candidate.
 
@@ -833,9 +886,46 @@ def _roll_discrepancies(
                             used.update(group)
                     break
 
-    take("critical", spec.budget.critical)
-    take("major",    spec.budget.major)
-    take("minor",    spec.budget.minor)
+    # ── Scripted violations (#15/#43-47) ──────────────────────────────────
+    # A tutorial day has to be able to say "slot 3 demonstrates brute force",
+    # not merely "slot 3 is a Bad Actor" — an archetype rolls from a pool of
+    # eight-ish kinds, so the day that TEACHES a mechanic could not reliably
+    # contain an example of it. Forced kinds are planted before the random
+    # roll and consume their severity slot, so the archetype's budget is still
+    # respected and the candidate does not end up carrying more than its
+    # design allows.
+    #
+    # Filtered through `eligible`, deliberately: a script may not smuggle in a
+    # violation the day's tier gate, expressibility rule or allowed_violations
+    # whitelist forbids. Silently, because the caller has already validated
+    # this (content_loader) and raised a useful error naming the day file — a
+    # second raise here would only fire on hand-built Day objects in tests.
+    forced_taken = {"critical": 0, "major": 0, "minor": 0}
+    for kind in forced_kinds:
+        if kind in used or kind not in eligible:
+            continue
+        revealed_by, kind_sev = _SEVERITY_REVEAL[kind]
+        budget_for_sev = getattr(spec.budget, kind_sev)
+        if forced_taken[kind_sev] >= budget_for_sev:
+            continue
+        chosen.append(Discrepancy(
+            kind=kind,
+            severity=kind_sev,  # type: ignore[arg-type]
+            revealed_by=revealed_by,
+            description=_DISCREPANCY_DESCRIPTIONS[kind],
+        ))
+        used.add(kind)
+        forced_taken[kind_sev] += 1
+        # Same single-artifact exclusivity the random roll obeys: forcing a
+        # stego kind must still lock the other two out, or a scripted day is
+        # the one place the guarantee breaks.
+        for group in _EXCLUSIVE_ARTIFACT_GROUPS:
+            if kind in group:
+                used.update(group)
+
+    take("critical", spec.budget.critical - forced_taken["critical"])
+    take("major",    spec.budget.major    - forced_taken["major"])
+    take("minor",    spec.budget.minor    - forced_taken["minor"])
     return chosen
 
 
@@ -951,7 +1041,9 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     discrepancies = _roll_discrepancies(rng_disc, spec, day.number,
                                         day.allowed_violations,
                                         day.difficulty_band,
-                                        affiliation)
+                                        affiliation,
+                                        # #15: scripted violations for this slot
+                                        day.forced_violations.get(slot_index, ()))
 
     # #53: a typosquat handle can only be built once we know the kind was
     # actually planted, so the handle is overridden here rather than inside

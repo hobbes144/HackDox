@@ -1,8 +1,47 @@
 {
-  "day1_intro_friendly": "Welcome to HackDox. I'll be honest with you — the whole system's already been hacked. That's why you're here, doing this by hand. Just follow the rulebook. We'll talk again at the end of your shift.",
+  "_comment_1": "EVERY line the Overseer speaks lives in this file. Keys are looked up by content_loader.resolve_narrative(): a day-specific key wins, then the matching generic_* key below, then a hard-coded last resort in content_loader._LAST_RESORT. Blank a value to fall through to the generic copy.",
+  "_comment_2": "Per-day keys are named by day_NN.json's overseer_intro_key / overseer_outro_keys, and dayN_between by convention. Synthesized days (any day with no day_NN.json) ask for dayN_intro, dayN_outro_<performance> and dayN_between; authoring those keys here is enough to give an unauthored day real copy, no code change needed.",
+
+  "generic_intro": "Same as yesterday. Read the book, work the line, and don't let anything through you can't account for.",
+  "generic_outro_excellent": "Clean shift. Nothing to talk about, which is the best thing I can say about a day in this building.",
+  "generic_outro_passing": "That'll do. The line moved and the site's still standing.",
+  "generic_outro_poor": "Something got past you today. I'd rather that didn't turn into a pattern.",
+  "generic_outro_failed": "We need to talk about today. Not here.",
+  "generic_between": "Rest while you can. Tomorrow's list is longer, and the rules won't be getting any kinder. Spend your HackDollar$ wisely.",
+
+  "day1_intro_friendly": "Welcome to HackDox. I'll be honest with you — the whole system's already been hacked. That's why you're here, doing this by hand.\nHere's the shape of it. People apply to get in. You decide who does. Every one you wave through that shouldn't have been, the site takes damage — that's the number in the corner, and if it hits zero we're both out of a job.\nToday you have their dossier and nothing else. Read it, and cast a verdict. The rulebook is on the R key. Use it.\nAnd watch the clock — that's ⏱, your budget for the day. You'll want it later. We'll talk again at the end of your shift.",
   "day1_outro_praise": "Good shift. The line moved, the right people got in, the wrong people didn't. That's all we ask.",
   "day1_outro_measured": "You're learning. Tomorrow's faster. Keep your eyes open.",
   "day1_outro_warning": "You let one slip through. We notice. Don't make a habit of it.",
   "day1_outro_failed": "I'm going to need you to stay behind. We need to have a conversation about your performance.",
-  "day1_between": "Not bad for a first shift. The site held. Listen — the pay you earned tonight, the HackDollars, spend them here. Tools get cheaper, the terminal gets smarter. And those Credits? Ground truth on demand. Use them when you truly cannot call it. Tomorrow the list gets longer."
+  "day1_between": "Not bad for a first shift. The site held. Listen — the pay you earned tonight, the HackDollars, spend them here. Tools get cheaper, the terminal gets smarter. And those Credits? Ground truth on demand. Use them when you truly cannot call it. Tomorrow the list gets longer.",
+
+  "day2_intro": "You read a dossier well enough. Problem is, a dossier is whatever they typed into it.\nSo today you get to check. Ghostscan looks the applicant up — where their handle turns up, whether the organisation on their form is the organisation on their profiles, and whether their email is sitting in a breach corpus. That last one is the panel on the right; it's a fixed list, so learn it and it stops costing you time.\nIt isn't free. Nothing here is. Spend the hours where the dossier already made you suspicious, not on everyone.",
+  "day2_outro_excellent": "You used the tool where it mattered and left it alone where it didn't. That's the whole job.",
+  "day2_outro_passing": "Reasonable. You're still scanning people the dossier had already answered for you, but you'll stop.",
+  "day2_outro_poor": "You've got a tool now and something still walked past you. Use it.",
+  "day2_outro_failed": "Two days. I'd like to say I'm surprised.",
+  "day2_between": "One more list on that panel soon. It grows, it doesn't change — anything you learn tonight is still true next week.",
+
+  "day3_intro": "Everyone who applies submits a credential. Hashcrack tells you what it's worth.\nThree things to know. The algorithm is on the dossier already, free — bcrypt is solid, SHA256 is middling, MD5 is a joke. Then there's what the password actually is, and for that you have to crack it. A weak password is sloppiness. A password sitting in a breach corpus is something else.\nThe log also shows you where they logged in from. Compare it to what they claimed. People forget that part.",
+  "day3_outro_excellent": "You cracked the ones worth cracking. bcrypt is never worth cracking, and you clearly worked that out.",
+  "day3_outro_passing": "Fine. You're spending hours on hashes that told you everything from the chip alone.",
+  "day3_outro_poor": "A bad password isn't a crime. A breached one is. You're not separating them.",
+  "day3_outro_failed": "Stay behind.",
+  "day3_between": "A second breach corpus is live as of today. Reused passwords show up in more than one — that's the tell.",
+
+  "day4_intro": "Logwatch. And a warning: this one doesn't hand you your applicant.\nIt's the whole day's traffic, every account, sorted by time. Your candidate is somewhere in there among people who have nothing to do with them. Finding them is the skill.\nWhat you're looking for: a wall of failed logins, access at hours nobody works, or two logins from places nobody could travel between in the time. Any of those, from their account, and you have your answer.",
+  "day4_outro_excellent": "You found them in the noise. Most people take a week to do that.",
+  "day4_outro_passing": "You got there. Slowly, but you got there.",
+  "day4_outro_poor": "The evidence was in the log. You didn't go and get it.",
+  "day4_outro_failed": "We're done for today. Don't come back tomorrow assuming you still work here.",
+  "day4_between": "Last tool tomorrow. Then you'll have the full set, and I'll stop explaining things.",
+
+  "day5_intro": "Last one. Some of them submit an image with their application, and some of those images are carrying something.\nStegotool. Press X for stamp mode, arrows to move, Space to stamp — one hour a stamp, so aim. When you hit carrier data the signature colours tell you what it is: amber is plaintext, crimson is encrypted, violet is a command-and-control beacon. That last one is not an accident and not a mistake.\nStamp where the image looks wrong, not everywhere.",
+  "day5_outro_excellent": "Good. You found it without stamping the picture into confetti.",
+  "day5_outro_passing": "You got there. Watch the hours — every stamp is one.",
+  "day5_outro_poor": "Something went out with a payload in it today.",
+  "day5_outro_failed": "That's five days and I'm still having this conversation.",
+  "day5_graduation": "That's everything. Every tool you're getting, you have.\nFrom here I stop walking you through it. The rulebook is still the rulebook, but it changes — sometimes overnight, and I'll tell you when it does, though not always with much notice.\nAnd the applicants get better at this. The obvious ones thin out. What's left are the ones who know exactly what you check.\nGood luck.",
+  "day5_between": "You're through the training days. Tomorrow the list is longer, the tools cost more, and nobody is going to tell you which page to open. Spend what you earned."
 }

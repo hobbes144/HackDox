@@ -1,0 +1,74 @@
+{
+  "number": 5,
+  "title": "Day 5 — What's In The Picture",
+  "candidate_count": 6,
+
+  "_comment": "Stegotool day (#47), and the last tutorial day. Rulebook inherited from day_01.json. The graduation beat plays off the 'day5_graduation' narrative key at end of day.",
+
+  "archetype_mix": {
+    "obvious_admit": 1,
+    "sneaky_bugger": 3,
+    "day_to_day": 1,
+    "the_professional": 1
+  },
+
+  "allowed_violations": [
+    "disposable_email", "hostile_chat", "unsalted_storage",
+    "affiliation_not_stated", "weak_encryption",
+    "breach_hit", "email_github_mismatch", "affiliation_mismatch",
+    "affiliation_unlisted", "missing_public_profile",
+    "weak_credential", "leaked_password", "cross_breach_reuse",
+    "brute_force_in_log", "credential_stuffing", "impossible_travel",
+    "insider_behavior", "after_hours_access", "claimed_ip_mismatch",
+    "stego_payload_present", "encrypted_payload", "covert_c2_channel"
+  ],
+
+  "forced_includes": {
+    "0": "obvious_admit",
+    "1": "sneaky_bugger",
+    "2": "day_to_day",
+    "3": "sneaky_bugger",
+    "4": "the_professional",
+    "5": "sneaky_bugger"
+  },
+
+  "_comment_script": "One candidate per signature colour, in escalating order: amber plaintext, crimson encrypted, violet C2. Every candidate submits exactly one image and carries at most one payload kind, so three slots is the only way to teach all three legends in a day.",
+  "forced_violations": {
+    "1": ["stego_payload_present"],
+    "3": ["encrypted_payload"],
+    "5": ["covert_c2_channel"]
+  },
+
+  "quotas": {
+    "min_correct_admits": 2,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "easy",
+  "overseer_intro_key": "day5_intro",
+  "overseer_outro_keys": {
+    "excellent": "day5_outro_excellent",
+    "passing": "day5_outro_passing",
+    "poor": "day5_outro_poor",
+    "failed": "day5_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Stegotool is live — the last one. Any covert payload in a submitted image is a deny, whatever colour it comes up.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "Amber signature — plaintext payload hidden in the image. Deny.",
+      "Crimson signature — encrypted or obfuscated payload. Deny.",
+      "Violet signature — command-and-control beacon. Deny, and it is the worst of the three.",
+      "One stamp costs one hour. Stamp where the image looks wrong, not everywhere.",
+      "From tomorrow the rulebook starts changing. I'll tell you when it does."
+    ]
+  }
+}

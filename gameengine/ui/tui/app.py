@@ -39,7 +39,9 @@ from gameengine.core import (candidate_gen, persistence, rules_engine, scoring,
 
 # Shortcut so BINDINGS class attributes can be built from config at import time.
 _B = config.KEY_BINDINGS
-from gameengine.core.content_loader import load_day, load_narratives
+from gameengine.core.content_loader import (generic_outro_key, load_day,
+                                            load_narratives,
+                                            resolve_narrative)
 from gameengine.core.models import (
     Candidate,
     CandidateResult,
@@ -3283,14 +3285,18 @@ class HackDoxApp(App):
                 max(self._lab_day.number, max(config.TOOL_UNLOCK_DAY.values())))
         self._day_start_health = self._state.site_health
         self._day = self._lab_day or load_day(self._state.current_day)
-        narrative = self._narratives.get(self._day.overseer_intro_key, "")
+        # #15: falls through to generic copy rather than an empty panel — days
+        # 2-20 had no authored intro key at all and opened on silence.
+        narrative = resolve_narrative(
+            self._narratives, self._day.overseer_intro_key, "generic_intro")
         self.pop_screen()
         self.push_screen(BriefingScreen(self._day, narrative, self._state))
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
         self._day_start_health = self._state.site_health
-        intro = self._narratives.get(self._day.overseer_intro_key, "")
+        intro = resolve_narrative(
+            self._narratives, self._day.overseer_intro_key, "generic_intro")
         self.pop_screen()
         self.push_screen(IntakeScreen(self._day, self._state, intro))
 
@@ -3310,7 +3316,9 @@ class HackDoxApp(App):
         outro_key   = self._day.overseer_outro_keys.get(
             performance, self._day.overseer_outro_keys[Performance.PASSING]
         )
-        narrative = self._narratives.get(outro_key, "...")
+        # #15: was the literal string "..." on every unauthored day.
+        narrative = resolve_narrative(self._narratives, outro_key,
+                                      generic_outro_key(performance))
         self.pop_screen()
         self.push_screen(EODScreen(
             self._day, self._state, narrative, performance,
@@ -3325,11 +3333,12 @@ class HackDoxApp(App):
     def show_between_day(self) -> None:
         """EOD → between-day menu (issue #22)."""
         assert self._state is not None and self._day is not None
-        narrative = self._narratives.get(
-            f"day{self._day.number}_between",
-            "Rest while you can. Tomorrow's list is longer, and the rules "
-            "won't be getting any kinder. Spend your HackDollar$ wisely.",
-        )
+        # #15: the generic copy moved into overseer.json under
+        # "generic_between", so every line the Overseer speaks lives in one
+        # editable file rather than half of it being buried in the UI.
+        narrative = resolve_narrative(
+            self._narratives, f"day{self._day.number}_between",
+            "generic_between")
         self.pop_screen()
         self.push_screen(BetweenDayScreen(
             self._day, self._state, narrative,
@@ -3367,7 +3376,10 @@ class HackDoxApp(App):
             self.push_screen(CampaignEndScreen(st.current_day))
             return
         self._day_start_health = st.site_health
-        narrative = self._narratives.get(self._day.overseer_intro_key, "")
+        # #15: falls through to generic copy rather than an empty panel — days
+        # 2-20 had no authored intro key at all and opened on silence.
+        narrative = resolve_narrative(
+            self._narratives, self._day.overseer_intro_key, "generic_intro")
         self.pop_screen()
         self.push_screen(BriefingScreen(self._day, narrative, self._state,
                                         prev_day=prev_day))

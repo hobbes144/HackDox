@@ -29,6 +29,31 @@ def day1():
     return load_day(1)
 
 
+def unconstrained_day():
+    """Day 1's shape with its AUTHORED scripting stripped off.
+
+    Most tests below use `load_day(1)` as a stand-in for "a generic day" and
+    then `dataclasses.replace` a day number and archetype onto it. That worked
+    only while day_01.json happened to script nothing. Batch 4 gave it a real
+    tutorial script — allowed_violations, forced_includes, forced_violations —
+    and seventeen tests promptly broke, every one of them by *silently getting
+    what the content author asked for* rather than what the test meant.
+
+    The coupling is the same one that makes synthesize_day inherit from day 1,
+    and it is worth naming: authored content SHOULD constrain generation. A
+    test that wants the engine's unconstrained behaviour has to say so, rather
+    than depend on the tutorial day staying empty forever.
+    """
+    from dataclasses import replace
+    return replace(
+        load_day(1),
+        allowed_violations=(),
+        forced_includes={},
+        forced_violations={},
+        rule_sheet=None,
+    )
+
+
 def test_candidate_gen_is_deterministic(day1):
     a = candidate_gen.generate(SEED, day1, slot_index=0)
     b = candidate_gen.generate(SEED, day1, slot_index=0)
@@ -44,12 +69,21 @@ def test_day1_produces_expected_archetype_count(day1):
         for i in range(day1.candidate_count)
     ]
     counts = {a: archetypes.count(a) for a in set(archetypes)}
-    # Day 1 mix: 2 obvious admit, 1 day-to-day, 1 clumsy, 1 bad actor, 1 sneaky.
+    # Day 1 mix (#15): 2 obvious admit, 1 incompatible, 1 day-to-day,
+    # 1 clumsy, 1 bad actor.
+    #
+    # The SNEAKY_BUGGER slot was removed here, and its absence is the point.
+    # Every kind that archetype is eligible for is tool-revealed, and no tool
+    # is unlocked on day 1 — so the evidence-tier gate emptied its pool and it
+    # generated with ZERO discrepancies while still scoring as a DENY. A
+    # player's first shift contained a candidate who was wrong to admit with
+    # nothing anywhere on screen to say so.
     assert counts[Archetype.OBVIOUS_ADMIT] == 2
+    assert counts[Archetype.THE_INCOMPATIBLE] == 1
     assert counts[Archetype.DAY_TO_DAY] == 1
     assert counts[Archetype.CLUMSY_CUTIE] == 1
     assert counts[Archetype.BAD_ACTOR] == 1
-    assert counts[Archetype.SNEAKY_BUGGER] == 1
+    assert Archetype.SNEAKY_BUGGER not in counts
 
 
 def test_obvious_admit_has_no_discrepancies(day1):
@@ -211,12 +245,37 @@ def test_intro_day_matches_tool_schedule():
 # ─── Per-day candidate spec (#32) ────────────────────────────────────────────
 
 
-def test_day_spec_fields_default_on_pre32_files():
-    """A day file without the #32 keys loads with harmless defaults."""
+def test_day_spec_fields_default_on_pre32_files(tmp_path, monkeypatch):
+    """A day file without the #32/#15/#49 keys loads with harmless defaults.
+
+    Used to assert this against day_01.json, which worked only for as long as
+    day 1 declared none of them. It does now (#15's tutorial script), and that
+    is correct content — so the backward-compatibility claim needs a genuinely
+    minimal file to make it against, rather than borrowing whichever real day
+    happened to be empty this week.
+    """
+    import json
+    minimal = {
+        "number": 1,
+        "title": "Minimal",
+        "candidate_count": 6,
+        "archetype_mix": {"obvious_admit": 3, "bad_actor": 3},
+        "rules": [{"id": "r", "text": "t",
+                   "predicate": "has_discrepancy:hostile_chat"}],
+        "quotas": {"min_correct_admits": 2, "max_false_admits": 1},
+        "overseer_intro_key": "x",
+        "overseer_outro_keys": {"excellent": "a", "passing": "b",
+                                "poor": "c", "failed": "d"},
+    }
+    (tmp_path / "day_01.json").write_text(json.dumps(minimal), encoding="utf-8")
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+
     day = load_day(1)
     assert day.allowed_violations == ()
     assert day.difficulty_band == "easy"
     assert day.forced_includes == {}
+    assert day.forced_violations == {}
+    assert day.rule_sheet is None
 
 
 def test_forced_includes_pins_archetype_to_slot():
@@ -235,16 +294,19 @@ def test_forced_include_preserves_declared_mix():
     the forced pick is subtracted from the bag, not added on top."""
     import dataclasses
     from collections import Counter
-    day = dataclasses.replace(load_day(1), number=5,
+    # unconstrained_day() rather than load_day(1): day 1 now pins all six
+    # slots itself (#15), which would make "the forced pick is subtracted from
+    # the bag" trivially true by never consulting the bag at all.
+    mix = {Archetype.OBVIOUS_ADMIT: 2, Archetype.DAY_TO_DAY: 1,
+           Archetype.CLUMSY_CUTIE: 1, Archetype.BAD_ACTOR: 1,
+           Archetype.SNEAKY_BUGGER: 1}
+    day = dataclasses.replace(unconstrained_day(), number=5,
+                              archetype_mix=mix,
                               forced_includes={0: Archetype.SNEAKY_BUGGER})
     got = [candidate_gen.generate(SEED, day, i).archetype
            for i in range(day.candidate_count)]
     assert got[0] == Archetype.SNEAKY_BUGGER
-    assert dict(Counter(got)) == {
-        Archetype.OBVIOUS_ADMIT: 2, Archetype.DAY_TO_DAY: 1,
-        Archetype.CLUMSY_CUTIE: 1, Archetype.BAD_ACTOR: 1,
-        Archetype.SNEAKY_BUGGER: 1,
-    }
+    assert dict(Counter(got)) == mix
 
 
 def test_allowed_violations_whitelist_restricts_planted_kinds():
@@ -436,7 +498,7 @@ def test_synthesized_day_generation_is_deterministic():
 def test_scale_archetype_mix_preserves_total_and_never_drops_an_archetype():
     from gameengine.core.content_loader import scale_archetype_mix
 
-    base = load_day(1).archetype_mix
+    base = unconstrained_day().archetype_mix
     for target in range(1, 25):
         scaled = scale_archetype_mix(base, target)
         # Exactness is the hard requirement: _pick_archetype_for_slot walks the
@@ -853,7 +915,7 @@ def test_apply_records_both_tracks_on_the_result(day1):
 def _elite_faker(archetype, kind):
     """Generate a candidate carrying `kind`, searching seeds/days for one."""
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     for day_n in range(1, 8):
         day = replace(base, number=day_n,
                       forced_includes={0: archetype},
@@ -926,7 +988,7 @@ def test_the_professional_still_gets_its_affiliation_confirmed():
     from gameengine.core import tools_bridge
     import random as _r
 
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=1,
                   forced_includes={0: Archetype.THE_PROFESSIONAL},
                   archetype_mix={**base.archetype_mix,
@@ -1062,7 +1124,7 @@ def _filtered_output(candidate, kind, day, seed) -> str:
 def _candidates_by_kind(kind, want: bool, limit: int = 3):
     """Up to `limit` (candidate, day, seed) triples that do / don't carry `kind`."""
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     found = []
     for archetype, spec in candidate_gen.ARCHETYPE_SPECS.items():
         if want and kind not in spec.eligible_kinds:
@@ -1192,7 +1254,7 @@ def _candidates_without_kind_per_archetype(kind, per_day: int = 3):
     """
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     found = []
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         for day_n in range(1, 8):
@@ -1330,7 +1392,7 @@ def test_single_artifact_groups_are_mutually_exclusive():
         "credential": candidate_gen._CREDENTIAL_ARTIFACT_KINDS,
         "stego":      candidate_gen._STEGO_ARTIFACT_KINDS,
     }
-    base = load_day(1)
+    base = unconstrained_day()
     seen_stego = 0
     for day_n in (1, 5, 7):
         for archetype in candidate_gen.ARCHETYPE_SPECS:
@@ -1389,7 +1451,7 @@ def test_missing_public_profile_never_lands_before_ghostscan_unlocks():
     """
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     rollers = [a for a, s in candidate_gen.ARCHETYPE_SPECS.items()
                if DiscrepancyKind.MISSING_PUBLIC_PROFILE in s.eligible_kinds]
     assert rollers, "no archetype rolls MISSING_PUBLIC_PROFILE — test is inert"
@@ -1428,7 +1490,7 @@ def _edit_distance(a: str, b: str) -> int:
 
 def _typosquat_candidates(limit=25):
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     out = []
     for day_n in (3, 5, 7):
         day = replace(base, number=day_n,
@@ -1472,7 +1534,7 @@ def test_typosquat_handle_is_actually_a_lookalike():
 def test_squat_target_is_never_recorded_when_the_kind_is_absent():
     """Engine-only ground truth must not leak onto candidates without it."""
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     checked = 0
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         day = replace(base, number=5,
@@ -1543,7 +1605,7 @@ def test_typosquat_is_minor_and_reachable():
 
 def test_typosquat_generation_is_deterministic():
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=5,
                   forced_includes={0: Archetype.SNEAKY_BUGGER},
                   archetype_mix={**base.archetype_mix, Archetype.SNEAKY_BUGGER: 1})
@@ -1561,7 +1623,7 @@ def test_typosquat_generation_is_deterministic():
 def _stego_images(limit=30, day_n=6):
     from dataclasses import replace
     from gameengine.core import tools_bridge
-    base = load_day(1)
+    base = unconstrained_day()
     out = []
     for archetype in (Archetype.SNEAKY_BUGGER, Archetype.BAD_ACTOR,
                       Archetype.WHITE_HAT):
@@ -1624,7 +1686,7 @@ def test_clean_image_has_no_zone_and_no_hint_region():
     from dataclasses import replace
     from gameengine.core import tools_bridge
 
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=6,
                   forced_includes={0: Archetype.OBVIOUS_ADMIT},
                   archetype_mix={**base.archetype_mix,
@@ -1677,7 +1739,7 @@ def test_stego_image_is_deterministic():
     from dataclasses import replace
     from gameengine.core import tools_bridge
 
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=6,
                   forced_includes={0: Archetype.SNEAKY_BUGGER},
                   archetype_mix={**base.archetype_mix, Archetype.SNEAKY_BUGGER: 1})
@@ -1705,7 +1767,7 @@ def test_every_generated_disposable_candidate_is_actually_detectable():
     from dataclasses import replace
     from gameengine.core import tools_bridge
 
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=2,
                   forced_includes={0: Archetype.THE_INCOMPATIBLE},
                   archetype_mix={**base.archetype_mix,
@@ -1752,7 +1814,7 @@ def test_no_hint_text_tells_the_player_to_flag_a_nonexistent_violation():
     from dataclasses import replace
     from gameengine.core import tools_bridge
 
-    base = load_day(1)
+    base = unconstrained_day()
     seen_privacy = False
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         day = replace(base, number=2,
@@ -1783,7 +1845,7 @@ AFFIL_KINDS = (
 def _affil_case(kind):
     """A candidate carrying `kind`, plus the seed and day it came from."""
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         day = replace(base, number=5,
                       forced_includes={0: archetype},
@@ -1885,7 +1947,7 @@ def test_a_trusted_affiliation_can_never_be_faked():
     generation, not just rendering, so the ground truth cannot contradict it."""
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     checked = 0
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         day = replace(base, number=5,
@@ -1912,7 +1974,7 @@ def test_affiliation_violations_are_mutually_exclusive():
     nothing was claimed, so there is nothing for MISMATCH to disagree with)."""
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     group = candidate_gen._AFFILIATION_KINDS
     for day_n in (2, 5):
         for archetype in candidate_gen.ARCHETYPE_SPECS:
@@ -1940,7 +2002,7 @@ def _algo(h: str | None) -> str:
 
 def _credential_sweep(days=(5,), seeds=300):
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     for day_n in days:
         for archetype in candidate_gen.ARCHETYPE_SPECS:
             day = replace(base, number=day_n,
@@ -2041,7 +2103,7 @@ def test_derived_weak_encryption_respects_the_day_whitelist():
     or `lab -v` and authored day content would both quietly lie."""
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=5,
                   forced_includes={0: Archetype.CLUMSY_CUTIE},
                   archetype_mix={**base.archetype_mix, Archetype.CLUMSY_CUTIE: 1},
@@ -2104,7 +2166,7 @@ def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
     """
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     divergent = []
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         day = replace(base, number=5,
@@ -2130,7 +2192,7 @@ def test_the_incompatible_is_deniable_by_the_book():
     by-the-book player admitted every single one."""
     from dataclasses import replace
 
-    base = load_day(1)
+    base = unconstrained_day()
     day = replace(base, number=2,
                   forced_includes={0: Archetype.THE_INCOMPATIBLE},
                   archetype_mix={**base.archetype_mix,
@@ -2162,7 +2224,7 @@ _BREACH_TEST_SEED = 20260818
 def _breach_carriers(kind, day_n, per_archetype=4):
     """(candidate, day) pairs on `day_n` carrying `kind`."""
     from dataclasses import replace
-    base = load_day(1)
+    base = unconstrained_day()
     out = []
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         taken = 0
@@ -2187,7 +2249,7 @@ def test_breach_lists_are_alphabetized():
     occupy.
     """
     from gameengine.core import tools_bridge
-    base = load_day(1)
+    base = unconstrained_day()
     c = candidate_gen.generate(7, base, 0)
     lists = tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, 20)
     assert lists, "no databases returned on the last unlock day"
@@ -2207,7 +2269,7 @@ def test_breach_lists_are_identical_for_every_candidate():
     candidates' views is each one's own seeded address.
     """
     from gameengine.core import tools_bridge
-    base = load_day(1)
+    base = unconstrained_day()
     noise = None
     for seed in range(6):
         c = candidate_gen.generate(seed, base, 0)
@@ -2230,7 +2292,7 @@ def test_breach_lists_are_identical_for_every_candidate():
 def test_breach_panel_shows_only_unlocked_databases():
     """Difficulty comes from ADDING corpora, and none is ever removed (#61)."""
     from gameengine.core import tools_bridge
-    base = load_day(1)
+    base = unconstrained_day()
     c = candidate_gen.generate(3, base, 0)
     seen_before: set[str] = set()
     for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
@@ -2320,7 +2382,7 @@ def test_cross_breach_reuse_is_not_plantable_below_two_databases(monkeypatch):
         delayed[name] = max(intro, 9)
     monkeypatch.setattr(config, "BREACH_DB_UNLOCK_DAY", delayed)
 
-    base = load_day(1)
+    base = unconstrained_day()
     tested_past_the_tier_gate = False
     for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
         if len(config.breach_dbs_unlocked_by(day_n)) >= config.MIN_BREACH_DBS_FOR_REUSE:
@@ -2358,3 +2420,262 @@ def test_breach_db_tables_do_not_drift():
         "config.BREACH_DB_UNLOCK_DAY and tools_bridge._BREACH_DATABASES have "
         "drifted — a candidate can be planted into a corpus the panel never "
         "renders, which is exactly how #57 happened")
+
+
+# ─── Issues #15 / #43-47 / #48 / #49 — tutorial content machinery ───────────
+#
+# The failure mode these guard against is specific and nasty: scripted content
+# that silently stops working. A day file that asks for a violation the day
+# cannot express does not crash — the generator just drops it, the shift still
+# plays, and the day that exists to TEACH a mechanic quietly stops containing
+# an example of it. Nobody notices until a playtester says the tutorial felt
+# thin.
+
+TUTORIAL_DAYS = tuple(range(1, config.TUTORIAL_LAST_DAY + 1))
+
+
+def test_every_tutorial_day_actually_contains_its_scripted_violations():
+    """A scripted violation must land in the candidate, on every seed (#43-47).
+
+    Checked across seeds rather than on one, because everything that could drop
+    a forced kind is seed-dependent: the archetype's severity budget, the
+    single-artifact exclusivity groups, and #56's trusted-organisation bypass
+    (which refuses to fake an affiliation on a candidate who claimed an elite
+    org — so a scripted AFFILIATION_MISMATCH on the wrong archetype would land
+    on most seeds and vanish on others).
+    """
+    for day_n in TUTORIAL_DAYS:
+        day = load_day(day_n)
+        assert day.forced_violations, (
+            f"day {day_n} is a tutorial day but scripts no violations — it "
+            f"cannot demonstrate the mechanic it introduces")
+        for slot, kinds in day.forced_violations.items():
+            for seed in range(25):
+                got = {d.kind for d in candidate_gen.generate(seed, day, slot)
+                       .truth.discrepancies}
+                missing = sorted(k.name for k in kinds if k not in got)
+                assert not missing, (
+                    f"day {day_n} slot {slot} seed {seed}: scripted "
+                    f"{missing} did not land. The day still plays and still "
+                    f"scores — it just no longer teaches what it exists to "
+                    f"teach.")
+
+
+def test_every_tutorial_day_has_a_clean_admit_and_a_clear_deny():
+    """#15's core AC: one of each, per day, so the contrast is teachable."""
+    for day_n in TUTORIAL_DAYS:
+        day = load_day(day_n)
+        for seed in range(10):
+            cands = [candidate_gen.generate(seed, day, i)
+                     for i in range(day.candidate_count)]
+            clean = [c for c in cands if not c.truth.discrepancies]
+            dirty = [c for c in cands if c.truth.discrepancies]
+            assert clean, (f"day {day_n} seed {seed}: no candidate is clean — "
+                           f"the player never sees what a correct admit "
+                           f"looks like")
+            assert dirty, f"day {day_n} seed {seed}: no candidate is deniable"
+
+
+def test_tutorial_days_never_plant_a_violation_their_tools_cannot_reveal():
+    """The teaching order in #15 and config.TOOL_UNLOCK_DAY must agree.
+
+    The Sneaky Bugger on the original day_01.json is the case this exists for:
+    every kind it is eligible for is tool-revealed, no tool is unlocked on day
+    1, so it generated carrying NOTHING while still scoring as a DENY.
+    """
+    for day_n in TUTORIAL_DAYS:
+        day = load_day(day_n)
+        for slot in range(day.candidate_count):
+            for seed in range(25):
+                c = candidate_gen.generate(seed, day, slot)
+                for d in c.truth.discrepancies:
+                    assert intro_day(d.kind) <= day_n, (
+                        f"day {day_n} slot {slot} seed {seed} carries "
+                        f"{d.kind.name}, revealed by a tool not taught until "
+                        f"day {intro_day(d.kind)}")
+                if candidate_gen.ARCHETYPE_SPECS[c.archetype].correct_verdict \
+                        is Verdict.DENY:
+                    assert c.truth.discrepancies, (
+                        f"day {day_n} slot {slot} seed {seed}: "
+                        f"{c.archetype.value} scores as a DENY but carries no "
+                        f"violation at all — unflaggable by construction")
+
+
+def test_no_day_opens_or_closes_on_a_blank_overseer():
+    """Days 2-20 opened on an empty panel and closed on the literal '...' (#15).
+
+    synthesize_day assigns narrative keys that are allowed not to exist, which
+    was fine; what was missing was any second layer for them to fall through
+    to. Covers the whole campaign, not just the authored days — the generic
+    copy is exactly what days 6-20 rely on.
+    """
+    from gameengine.core import content_loader
+    from gameengine.core.models import Performance
+    narratives = content_loader.load_narratives()
+    for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        day = load_day(day_n)
+        intro = content_loader.resolve_narrative(
+            narratives, day.overseer_intro_key, "generic_intro")
+        assert intro.strip(), f"day {day_n} opens on an empty Overseer panel"
+        for perf in Performance:
+            outro = content_loader.resolve_narrative(
+                narratives, day.overseer_outro_keys[perf],
+                content_loader.generic_outro_key(perf))
+            assert outro.strip() and outro.strip() != "...", (
+                f"day {day_n} {perf.value} closes on {outro!r}")
+        between = content_loader.resolve_narrative(
+            narratives, f"day{day_n}_between", "generic_between")
+        assert between.strip(), f"day {day_n} has no between-day beat"
+
+
+def test_every_tutorial_day_introduces_its_tool_and_narrates_it():
+    """Each of days 1-5 introduces exactly one page, in the order #15 sets."""
+    expected = {2: "ghostscan", 3: "hashcrack", 4: "logwatch", 5: "stegotool"}
+    for day_n in TUTORIAL_DAYS:
+        assert config.tool_introduced_on(day_n) == expected.get(day_n), (
+            f"day {day_n} introduces {config.tool_introduced_on(day_n)!r}, "
+            f"teaching order says {expected.get(day_n)!r}")
+
+
+def test_authored_days_inherit_the_rulebook_from_day_one():
+    """An authored day omitting `rules` gets day 1's, with today's flips (#15).
+
+    The alternative — restating 27 rules in every day file — is five places for
+    the rulebook to drift, and the drift would be invisible: the day would
+    simply score against a slightly different book than the one the player was
+    shown yesterday.
+    """
+    from gameengine.core.content_loader import mutate_variable_rules
+    day1 = load_day(1)
+    for day_n in range(2, config.TUTORIAL_LAST_DAY + 1):
+        day = load_day(day_n)
+        assert {r.id for r in day.rules} == {r.id for r in day1.rules}, (
+            f"day {day_n}'s rulebook has drifted from day 1's")
+        assert day.rules == mutate_variable_rules(day1.rules, day_n), (
+            f"day {day_n}'s inherited rules do not match the flips #36 would "
+            f"announce in the briefing")
+
+
+def test_forced_violations_are_validated_when_the_day_loads(tmp_path, monkeypatch):
+    """A script asking for an unteachable violation must fail LOUDLY (#15).
+
+    Validated in content_loader rather than the generator, because this is the
+    only place the error can name the file the author has open. Dropped
+    silently — which is what the generator does — the day still plays and
+    simply teaches nothing.
+    """
+    import json
+    base = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+
+    def write(**overrides):
+        raw = {**base, **overrides}
+        (tmp_path / "day_01.json").write_text(json.dumps(raw), encoding="utf-8")
+        monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+
+    # A stegotool violation on day 1 — the tool is four days away.
+    write(forced_violations={"0": ["covert_c2_channel"]})
+    with pytest.raises(ValueError, match="not taught until day 5"):
+        load_day(1)
+
+    # A slot the day doesn't have.
+    write(forced_violations={"99": ["hostile_chat"]})
+    with pytest.raises(ValueError, match="only has 6 slots"):
+        load_day(1)
+
+    # A kind the day's own whitelist excludes — the two would contradict.
+    write(allowed_violations=["hostile_chat"],
+          forced_violations={"0": ["disposable_email"]})
+    with pytest.raises(ValueError, match="allowed_violations"):
+        load_day(1)
+
+
+def test_rule_sheet_round_trips_and_renders(tmp_path, monkeypatch):
+    """#49: the authored approved/denied block reaches the Reference panel."""
+    from gameengine.ui.tui import rules_content
+
+    for day_n in TUTORIAL_DAYS:
+        day = load_day(day_n)
+        assert day.rule_sheet is not None, (
+            f"day {day_n} has no authored rule sheet — #49 requires one per "
+            f"authored day")
+        dossier = rules_content.build_dossier_text(day)
+        rules   = rules_content.build_rules_text(day)
+        for line in (day.rule_sheet.approved_domains
+                     + day.rule_sheet.denied_domains
+                     + day.rule_sheet.approved_affiliations
+                     + day.rule_sheet.denied_affiliations):
+            assert line in dossier, (
+                f"day {day_n}: rule-sheet entry {line!r} is authored but never "
+                f"rendered — #49 says the panel shows it VERBATIM")
+        assert day.rule_sheet.summary in rules
+        for note in day.rule_sheet.notes:
+            assert note in rules
+
+    # A synthesized day authors nothing and must render exactly as before #49.
+    synth = load_day(config.TUTORIAL_LAST_DAY + 1)
+    assert synth.rule_sheet is None
+    assert "today's rule sheet" not in rules_content.build_dossier_text(synth)
+
+
+def test_unknown_rule_sheet_key_fails_loudly(tmp_path, monkeypatch):
+    """A typo'd key must not silently mean 'authored nothing' (#49)."""
+    import json
+    base = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    base["rule_sheet"] = {"aproved": {"domains": ["gmail.com"]}}
+    (tmp_path / "day_01.json").write_text(json.dumps(base), encoding="utf-8")
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    with pytest.raises(ValueError, match="Unknown rule_sheet key"):
+        load_day(1)
+
+
+# ─── Issue #48 — word banks are single-sourced ─────────────────────────────
+
+
+def test_domain_word_banks_are_derived_not_copied():
+    """tools_bridge must not keep its own copies of the domain banks (#48/#57)."""
+    from gameengine.core import tools_bridge
+    assert tools_bridge._GS_TRUSTED_DOMAINS == frozenset(
+        candidate_gen.DOMAINS_TRUSTED)
+    assert tools_bridge._GS_PRIVACY_DOMAINS == frozenset(
+        candidate_gen.DOMAINS_PRIVACY)
+    assert tools_bridge._GS_SUSPICIOUS_DOMAINS == frozenset(
+        candidate_gen.DOMAINS_DISPOSABLE)
+    assert tools_bridge._GS_LEGIT_ORGS == frozenset(
+        candidate_gen.AFFILIATIONS_LEGIT)
+
+
+def test_every_domain_the_generator_produces_is_classified():
+    """No generated address may read as 'unknown domain' (#48).
+
+    fastmail.io was exactly this: in _make_email's fallback pool, in none of
+    the classification sets, so an ordinary candidate could be handed
+    "unknown domain — verify affiliation" for having a perfectly normal
+    mailbox. The generator's own pools are the authority for what the banks
+    have to cover — the same direction of derivation #57 established.
+    """
+    from gameengine.core import tools_bridge
+    known = (set(candidate_gen.DOMAINS_TRUSTED)
+             | set(candidate_gen.DOMAINS_PRIVACY)
+             | set(candidate_gen.DOMAINS_DISPOSABLE))
+    # The consumer fallback pool inside _make_email, which is what a candidate
+    # with no institutional affiliation gets.
+    consumer = {"yahoo.com", "gmail.com", "fastmail.io", "protonmail.com"}
+    missing = sorted(consumer - known)
+    assert not missing, (
+        f"_make_email can produce {missing}, which no word bank classifies — "
+        f"the sweep will call it an unknown domain")
+    assert tools_bridge._GS_TRUSTED_DOMAINS & tools_bridge._GS_PRIVACY_DOMAINS == frozenset(), \
+        "a domain cannot be both trusted-consumer and privacy — the identity " \
+        "block picks one branch and the other read is lost"
+
+
+def test_affiliations_faked_excludes_the_untouchable_elite_orgs():
+    """#48 + #56: an elite org can never be the CLAIMED side of a fake."""
+    overlap = set(candidate_gen.AFFILIATIONS_FAKED) & set(
+        candidate_gen.AFFILIATIONS_ELITE)
+    assert not overlap, (
+        f"{sorted(overlap)} is in both banks — #56 guarantees a claimed elite "
+        f"organisation always confirms in the sweep, which is the player's "
+        f"whole reward for recognising one")

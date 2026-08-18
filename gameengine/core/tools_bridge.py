@@ -24,7 +24,10 @@ from dataclasses import dataclass, field
 
 from .. import config
 from .models import Candidate, Discrepancy, DiscrepancyKind, ToolName
-from .candidate_gen import (DOMAINS_DISPOSABLE as _DISPOSABLE_DOMAINS,
+from .candidate_gen import (AFFILIATIONS_LEGIT as _LEGIT_ORGS_BANK,
+                            DOMAINS_DISPOSABLE as _DISPOSABLE_DOMAINS,
+                            DOMAINS_PRIVACY as _PRIVACY_DOMAINS_BANK,
+                            DOMAINS_TRUSTED as _TRUSTED_DOMAINS_BANK,
                             _ELITE_ORG_HANDLE as _ORG_HANDLE,
                             stable_hash as _stable_hash)
 
@@ -162,8 +165,12 @@ def classify_affiliation(affiliation: str) -> str:
 #                                           highlights commit email mismatch +
 #                                           explicit ▲ VIOLATION_TYPE labels
 
-_GS_TRUSTED_DOMAINS    = {"gmail.com", "outlook.com", "yahoo.com", "icloud.com",
-                           "hotmail.com", "live.com"}
+# #48: DERIVED from the generator's canonical word banks, same stance as the
+# disposable list below. This set was maintained by hand and had already fallen
+# a domain behind — fastmail.io is in _make_email's fallback pool and was not
+# here, so an ordinary candidate could be handed "unknown domain — verify
+# affiliation" purely because of a gap in a list nobody had reason to look at.
+_GS_TRUSTED_DOMAINS    = frozenset(_TRUSTED_DOMAINS_BANK)
 # #57: DERIVED from the generator's pool, not maintained alongside it. These two
 # lists had drifted — the generator produced sharklasers.com, tempmail.org and
 # trashmail.com, none of which were here, while this list carried tempmail.com
@@ -176,15 +183,13 @@ _GS_TRUSTED_DOMAINS    = {"gmail.com", "outlook.com", "yahoo.com", "icloud.com",
 # Deriving makes that drift structurally impossible. Re-syncing the values by
 # hand is exactly how they got out of sync in the first place.
 _GS_SUSPICIOUS_DOMAINS = frozenset(_DISPOSABLE_DOMAINS)
-_GS_PRIVACY_DOMAINS    = {"protonmail.com", "tutanota.com", "pm.me", "proton.me"}
+_GS_PRIVACY_DOMAINS    = frozenset(_PRIVACY_DOMAINS_BANK)
 
-_GS_LEGIT_ORGS = {
-    "Univ. of Fictional CS Dept.",
-    "Westmore Polytechnic Security Lab",
-    "Reston Public Library Tech Branch",
-    "Aegir Cybersecurity Cooperative",
-    "Cordova College — Independent Study",
-}
+# #48: was a verbatim hand-copy of AFFILIATIONS_LEGIT. Two lists of the same
+# five organisations, in two modules, with nothing keeping them equal — adding
+# an employer to the generator without editing here would have made that
+# employer read as "not in known list" on its own candidates' sweeps.
+_GS_LEGIT_ORGS = frozenset(_LEGIT_ORGS_BANK)
 
 _GS_TRUSTED_AFFIL_KW = ["mit", "stanford", "cmu", "oxford", "cloudflare",
                           "google", "microsoft", "mozilla", "apache"]

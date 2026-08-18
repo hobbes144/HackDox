@@ -1,0 +1,76 @@
+{
+  "number": 4,
+  "title": "Day 4 — The Log",
+  "candidate_count": 6,
+
+  "_comment": "Logwatch day (#46). Rulebook inherited from day_01.json.",
+
+  "archetype_mix": {
+    "day_to_day": 1,
+    "bad_actor": 2,
+    "obvious_admit": 1,
+    "sneaky_bugger": 1,
+    "clumsy_cutie": 1
+  },
+
+  "allowed_violations": [
+    "disposable_email", "hostile_chat", "unsalted_storage",
+    "affiliation_not_stated", "weak_encryption",
+    "breach_hit", "email_github_mismatch", "affiliation_mismatch",
+    "affiliation_unlisted", "missing_public_profile",
+    "weak_credential", "leaked_password", "cross_breach_reuse",
+    "brute_force_in_log", "credential_stuffing", "impossible_travel",
+    "insider_behavior", "after_hours_access", "claimed_ip_mismatch"
+  ],
+
+  "forced_includes": {
+    "0": "day_to_day",
+    "1": "bad_actor",
+    "2": "obvious_admit",
+    "3": "sneaky_bugger",
+    "4": "clumsy_cutie",
+    "5": "bad_actor"
+  },
+
+  "_comment_script": "Slot 0 first, deliberately: after-hours access ALONE is innocent, and the player needs to meet that before they meet the two that are not. 1 is the loud brute-force read, 5 the stuffing sweep, 3 the quiet insider one.",
+  "forced_violations": {
+    "0": ["after_hours_access"],
+    "1": ["brute_force_in_log"],
+    "3": ["insider_behavior"],
+    "5": ["credential_stuffing"]
+  },
+
+  "quotas": {
+    "min_correct_admits": 2,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "easy",
+  "overseer_intro_key": "day4_intro",
+  "overseer_outro_keys": {
+    "excellent": "day4_outro_excellent",
+    "passing": "day4_outro_passing",
+    "poor": "day4_outro_poor",
+    "failed": "day4_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Logwatch is live. It shows the whole day's traffic, not just your applicant — finding their lines in it is the job today.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "A wall of failed logins from their account is a deny.",
+      "One source hitting many accounts with a few tries each is a deny — that is a stuffing sweep.",
+      "Logins from two places nobody could travel between in the time is a deny.",
+      "After-hours access on its own is a flag. Plenty of people work late.",
+      "After-hours access WITH privilege escalation is a deny.",
+      "A login IP that does not match the claimed one is a flag — corroborate before denying."
+    ]
+  }
+}
