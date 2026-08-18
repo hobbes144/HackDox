@@ -506,6 +506,27 @@ def intro_day(kind: DiscrepancyKind) -> int:
     return config.TOOL_UNLOCK_DAY[revealing_tool.value]
 
 
+def _kind_is_expressible_on(kind: DiscrepancyKind, day_number: int) -> bool:
+    """Whether the world on `day_number` can actually SHOW this violation (#61).
+
+    Distinct from intro_day, which asks whether the player has been taught the
+    tool. This asks whether the artifact the violation describes exists at all
+    yet. Today there is exactly one such constraint, but it earns its own
+    function because it is a different question and future content gates will
+    want the same shape rather than another override table.
+
+    CROSS_BREACH_REUSE means a password recurring across MULTIPLE corpora — the
+    Hashcrack log renders it as two BREACH_MATCH rows naming two databases. With
+    only one corpus unlocked there is no second row to print and no second list
+    to find the email in, so the violation would be planted, scored, and
+    unobservable: exactly the class of bug this batch exists to close.
+    """
+    if kind is DiscrepancyKind.CROSS_BREACH_REUSE:
+        return (len(config.breach_dbs_unlocked_by(day_number))
+                >= config.MIN_BREACH_DBS_FOR_REUSE)
+    return True
+
+
 _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.MISSING_PUBLIC_PROFILE: "No public profile found for the claimed handle.",
     DiscrepancyKind.HOSTILE_CHAT:           "Candidate threatened the service operator.",
@@ -761,6 +782,10 @@ def _roll_discrepancies(
         k for k in spec.eligible_kinds
         if intro_day(k) <= day_number
         and (not allowed_violations or k in allowed_violations)
+        # #61: "taught" is not the same as "expressible". The tier gate above
+        # asks whether the player has the tool; this asks whether the world has
+        # the artifact yet.
+        and _kind_is_expressible_on(k, day_number)
     ]
     # #56 - the trusted-organisation bypass. A claimed elite/trusted affiliation
     # can never be faked: it ALWAYS confirms in the sweep. That is deliberate and

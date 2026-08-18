@@ -188,6 +188,71 @@ def tool_introduced_on(day_number: int) -> str | None:
     return None
 
 
+# ─── Progressive breach-database unlock (#61) ────────────────────────────────
+#
+# The breach corpora the player must scan are static for the whole campaign —
+# the same names, the same contents, every day. Difficulty comes from ADDING
+# databases, never from changing or removing one, so a player who learns a
+# list keeps that knowledge for the rest of the run. That is the entire point:
+# before this, get_breach_lists() reseeded all six databases per CANDIDATE, so
+# scanning was pure busywork and memory bought you nothing.
+#
+# Deliberately shaped like TOOL_UNLOCK_DAY above, and it is the single source
+# of truth for the same two things:
+#   • which databases the Ghostscan breach panel renders on a given day, and
+#   • which database the generator may attach a candidate to — a candidate is
+#     never planted into a corpus the player cannot open.
+#
+# Keys must match tools_bridge._BREACH_DATABASES exactly; that module asserts
+# it at import rather than trusting the two to stay hand-synced, which is the
+# lesson #57 cost us.
+#
+# Schedule rationale: one new corpus per tutorial beat (days 1/3/5) so the
+# panel grows while the player is still learning to read it, then spaced out
+# across the campaign. Day 3 is load-bearing — see MIN_BREACH_DBS_FOR_REUSE.
+BREACH_DB_UNLOCK_DAY: dict[str, int] = {
+    "Collection #1 (2019)":  1,
+    "LinkedIn (2016)":       3,
+    "RockYou (2024)":        5,
+    "Dropbox (2012)":        8,
+    "Adobe (2013)":         12,
+    "MyFitnessPal (2018)":  16,
+}
+
+# CROSS_BREACH_REUSE means "this password recurs across MULTIPLE corpora", so
+# it is not expressible — in ground truth or in the Hashcrack log, which prints
+# two BREACH_MATCH rows for it — until at least two databases are unlocked.
+# The generator refuses to plant it below this threshold. Under the schedule
+# above that is day 3, which is also the kind's evidence-tier intro day
+# (Hashcrack), so today the constraint binds exactly where the tier gate
+# already did. It is enforced anyway: retuning the schedule above must not be
+# able to silently reintroduce an unobservable violation.
+MIN_BREACH_DBS_FOR_REUSE = 2
+
+
+def breach_dbs_unlocked_by(day_number: int) -> list[str]:
+    """The breach databases available on the given day, in unlock order.
+
+    Ordered by (unlock day, name) rather than by dict order so the result is a
+    pure function of the table and two callers can never disagree about index
+    0. Once a database is in, it never leaves.
+    """
+    return [
+        name for name, intro in sorted(
+            BREACH_DB_UNLOCK_DAY.items(), key=lambda kv: (kv[1], kv[0]))
+        if intro <= day_number
+    ]
+
+
+def breach_db_introduced_on(day_number: int) -> str | None:
+    """The breach database (if any) whose unlock day is exactly `day_number`."""
+    for name, intro in sorted(BREACH_DB_UNLOCK_DAY.items(),
+                              key=lambda kv: (kv[1], kv[0])):
+        if intro == day_number:
+            return name
+    return None
+
+
 # ─── Tool base costs (⏱ per invocation) ─────────────────────────────────────
 
 TOOL_COSTS: dict[str, int] = {

@@ -2146,3 +2146,215 @@ def test_the_incompatible_is_deniable_by_the_book():
             f"seed {seed}: The Incompatible trips no disqualifying rule — the "
             f"rules page teaches 'fast DENY' for exactly this candidate")
     assert checked
+
+
+# ─── Issue #61 — breach databases: static, sorted, progressively unlocked ───
+#
+# Nick's playtest read, in three parts: the lists were unscannable (unsorted),
+# unlearnable (regenerated per candidate), and dishonest (Hashcrack named
+# corpora the Ghostscan panel had never put the email in). The last one is the
+# recurring bug class again — one tool contradicting another about the same
+# candidate.
+
+_BREACH_TEST_SEED = 20260818
+
+
+def _breach_carriers(kind, day_n, per_archetype=4):
+    """(candidate, day) pairs on `day_n` carrying `kind`."""
+    from dataclasses import replace
+    base = load_day(1)
+    out = []
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        taken = 0
+        day = replace(base, number=day_n,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(60):
+            if taken >= per_archetype:
+                break
+            c = candidate_gen.generate(seed, day, 0)
+            if any(d.kind == kind for d in c.truth.discrepancies):
+                out.append((c, day))
+                taken += 1
+    return out
+
+
+def test_breach_lists_are_alphabetized():
+    """Sorted lists are the difference between scanning and reading (#61).
+
+    Also better camouflage than the old random insert index: the candidate's
+    address sorts into place, so it can never sit at a position noise doesn't
+    occupy.
+    """
+    from gameengine.core import tools_bridge
+    base = load_day(1)
+    c = candidate_gen.generate(7, base, 0)
+    lists = tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, 20)
+    assert lists, "no databases returned on the last unlock day"
+    for name, _year, _count, entries in lists:
+        addrs = [e for e, _m in entries]
+        assert addrs == sorted(addrs), f"{name} is not alphabetized"
+        assert len(addrs) == len(set(addrs)), f"{name} lists a duplicate address"
+
+
+def test_breach_lists_are_identical_for_every_candidate():
+    """The corpora are reference material, not per-candidate noise (#61).
+
+    Before this the RNG was seeded on candidate.id, so all six databases were
+    regenerated for every candidate — a player who memorised a list learned
+    nothing, because the list was gone by the next candidate. Deliberately
+    compares the NOISE rows: the only permitted difference between two
+    candidates' views is each one's own seeded address.
+    """
+    from gameengine.core import tools_bridge
+    base = load_day(1)
+    noise = None
+    for seed in range(6):
+        c = candidate_gen.generate(seed, base, 0)
+        lists = tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, 20)
+        this = {name: tuple(e for e, m in entries if not m)
+                for name, _y, _c, entries in lists}
+        if noise is None:
+            noise = this
+        assert this == noise, (
+            "two candidates see different breach-database contents — the "
+            "databases are supposed to be fixed for the whole campaign")
+    # ...and a different playthrough must still differ, or the lists are
+    # hard-coded rather than seeded.
+    c = candidate_gen.generate(0, base, 0)
+    other = {name: tuple(e for e, m in entries if not m) for name, _y, _c, entries
+             in tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED + 1, 20)}
+    assert other != noise, "breach lists do not vary between playthroughs"
+
+
+def test_breach_panel_shows_only_unlocked_databases():
+    """Difficulty comes from ADDING corpora, and none is ever removed (#61)."""
+    from gameengine.core import tools_bridge
+    base = load_day(1)
+    c = candidate_gen.generate(3, base, 0)
+    seen_before: set[str] = set()
+    for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        shown = {n for n, _y, _c, _e in
+                 tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, day_n)}
+        expected = set(config.breach_dbs_unlocked_by(day_n))
+        assert shown == expected, (
+            f"day {day_n}: panel shows {sorted(shown)}, config says "
+            f"{sorted(expected)} — the panel and the generator would disagree "
+            f"about which corpora exist")
+        assert seen_before <= shown, (
+            f"day {day_n}: {sorted(seen_before - shown)} disappeared — a "
+            f"database that is added must never be removed")
+        seen_before = shown
+    assert len(seen_before) == len(config.BREACH_DB_UNLOCK_DAY), (
+        "not every database unlocks within the campaign")
+
+
+def test_cross_breach_reuse_candidates_appear_in_the_breach_lists():
+    """Hashcrack must not name a corpus the player's email is absent from (#61).
+
+    Measured at 98 of 119 carriers (82%) before the fix: get_breach_lists()
+    seeded on BREACH_HIT or LEAKED_PASSWORD only, while the Hashcrack log
+    emitted BREACH_MATCH rows for reuse as well. The tool asserted the email
+    was in two corpora and the page that would corroborate it showed nothing.
+    """
+    from gameengine.core import tools_bridge
+    pairs = _breach_carriers(DiscrepancyKind.CROSS_BREACH_REUSE, day_n=7)
+    assert pairs, "no CROSS_BREACH_REUSE carriers on day 7 — guard is inert"
+    for c, day in pairs:
+        lists = tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, day.number)
+        hits = [n for n, _y, _cl, entries in lists if any(m for _e, m in entries)]
+        assert len(hits) >= 2, (
+            f"{c.archetype.value} carries CROSS_BREACH_REUSE but their email "
+            f"appears in {len(hits)} corpora ({hits}) — 'reuse' means the "
+            f"password recurs across MULTIPLE corpora, so one is not enough")
+
+
+def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
+    """The two pages must agree about where the candidate is leaked (#61).
+
+    This is the actual mechanism the issue is about: _breach_db_for_candidate
+    is shared precisely so the panel and the log cannot diverge, and the
+    second corpus for reuse used to bypass it entirely with its own
+    `(int(id,16) >> 8) % len(...)` pick.
+    """
+    import random as _r
+    from gameengine.core import tools_bridge
+    checked = 0
+    for kind in (DiscrepancyKind.LEAKED_PASSWORD,
+                 DiscrepancyKind.CROSS_BREACH_REUSE):
+        for day_n in (3, 5, 8, 12, 16):
+            for c, day in _breach_carriers(kind, day_n, per_archetype=2):
+                checked += 1
+                panel = sorted(
+                    n for n, _y, _cl, entries in
+                    tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, day.number)
+                    if any(m for _e, m in entries))
+                log = sorted({e.detail for e in tools_bridge._hc_candidate_entries(
+                    c, _r.Random(1), day.number) if e.event == "BREACH_MATCH"})
+                assert panel == log, (
+                    f"day {day_n} {c.archetype.value}: Ghostscan panel seeds "
+                    f"{panel}, Hashcrack log names {log}")
+    assert checked, "guard is inert"
+
+
+def test_cross_breach_reuse_is_not_plantable_below_two_databases(monkeypatch):
+    """A violation about MULTIPLE corpora needs multiple corpora to exist (#61).
+
+    Not the same question as the evidence-tier gate. intro_day asks whether the
+    player has been given Hashcrack; this asks whether the world contains a
+    second breach database for the password to recur in.
+
+    **The schedule is monkeypatched, and that is the point of the test.** Under
+    the shipped table the second corpus unlocks on day 3, which is also
+    Hashcrack's unlock day — so the tier gate happens to block reuse on exactly
+    the days this constraint would, and the guard passes whether or not the
+    constraint exists at all. Verified: deleting _kind_is_expressible_on from
+    the eligibility filter left the first draft of this test green. Pushing the
+    later unlocks past the tool's day is what separates the two mechanisms and
+    makes the assertion mean something.
+    """
+    from dataclasses import replace
+
+    delayed = dict(config.BREACH_DB_UNLOCK_DAY)
+    for name, intro in sorted(delayed.items(), key=lambda kv: (kv[1], kv[0]))[1:]:
+        delayed[name] = max(intro, 9)
+    monkeypatch.setattr(config, "BREACH_DB_UNLOCK_DAY", delayed)
+
+    base = load_day(1)
+    tested_past_the_tier_gate = False
+    for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        if len(config.breach_dbs_unlocked_by(day_n)) >= config.MIN_BREACH_DBS_FOR_REUSE:
+            continue
+        if day_n >= intro_day(DiscrepancyKind.CROSS_BREACH_REUSE):
+            tested_past_the_tier_gate = True
+        for archetype in candidate_gen.ARCHETYPE_SPECS:
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in range(60):
+                c = candidate_gen.generate(seed, day, 0)
+                assert not any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE
+                               for d in c.truth.discrepancies), (
+                    f"day {day_n} has "
+                    f"{len(config.breach_dbs_unlocked_by(day_n))} database(s) "
+                    f"but {archetype.value} seed {seed} carries "
+                    f"CROSS_BREACH_REUSE — there is no second corpus for the "
+                    f"password to recur in, so it is unobservable")
+    assert tested_past_the_tier_gate, (
+        "every single-database day was also before Hashcrack's unlock day, so "
+        "this ran entirely inside the tier gate's shadow and proved nothing")
+
+
+def test_breach_db_tables_do_not_drift():
+    """config and tools_bridge must name the same corpora (#61, #57's lesson).
+
+    Named explicitly rather than derived from either table: a guard written as
+    `set(A) == set(A)` cannot fail. tools_bridge also asserts this at import;
+    this is the version that says WHY when it breaks.
+    """
+    from gameengine.core import tools_bridge
+    assert sorted(config.BREACH_DB_UNLOCK_DAY) == sorted(
+        db[0] for db in tools_bridge._BREACH_DATABASES), (
+        "config.BREACH_DB_UNLOCK_DAY and tools_bridge._BREACH_DATABASES have "
+        "drifted — a candidate can be planted into a corpus the panel never "
+        "renders, which is exactly how #57 happened")

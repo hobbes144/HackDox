@@ -1269,10 +1269,18 @@ class BreachListPanel(VerticalScroll):
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def load_candidate(self, candidate: "Candidate") -> None:
-        """Populate lists for a new candidate and reset to idle state."""
+    def load_candidate(self, candidate: "Candidate", game_seed: int,
+                       day_number: int) -> None:
+        """Populate lists for a new candidate and reset to idle state.
+
+        #61: the lists are no longer per-candidate. `game_seed` fixes their
+        contents for the whole playthrough and `day_number` decides how many
+        databases exist yet — so the panel is stable reference material the
+        player can actually learn, and it grows rather than churns.
+        """
         self._scan_state = self._STATE_IDLE
-        self._lists = tools_bridge.get_breach_lists(candidate)
+        self._lists = tools_bridge.get_breach_lists(
+            candidate, game_seed, day_number)
         self._rebuild_content()
 
     def highlight_match(self) -> None:
@@ -2370,7 +2378,7 @@ class IntakeScreen(Screen):
         # Ghostscan: passive identity check (free) + breach list pre-population
         self.term_gs.set_initial_content(tools_bridge.get_ghostscan_identity(c))
         self.ref_gs.update_content(_REF_GHOSTSCAN)
-        self.breach_lists.load_candidate(c)
+        self.breach_lists.load_candidate(c, self._state.seed, self._day.number)
         # Hashcrack terminal: shared credential audit log (free, candidate highlighted;
         # Credential HUD upgrade pre-colours suspicious lines — issue #23)
         self.term_hc.set_initial_content(tools_bridge.get_hashcrack_shared(

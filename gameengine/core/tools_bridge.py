@@ -216,22 +216,102 @@ _BREACH_DATABASES: list[tuple[str, str, str]] = [
 _GS_BREACH_DUMPS = [db[0] for db in _BREACH_DATABASES]
 _GS_BREACH_META  = _BREACH_DATABASES  # used by get_breach_lists()
 
+_BREACH_DB_BY_NAME = {db[0]: db for db in _BREACH_DATABASES}
+
+# #61: config.BREACH_DB_UNLOCK_DAY schedules these, and the generator refuses
+# to attach a candidate to a locked corpus. If the two tables drift, a
+# candidate gets planted into a database the panel never renders — the exact
+# unobservable-violation failure this whole batch keeps finding. #57's lesson
+# was that hand-syncing two lists is how they drift, so this fails at import
+# rather than at play time.
+assert set(_BREACH_DB_BY_NAME) == set(config.BREACH_DB_UNLOCK_DAY), (
+    "tools_bridge._BREACH_DATABASES and config.BREACH_DB_UNLOCK_DAY disagree: "
+    f"only in tools_bridge {sorted(set(_BREACH_DB_BY_NAME) - set(config.BREACH_DB_UNLOCK_DAY))}, "
+    f"only in config {sorted(set(config.BREACH_DB_UNLOCK_DAY) - set(_BREACH_DB_BY_NAME))}"
+)
+
 # Dedicated seed for the shared breach-DB selector.  Must differ from the main
 # ghostscan RNG seed (0x6057CAD1) and the breach-list seed (0xB8EA4DB5).
 _BREACH_DB_SEED = 0xD8EAD808
 
 
-def _breach_db_for_candidate(candidate_id: str) -> tuple[int, str]:
-    """Return (db_index, canonical_name) for the breach database linked to this candidate.
+def _breach_db_for_candidate(candidate_id: str,
+                             day_number: int) -> tuple[int, str]:
+    """Return (db_index, canonical_name) for this candidate's breach database.
 
-    Deterministic per candidate — used by BOTH get_breach_lists() and the Hashcrack
-    BREACH_MATCH log entry so both tools always reference the same database.
-    Only meaningful for candidates with a BREACH_HIT or LEAKED_PASSWORD discrepancy;
-    call sites are responsible for checking that guard.
+    `db_index` indexes _BREACH_DATABASES (the full, stable table), NOT the
+    unlocked subset — callers render against the full table and filter for
+    display, so an index into a day-varying list would mean different things
+    on different days.
+
+    Deterministic per candidate, and day-aware as of #61: the pick is drawn
+    only from the corpora unlocked by `day_number`, so a candidate can never be
+    attached to a database the player has no way to open. Used by BOTH
+    get_breach_lists() and the Hashcrack BREACH_MATCH entries — that shared
+    call is the entire mechanism by which Ghostscan and Hashcrack name the same
+    corpus, so all call sites must pass the same day.
+
+    Only meaningful for candidates carrying BREACH_HIT, LEAKED_PASSWORD or
+    CROSS_BREACH_REUSE; call sites are responsible for checking that guard.
     """
+    unlocked = config.breach_dbs_unlocked_by(day_number)
+    if not unlocked:
+        # Below day 1 nothing is unlocked. Fall back to the first corpus rather
+        # than dividing by zero; no candidate can carry a breach kind there
+        # anyway (the evidence-tier gate puts BREACH_HIT at Ghostscan's day).
+        return 0, _BREACH_DATABASES[0][0]
     rng = _random.Random(int(candidate_id, 16) ^ _BREACH_DB_SEED)
-    idx = rng.randint(0, len(_BREACH_DATABASES) - 1)
-    return idx, _BREACH_DATABASES[idx][0]
+    name = unlocked[rng.randint(0, len(unlocked) - 1)]
+    return _GS_BREACH_DUMPS.index(name), name
+
+
+def _second_breach_db_for_candidate(candidate_id: str, day_number: int,
+                                    first: str) -> str:
+    """The OTHER corpus a cross-breach-reuse password shows up in (#61).
+
+    Was `_HC_BREACH_NAMES[(int(id,16) >> 8) % len(...)]` with a decrement to
+    dodge a collision — which could name a locked database, and was unknown to
+    the Ghostscan side entirely. Drawn from the unlocked set now, and exposed
+    as a function so the breach panel can seed the same two corpora the
+    Hashcrack log names.
+    """
+    unlocked = [n for n in config.breach_dbs_unlocked_by(day_number)
+                if n != first]
+    if not unlocked:
+        return first
+    rng = _random.Random(int(candidate_id, 16) ^ (_BREACH_DB_SEED + 1))
+    return unlocked[rng.randint(0, len(unlocked) - 1)]
+
+
+def breach_dbs_for_candidate(candidate: "Candidate",
+                             day_number: int) -> list[str]:
+    """Every corpus this candidate's email should appear in, on this day.
+
+    One place that answers "where is this person leaked", so the Ghostscan
+    panel and the Hashcrack log cannot give different answers — which is
+    precisely what #61 was filed about.
+
+    #61(d): CROSS_BREACH_REUSE was missing from the Ghostscan seeding entirely.
+    Hashcrack printed two BREACH_MATCH rows naming two corpora while the
+    player's email was in none of the breach lists — measured at 98 of 119
+    carriers (82%). Nick's read was right ("reuse implies they're on a breach
+    list") but the fix is to make the lists true, not to force a BREACH_HIT
+    alongside it: BREACH_HIT is critical, and Clumsy Cutie — the archetype
+    CROSS_BREACH_REUSE was written for — has no critical budget slot, so
+    forcing co-occurrence would have removed the violation from that archetype
+    altogether. The two violations stay distinct: BREACH_HIT is about the
+    EMAIL being leaked, CROSS_BREACH_REUSE about the PASSWORD recurring.
+    """
+    kinds = {d.kind for d in candidate.truth.discrepancies}
+    if not (kinds & {DiscrepancyKind.BREACH_HIT,
+                     DiscrepancyKind.LEAKED_PASSWORD,
+                     DiscrepancyKind.CROSS_BREACH_REUSE}):
+        return []
+    _, first = _breach_db_for_candidate(candidate.id, day_number)
+    if DiscrepancyKind.CROSS_BREACH_REUSE not in kinds:
+        return [first]
+    second = _second_breach_db_for_candidate(candidate.id, day_number, first)
+    return [first] if second == first else [first, second]
 
 
 # Noise email pools for breach list generation
@@ -357,6 +437,7 @@ def _ghostscan_sweep_lines(
     candidate: Candidate,
     rng: _random.Random,
     show_forums: bool = False,
+    day_number: int = 1,
 ) -> list[str]:
     """Render the fixed platform sweep for one candidate.
 
@@ -586,12 +667,15 @@ def _ghostscan_sweep_lines(
     lines.append("")
     lines.append("[#ff8c42]-- breach dumps ---------------------------------------------[/]")
     lines.append(f"  [dim]full databases in the breach panel →[/]")
+    # #61: the noise dumps name only UNLOCKED corpora. A summary line citing a
+    # database the panel does not render is a dead end the player cannot check.
+    _unlocked_dumps = config.breach_dbs_unlocked_by(day_number) or _GS_BREACH_DUMPS
     for _ in range(3):
         noise_email = f"{rng.choice(_GS_NOISE_HANDLES)}@{rng.choice(['corp.net', 'internal.io', 'hackdox.local'])}"
-        dump_name   = rng.choice(_GS_BREACH_DUMPS)
+        dump_name   = rng.choice(_unlocked_dumps)
         lines.append(f"[#2e3d4f]  {dump_name:<24}  {noise_email}[/]")
     if has_breach and show_forums:
-        _, breach_db = _breach_db_for_candidate(candidate.id)
+        _, breach_db = _breach_db_for_candidate(candidate.id, day_number)
         lines.append(f"[#ff8c42]  {breach_db:<24}  {claimed_email}[/]")
         lines.append(f"  [#ff8c42]▲ email in breach corpus[/]")
 
@@ -670,7 +754,9 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
     raw_lines  = tuple(
         _ghostscan_identity_lines(candidate, hint=False)
         + [""]
-        + _ghostscan_sweep_lines(candidate, rng, show_forums=False)
+        # #61: day drives which breach corpora exist today.
+        + _ghostscan_sweep_lines(candidate, rng, show_forums=False,
+                                 day_number=getattr(state, 'current_day', 1))
     )
     n_findings = len(_findings_from(candidate, ToolName.GHOSTSCAN))
     summary = (
@@ -691,7 +777,8 @@ def run_ghostscan_filtered_shared(candidate: Candidate, state) -> ToolResult:
     raw_lines = tuple(
         _ghostscan_identity_lines(candidate, hint=False)
         + [""]
-        + _ghostscan_sweep_lines(candidate, rng, show_forums=True)
+        + _ghostscan_sweep_lines(candidate, rng, show_forums=True,
+                                 day_number=getattr(state, 'current_day', 1))
         + _ghostscan_filter_summary_lines(candidate)
     )
     summary = (
@@ -705,44 +792,91 @@ def run_ghostscan_filtered_shared(candidate: Candidate, state) -> ToolResult:
     )
 
 
-def get_breach_lists(candidate: "Candidate") -> list[tuple[str, str, str, list[tuple[str, bool]]]]:
-    """Return procedurally generated breach database entries for the BreachListPanel.
+# #61: how many rows each corpus holds. Fixed, not a per-call randint — a
+# database that changes length between candidates is not a static database,
+# and the length itself was a tell the player could read without scanning.
+_BREACH_LIST_LEN = 22
 
-    Returns a list of (db_name, year, record_count, entries) where each entry
-    is (email_string, is_candidate_match).  The candidate's email is seeded
-    into exactly one database when they carry a BREACH_HIT discrepancy.
+# Static noise, computed once per (game_seed, db_name) and cached. The cache is
+# what makes the lists genuinely the same object all campaign long; the seed is
+# the GAME seed, so two playthroughs still differ.
+_BREACH_NOISE_CACHE: dict[tuple[int, str], tuple[str, ...]] = {}
 
-    The same RNG seed as the ghostscan sweep is used so the match position is
-    deterministic per candidate.
+
+def _breach_list_noise(game_seed: int, db_name: str) -> tuple[str, ...]:
+    """The fixed noise rows for one corpus in one playthrough (#61)."""
+    key = (game_seed, db_name)
+    cached = _BREACH_NOISE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    rng = _random.Random(_stable_hash(game_seed, db_name, "breach_list")
+                         & 0xFFFFFFFF)
+    seen: set[str] = set()
+    rows: list[str] = []
+    # Loop until the list is full rather than for a fixed count: duplicates are
+    # possible from a 40x12 pool and a corpus listing the same address twice
+    # reads like a rendering bug.
+    while len(rows) < _BREACH_LIST_LEN:
+        user   = rng.choice(_GS_BREACH_EMAIL_USERS)
+        domain = rng.choice(_GS_BREACH_EMAIL_DOMAINS)
+        suffix = rng.choice(["", str(rng.randint(1, 99)),
+                             "_" + rng.choice(["x", "z", "2", "old"])])
+        addr = f"{user}{suffix}@{domain}"
+        if addr in seen:
+            continue
+        seen.add(addr)
+        rows.append(addr)
+    out = tuple(sorted(rows))
+    _BREACH_NOISE_CACHE[key] = out
+    return out
+
+
+def get_breach_lists(candidate: "Candidate", game_seed: int,
+                     day_number: int) -> list[tuple[str, str, str, list[tuple[str, bool]]]]:
+    """Breach database entries for the BreachListPanel (#61).
+
+    Returns (db_name, year, record_count, entries) per UNLOCKED corpus, where
+    each entry is (email_string, is_candidate_match).
+
+    Three things changed here, all of them Nick's from playtest:
+
+    • **Alphabetized.** Entries were appended in RNG order, so finding a name
+      meant reading all ~22 rows — the panel was a wall of text whose only
+      function was to make you spend Ghostscan hours instead. Sorted, scanning
+      is cheap, which is the whole point of giving the player a list. The
+      candidate's own email sorts into position naturally, which is also
+      *better* camouflage than the old random insert index: it can no longer
+      sit at a position noise never occupies.
+
+    • **Static for the whole campaign.** The RNG was seeded on `candidate.id`,
+      so all six corpora were regenerated for every single candidate —
+      verified: no two candidates saw the same contents. A player who
+      memorised a list learned nothing, because the list was gone next
+      candidate. Noise is now keyed on the GAME seed and cached, so the
+      databases are fixed reference material for the run.
+
+    • **Progressively unlocked.** Only corpora unlocked by `day_number`
+      (config.BREACH_DB_UNLOCK_DAY) are returned. Difficulty comes from the
+      panel growing, and a corpus once added is never removed.
+
+    The candidate's email is layered on top of that fixed noise, in every
+    corpus breach_dbs_for_candidate() says they belong to — which now includes
+    the second corpus for CROSS_BREACH_REUSE. The list is re-sorted afterwards
+    so the seeded address is indistinguishable from a noise row.
     """
-    rng = _random.Random(int(candidate.id, 16) ^ 0xB8EA4DB5)
-    has_breach = any(d.kind == DiscrepancyKind.BREACH_HIT  for d in candidate.truth.discrepancies)
-    has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
-    # Seed the email into the breach list for BREACH_HIT *and* LEAKED_PASSWORD —
-    # both discrepancy types produce a BREACH_MATCH in the Hashcrack log, so the
-    # player should be able to cross-reference by finding the email on this page.
-    should_seed = has_breach or has_leaked
     target_email = candidate.email
-
-    # Use the shared selector so GhostScan and Hashcrack reference the same database
-    breach_db_idx, _breach_db_name = _breach_db_for_candidate(candidate.id)
+    seeded = set(breach_dbs_for_candidate(candidate, day_number))
+    unlocked = set(config.breach_dbs_unlocked_by(day_number))
 
     result: list[tuple[str, str, str, list[tuple[str, bool]]]] = []
-    for db_idx, (db_name, year, count_label) in enumerate(_GS_BREACH_META):
-        entries: list[tuple[str, bool]] = []
-        num_entries = rng.randint(18, 26)
-        insert_pos = rng.randint(3, num_entries - 2) if should_seed and db_idx == breach_db_idx else -1
-
-        for i in range(num_entries):
-            if i == insert_pos:
-                entries.append((target_email, True))
-            # Always add a noise entry (the target entry is *additional* at insert_pos)
-            user   = rng.choice(_GS_BREACH_EMAIL_USERS)
-            domain = rng.choice(_GS_BREACH_EMAIL_DOMAINS)
-            # Minor variation so the same user doesn't repeat verbatim
-            suffix = rng.choice(["", str(rng.randint(1, 99)), "_" + rng.choice(["x", "z", "2", "old"])])
-            entries.append((f"{user}{suffix}@{domain}", False))
-
+    for db_name, year, count_label in _GS_BREACH_META:
+        if db_name not in unlocked:
+            continue
+        entries = [(addr, False)
+                   for addr in _breach_list_noise(game_seed, db_name)]
+        if db_name in seeded:
+            entries.append((target_email, True))
+            entries.sort(key=lambda e: e[0])
         result.append((db_name, year, count_label, entries))
     return result
 
@@ -798,7 +932,10 @@ def _hc_algo(h: str | None) -> str:
     return _HC_ALGO_LABEL_MAP.get(len(h), "?")
 
 
-def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
+def _hc_candidate_entries(candidate, rng: _random.Random,
+                          day_number: int) -> list[_HCLogEntry]:
+    # day_number added by #61: the BREACH_MATCH rows below name corpora, and
+    # they must name the same ones the Ghostscan panel is showing today.
     has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
     has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
     has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)  # v2
@@ -872,26 +1009,26 @@ def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
         ))
         t += rng.randint(5, 30)
 
-    # Breach match for leaked passwords — use the shared selector so this names
-    # the SAME database the player will find the email in on the GhostScan page.
+    # Breach match rows. #61: both the first and the second corpus now come
+    # from breach_dbs_for_candidate(), which is the SAME function the Ghostscan
+    # breach panel seeds from — so the databases Hashcrack names are exactly
+    # the databases the player can find the email in. The second corpus used to
+    # be picked by `(int(id,16) >> 8) % len(_HC_BREACH_NAMES)` with a decrement
+    # to dodge collisions, which knew nothing about the Ghostscan side and
+    # could name a corpus that isn't unlocked yet.
     if has_leaked or has_reuse:
-        _, breach = _breach_db_for_candidate(candidate.id)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="BREACH_MATCH", ip="--", account=account, detail=breach,
-            owner_id=candidate.id, is_suspicious=True,
-            violation_kind=("leaked" if has_leaked else "reuse"),
-        ))
-        if has_reuse:
-            t += rng.randint(5, 20)
-            _idx = (int(candidate.id, 16) >> 8) % len(_HC_BREACH_NAMES)
-            _alt = _HC_BREACH_NAMES[_idx]
-            if _alt == breach:
-                _alt = _HC_BREACH_NAMES[_idx - 1]
+        corpora = breach_dbs_for_candidate(candidate, day_number)
+        for i, corpus in enumerate(corpora):
+            if i:
+                t += rng.randint(5, 20)
             entries.append(_HCLogEntry(
                 ts_secs=t, ts_str=_hc_ts_str(t),
-                event="BREACH_MATCH", ip="--", account=account, detail=_alt,
-                owner_id=candidate.id, is_suspicious=True, violation_kind="reuse",
+                event="BREACH_MATCH", ip="--", account=account, detail=corpus,
+                # Only the FIRST row can be the leaked-password match; a second
+                # row exists only because the password recurs, which is what
+                # "reuse" means.
+                owner_id=candidate.id, is_suspicious=True,
+                violation_kind=("leaked" if has_leaked and not i else "reuse"),
             ))
 
     return entries
@@ -933,7 +1070,7 @@ def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
     for slot in range(day.candidate_count):
         cand  = _gen_candidate(game_seed, day, slot)
         crng  = _random.Random(_stable_hash(game_seed, day.number, slot, "hc_entries") & 0xFFFFFFFF)
-        entries.extend(_hc_candidate_entries(cand, crng))
+        entries.extend(_hc_candidate_entries(cand, crng, day.number))
 
     n_noise = max(80, 160 - len(entries))
     entries.extend(_hc_noise_entries(rng, n_noise))
