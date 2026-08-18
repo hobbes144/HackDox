@@ -787,6 +787,18 @@ def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
     has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)  # v2
     has_cred   = has_leaked or has_weak
     has_hashbad = has_leaked or has_weak or has_reuse or has_unsalt
+    # #62: the burst below used to fire on `has_cred`, so EVERY weak- or
+    # leaked-credential candidate got an AUTH_FAIL storm annotated "credential
+    # stuffing pattern" — measured at 91 of 91, none of which carried
+    # CREDENTIAL_STUFFING. Because that kind is LOGWATCH-tier
+    # (candidate_gen._SEVERITY_REVEAL), it can never appear on the Hashcrack
+    # evidence board either, so the player had no way to reconcile the claim
+    # against anything. This is the inverted form of the recurring bug class:
+    # not ground truth with no artifact, but an artifact with no ground truth.
+    # The burst is now derived from the violation instead of asserted alongside
+    # a different one.
+    has_stuffing = any(d.kind == DiscrepancyKind.CREDENTIAL_STUFFING
+                       for d in candidate.truth.discrepancies)
 
     account    = candidate.email
     claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
@@ -795,8 +807,10 @@ def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
 
     entries: list[_HCLogEntry] = []
 
-    if has_cred:
-        # Credential-stuffing burst from external IP
+    if has_stuffing:
+        # Credential-stuffing burst from external IP. Gated on the violation
+        # itself (#62) — a bad password is not an attack pattern, and rendering
+        # one as the other taught the player a tell that meant nothing.
         burst = rng.randint(3, 6)
         for i in range(burst):
             entries.append(_HCLogEntry(
@@ -829,7 +843,11 @@ def _hc_candidate_entries(candidate, rng: _random.Random) -> list[_HCLogEntry]:
                    else "reuse" if has_reuse else "unsalted" if has_unsalt else None)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
-            event="HASH_SUBMIT", ip=ext_ip if has_cred else claimed_ip,
+            # #62: follows the burst, not the credential kind. A candidate who
+            # never had a burst has no external IP anywhere else in their log,
+            # so submitting the hash from one would leave an orphan signal
+            # pointing at an attack that isn't in the data.
+            event="HASH_SUBMIT", ip=ext_ip if has_stuffing else claimed_ip,
             account=account, detail=f"{algo}:{snippet}",
             owner_id=candidate.id, is_suspicious=has_hashbad,
             violation_kind=vk,

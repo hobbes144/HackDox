@@ -1117,6 +1117,146 @@ def test_absent_kind_is_not_claimed_by_its_tools_filtered_output(kind):
         )
 
 
+# ─── Batch 4 — the three holes the guards above turned out to have ──────────
+#
+# #61, #62 and #63 all sailed past the two guards above. Between them they
+# named four distinct blind spots, and every one of them is a way for the
+# player to be graded on evidence that does not match what the tools showed:
+#
+#   1. _filtered_output() scans exactly ONE tool per kind — whichever
+#      _SEVERITY_REVEAL names. A tool lying about ANOTHER tool's violation is
+#      structurally invisible. That is #62: Hashcrack annotated "credential
+#      stuffing pattern" on 91 of 91 weak/leaked-credential candidates, none of
+#      which carried CREDENTIAL_STUFFING, and the guard only ever looked at
+#      Logwatch.
+#   2. Tokens are uppercase enum names. Hashcrack's claim was lowercase prose,
+#      so even a cross-tool scan with the existing token would have missed it.
+#      Foreign claims therefore get their own prose-phrase table.
+#   3. A token can be satisfied by the FILTER SUMMARY, which is a restatement
+#      of ground truth rather than an observation. #63: the summary printed
+#      "▲ EMAIL_GITHUB_MISMATCH" unconditionally while the sweep body — the
+#      commit-email row that is the violation's only actual evidence — was
+#      absent 66% of the time. The summary said "look at this", and there was
+#      nothing to look at.
+#   4. limit=1 (fixed above).
+#
+# The lesson generalises past these three: a guard that reads the tool's
+# CONCLUSION cannot detect a missing OBSERVATION, because the conclusion is
+# computed from the same ground truth the guard is checking against. Only the
+# body is independent evidence.
+
+_EVIDENCE_SAMPLE = 8
+
+# Prose a tool must never emit for a candidate that does not carry the kind —
+# checked across ALL FOUR tools, not just the one that owns the violation.
+# Lower-cased on both sides, so entries are written as the player reads them.
+FOREIGN_CLAIM_TOKENS: dict[DiscrepancyKind, tuple[str, ...]] = {
+    # #62. Both the annotate path (tools_bridge _render_hc_log) and the
+    # explicit-tags path phrase it differently; both are listed, because a fix
+    # that only corrected one of them would look green here.
+    DiscrepancyKind.CREDENTIAL_STUFFING: (
+        "credential stuffing",
+        "rapid failure burst",
+    ),
+}
+
+_FILTER_SUMMARY_MARK = "violation summary"
+
+
+def _candidates_without_kind_per_archetype(kind, per_day: int = 3):
+    """Candidates lacking `kind`, sampled across EVERY archetype.
+
+    `_candidates_by_kind(want=False)` cannot be used here. It returns as soon
+    as it has `limit` results, and it iterates archetypes in order — so it
+    only ever samples the first archetype that qualifies, which for an
+    absent-kind query is whichever one happens to come first. That is fine for
+    the single-tool guard, where any counter-example will do, but useless for
+    the foreign-claim guard: #62's lie was emitted specifically by candidates
+    carrying a CREDENTIAL artifact kind (Clumsy Cutie, Bad Actor), and a
+    sample that stops at obvious_admit never reaches them.
+
+    Sampled per (archetype, DAY) rather than per archetype. The evidence-tier
+    gate (candidate_gen.intro_day) means most credential and log kinds cannot
+    be planted at all on day 1 — a per-archetype budget spends itself on day 1
+    and never reaches the days where the interesting candidates live. That
+    mistake made this guard silently inert on its first draft.
+    """
+    from dataclasses import replace
+
+    base = load_day(1)
+    found = []
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        for day_n in range(1, 8):
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            taken = 0
+            for seed in range(20):
+                if taken >= per_day:
+                    break
+                c = candidate_gen.generate(seed, day, 0)
+                if any(d.kind == kind for d in c.truth.discrepancies):
+                    continue
+                found.append((c, day, seed))
+                taken += 1
+    return found
+
+
+def _all_tool_outputs(candidate, day, seed) -> dict[str, str]:
+    """Every tool's filtered output for one candidate, keyed by tool name.
+
+    Deliberately runs all four rather than routing on _SEVERITY_REVEAL — the
+    whole point of the foreign-claim guard is that the offending tool is NOT
+    the one that owns the violation.
+    """
+    from gameengine.core import tools_bridge
+
+    state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
+    img = tools_bridge.build_stego_image(candidate, day.number)
+    return {
+        "ghostscan": "\n".join(
+            tools_bridge.run_ghostscan_filtered_shared(candidate, state).raw_lines),
+        "hashcrack": "\n".join(
+            tools_bridge.run_hashcrack_filtered_shared(
+                tools_bridge.generate_hashcrack_day_log(seed, day),
+                candidate, state).raw_lines),
+        "logwatch": "\n".join(
+            tools_bridge.run_logwatch_filtered_shared(
+                tools_bridge.generate_day_log(seed, day),
+                candidate, state).raw_lines),
+        "stegotool": "\n".join(
+            tools_bridge.stamp_signature_lines(img, reveal_type=True)),
+    }
+
+
+@pytest.mark.parametrize("kind", sorted(FOREIGN_CLAIM_TOKENS, key=lambda k: k.name))
+def test_no_tool_claims_a_violation_another_tool_owns(kind):
+    """No tool may assert a violation the candidate does not carry (#62).
+
+    This is the INVERTED form of the recurring bug class. The familiar version
+    is ground truth with no artifact; this is an artifact with no ground truth,
+    and it is worse for the player: they cannot reconcile it against the
+    evidence board, because the owning tool's board never lists it.
+    """
+    phrases = FOREIGN_CLAIM_TOKENS[kind]
+    checked = 0
+    for candidate, day, seed in _candidates_without_kind_per_archetype(kind):
+        checked += 1
+        for tool, out in _all_tool_outputs(candidate, day, seed).items():
+            low = out.lower()
+            for phrase in phrases:
+                assert phrase not in low, (
+                    f"{candidate.archetype.value} (seed {seed}, day "
+                    f"{day.number}) does NOT carry {kind.name}, but the "
+                    f"{tool} output says {phrase!r}. A tool asserting a "
+                    f"violation it was never given is unfalsifiable for the "
+                    f"player — {kind.name} is revealed by "
+                    f"{candidate_gen._SEVERITY_REVEAL[kind][0].value}, so it "
+                    f"cannot even appear on {tool}'s evidence board."
+                )
+    assert checked, f"no candidates found without {kind.name} — guard is inert"
+
+
 def test_single_artifact_groups_are_mutually_exclusive():
     """A candidate submits one password and one image, so it can carry at most
     one violation about each.
