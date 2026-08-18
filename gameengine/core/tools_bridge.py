@@ -407,6 +407,24 @@ def _ghostscan_sweep_lines(
     # Which legit platforms the candidate appears on (3-5 unless missing profile)
     n_appear = rng.randint(1, 2) if has_missing else rng.randint(3, 5)
     cand_platforms = set(rng.sample(_GS_LEGIT_PLATFORMS, min(n_appear, len(_GS_LEGIT_PLATFORMS))))
+    # #63: EMAIL_GITHUB_MISMATCH's only evidence is the `commits:` row below,
+    # which is emitted inside `if platform == "GitHub"`. The random sample above
+    # dropped GitHub for 50 of 76 carriers (66%), leaving the filter summary
+    # naming a violation with nothing in the report body to compare against —
+    # the player was told two emails differed while only ever seeing one.
+    #
+    # Swapping one sampled platform for GitHub rather than adding it keeps
+    # len(cand_platforms) intact, which matters because #51's
+    # "present on only N of 8 platforms" line is MISSING_PUBLIC_PROFILE's only
+    # tell. Growing the set here would quietly weaken a different violation.
+    #
+    # Nick's alternative — make absence-from-GitHub a violation in itself —
+    # was rejected: "handle barely appears" is MISSING_PUBLIC_PROFILE's
+    # signal, and #56 exists precisely because two violations sharing one
+    # signal is unresolvable for the player.
+    if has_mismatch and "GitHub" not in cand_platforms:
+        cand_platforms.discard(sorted(cand_platforms)[-1])
+        cand_platforms.add("GitHub")
 
     lines: list[str] = [
         f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]  "

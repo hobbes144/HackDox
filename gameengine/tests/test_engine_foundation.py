@@ -1082,19 +1082,28 @@ def _candidates_by_kind(kind, want: bool, limit: int = 3):
 
 @pytest.mark.parametrize("kind", sorted(EVIDENCE_TOKENS, key=lambda k: k.name))
 def test_planted_kind_is_visible_in_its_tools_filtered_output(kind):
-    """Present-when-planted: the evidence the player is scored on must exist."""
+    """Present-when-planted: the evidence the player is scored on must exist.
+
+    Batch 4 raised this from limit=1 to _EVIDENCE_SAMPLE. #63 was a 66%
+    failure rate that this guard stayed green on, because one sampled
+    candidate is a coin flip when the bug is probabilistic — the GitHub row
+    was present or absent depending on an rng.sample that this test never
+    exercised twice. One example proves a rendering path exists; it does not
+    prove the path is always taken.
+    """
     token = EVIDENCE_TOKENS[kind]
-    pairs = _candidates_by_kind(kind, want=True, limit=1)
+    pairs = _candidates_by_kind(kind, want=True, limit=_EVIDENCE_SAMPLE)
     if not pairs:
         pytest.skip(f"no archetype currently rolls {kind.name}")
-    candidate, day, seed = pairs[0]
-    out = _filtered_output(candidate, kind, day, seed)
-    assert token in out, (
-        f"{kind.name} is planted on {candidate.archetype.value} and revealed by "
-        f"{candidate_gen._SEVERITY_REVEAL[kind][0].value}, but its filtered "
-        f"output never shows {token!r}. The player cannot flag what the tool "
-        f"does not render."
-    )
+    for candidate, day, seed in pairs:
+        out = _filtered_output(candidate, kind, day, seed)
+        assert token in out, (
+            f"{kind.name} is planted on {candidate.archetype.value} (seed "
+            f"{seed}, day {day.number}) and revealed by "
+            f"{candidate_gen._SEVERITY_REVEAL[kind][0].value}, but its filtered "
+            f"output never shows {token!r}. The player cannot flag what the "
+            f"tool does not render."
+        )
 
 
 @pytest.mark.parametrize("kind", sorted(EVIDENCE_TOKENS, key=lambda k: k.name))
@@ -1255,6 +1264,50 @@ def test_no_tool_claims_a_violation_another_tool_owns(kind):
                     f"cannot even appear on {tool}'s evidence board."
                 )
     assert checked, f"no candidates found without {kind.name} — guard is inert"
+
+
+# Kinds whose evidence is a specific OBSERVATION in the report body, not just
+# the filter summary's restatement of it. Token must appear above the
+# "[FILTER] violation summary" divider.
+SWEEP_BODY_TOKENS: dict[DiscrepancyKind, str] = {
+    # #63 — the commit-email row. Without it the player is told the commit
+    # email differs from the dossier email with no commit email on screen.
+    DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "commit email differs from dossier",
+    # #56 — the sweep must show the OTHER org, not just name the violation.
+    DiscrepancyKind.AFFILIATION_MISMATCH:   "profile says",
+    # #51 — the thinned platform count, stated.
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: "no meaningful public",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(SWEEP_BODY_TOKENS, key=lambda k: k.name))
+def test_corroborating_evidence_exists_in_the_sweep_body(kind):
+    """The report BODY must corroborate what the filter summary asserts (#63).
+
+    Split out from the token guard deliberately. The filter summary is derived
+    from ground truth, so checking it proves only that ground truth exists —
+    it is the same fact stated twice. The body is the independent observation,
+    and it is the only thing the player can actually reason from.
+    """
+    from gameengine.core import tools_bridge
+
+    token = SWEEP_BODY_TOKENS[kind]
+    pairs = _candidates_by_kind(kind, want=True, limit=_EVIDENCE_SAMPLE)
+    assert pairs, f"no archetype currently rolls {kind.name} — guard is inert"
+    for candidate, day, seed in pairs:
+        state = GameState(seed=seed, current_day=day.number,
+                          compute_hours=10_000)
+        out = "\n".join(
+            tools_bridge.run_ghostscan_filtered_shared(candidate, state).raw_lines)
+        body = out.split(_FILTER_SUMMARY_MARK)[0]
+        assert token.lower() in body.lower(), (
+            f"{kind.name} is planted on {candidate.archetype.value} (seed "
+            f"{seed}, day {day.number}) and the filter summary names it, but "
+            f"the sweep body never shows {token!r}. The summary is a "
+            f"restatement of ground truth; the body is the evidence. Naming a "
+            f"violation with nothing above the divider to corroborate it tells "
+            f"the player to look at something that isn't on screen."
+        )
 
 
 def test_single_artifact_groups_are_mutually_exclusive():
