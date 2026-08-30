@@ -16,6 +16,7 @@ from gameengine.core.content_loader import load_day
 from gameengine.core.models import (
     Archetype,
     DiscrepancyKind,
+    Dossier,
     GameState,
     Verdict,
 )
@@ -604,11 +605,26 @@ def test_tool_cost_inflation_applies_after_the_upgrade_reduction():
 
 def test_filter_and_stamp_costs_do_not_inflate():
     """Deliberate design call — see config.TOOL_COST_INFLATION_PERIOD."""
-    assert config.FILTER_COSTS["ghostscan"] == 3
-    assert config.STEGO_STAMP_COST == 1
+    assert config.FILTER_COSTS["ghostscan"] == 4
+    assert config.STEGO_STAMP_COST == 5
     # Neither constant is a function of the day; nothing to inflate them.
     assert isinstance(config.FILTER_COSTS["ghostscan"], int)
     assert isinstance(config.STEGO_STAMP_COST, int)
+
+
+def test_every_upgrade_has_a_shop_category():
+    """The shop UI (BetweenDayScreen) groups UPGRADE_CATALOG into per-tool
+    sub-headers off config.UPGRADE_CATEGORY — an upgrade with no entry there
+    would silently vanish from the shop instead of erroring, the same
+    "planted ground truth with no observable path" bug class flagged
+    elsewhere in this file, just for the shop instead of a violation.
+    """
+    catalog_ids = {uid for uid, _label, _price, _desc in config.UPGRADE_CATALOG}
+    assert catalog_ids == set(config.UPGRADE_CATEGORY.keys())
+    assert set(config.UPGRADE_CATEGORY.values()) <= set(config.UPGRADE_CATEGORY_ORDER)
+    # Every category has an accent color for the header line.
+    for cat in config.UPGRADE_CATEGORY_ORDER:
+        assert cat in config.UPGRADE_CATEGORY_ACCENT
 
 
 def test_hard_band_biases_toward_tool_revealed_evidence():
@@ -1786,6 +1802,51 @@ def test_every_generated_disposable_candidate_is_actually_detectable():
     assert checked, "no DISPOSABLE_EMAIL candidates generated — test is inert"
 
 
+def test_breach_hit_flag_credited_against_cross_breach_reuse():
+    """Batch-3, revisiting #61(d): CROSS_BREACH_REUSE and BREACH_HIT stay
+    distinct kinds in ground truth on purpose (Clumsy Cutie has no critical
+    budget slot to force BREACH_HIT alongside it — see the #61(d) comment on
+    tools_bridge.breach_dbs_for_candidate). But that function already makes a
+    CROSS_BREACH_REUSE carrier's email show up — labeled BREACH_HIT — in
+    Ghostscan's breach panel, so a player flagging BREACH_HIT there is
+    reading real on-screen evidence and should be credited, not scored a
+    false positive.
+    """
+    day = load_day(20)   # late enough for every tool/kind to be taught
+    reuse_only = None
+    for seed in range(500):
+        c = candidate_gen.generate(seed, day, 0)
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if (DiscrepancyKind.CROSS_BREACH_REUSE in kinds
+                and DiscrepancyKind.BREACH_HIT not in kinds):
+            reuse_only = c
+            break
+    assert reuse_only is not None, (
+        "no CROSS_BREACH_REUSE-without-BREACH_HIT candidate generated in "
+        "500 seeds — test is inert")
+    actual = {d.kind for d in reuse_only.truth.discrepancies}
+
+    # A perfect board (every real kind flagged, nothing else) is the score
+    # to match — flagging BREACH_HIT in place of, or alongside,
+    # CROSS_BREACH_REUSE must reach that same ceiling, not fall short of it.
+    perfect = scoring.board_accuracy_bonus(actual, reuse_only)
+
+    with_breach_hit = scoring.board_accuracy_bonus(
+        (actual - {DiscrepancyKind.CROSS_BREACH_REUSE})
+        | {DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.BREACH_HIT},
+        reuse_only)
+    assert with_breach_hit == perfect
+
+    # Flagging ONLY BREACH_HIT in CROSS_BREACH_REUSE's place (having missed
+    # or not run Hashcrack) is also a full match, not a false positive plus
+    # a miss.
+    breach_hit_in_place_of_reuse = scoring.board_accuracy_bonus(
+        (actual - {DiscrepancyKind.CROSS_BREACH_REUSE})
+        | {DiscrepancyKind.BREACH_HIT},
+        reuse_only)
+    assert breach_hit_in_place_of_reuse == perfect
+
+
 def test_domain_classes_are_disjoint():
     """A domain in two classes would classify by whichever branch runs first,
     which is not a decision anyone made on purpose."""
@@ -2116,6 +2177,254 @@ def test_derived_weak_encryption_respects_the_day_whitelist():
         assert kinds <= {DiscrepancyKind.UNSALTED_STORAGE}, kinds
 
 
+def test_password_encryption_chip_gated_behind_cipher_id_hud():
+    """Batch-3 task #4: the [WEAK ENC]/[MEDIUM ENC]/[STRONG ENC] chip on the
+    dossier only auto-labels the algorithm once UPGRADE_CRYPTO_ID is owned.
+    Ungated, the raw hash must still be fully shown (evidence stays
+    observable — see the "planted ground truth" bug class at the top of this
+    file) — the player is just left to recognise it by shape, per the rules
+    page's new reference table.
+    """
+    from gameengine.ui.tui.app import _password_markup
+
+    day = unconstrained_day()
+    d = None
+    for seed in range(50):
+        c = candidate_gen.generate(seed, day, 0)
+        if not c.dossier.credential_unsalted:
+            d = c.dossier
+            break
+    assert d is not None
+
+    head_ungated, _ = _password_markup(d, None, upgrades=set())
+    head_gated, _ = _password_markup(d, None, upgrades={config.UPGRADE_CRYPTO_ID})
+
+    assert d.submitted_hash[:14] in head_ungated   # raw hash always visible
+    for label in ("WEAK ENC", "MEDIUM ENC", "STRONG ENC"):
+        assert label not in head_ungated, f"{label!r} leaked without the upgrade"
+    assert any(label in head_gated
+               for label in ("WEAK ENC", "MEDIUM ENC", "STRONG ENC"))
+
+
+def test_unsalted_password_shows_plaintext_directly_no_crack_prompt():
+    """Nick, playtest: for an UNSALTED_STORAGE candidate the Password entry
+    should simply BE the plaintext — no encrypted-looking hash chip, and
+    critically no "encrypted — run hashcrack (H) to attempt crack" prompt,
+    since there is nothing left to crack. _password_markup() now handles
+    credential_unsalted first and returns early, so that prompt string (which
+    only exists in the salted branch further down) can never appear."""
+    from gameengine.ui.tui.app import _password_markup
+    from gameengine.core.models import Dossier
+
+    d = Dossier(submitted_hash="5f4dcc3b5aa765d61d8327deb882cf99",
+                password_plain="monkey123", credential_unsalted=True)
+    head, state = _password_markup(d, None, upgrades=set())
+    assert "monkey123" in head, "the Password entry itself must be the plaintext"
+    assert "run hashcrack" not in head.lower()
+    assert "run hashcrack" not in state.lower()
+    assert "encrypted" not in head.lower()
+    assert "encrypted" not in state.lower()
+    # Still tagged as UNSALTED_STORAGE evidence, not silently indistinguishable
+    # from a cracked result.
+    assert "UNSALTED" in head
+
+
+def test_strong_password_verdict_line_gated_behind_crack_verdict_analyzer():
+    """The "strongest tier is always safe" wording is a strength VERDICT, not
+    the plaintext itself, so it's gated behind UPGRADE_HC_VERDICT — same
+    upgrade that gates the equivalent Hashcrack-log wording (#6a), so the two
+    surfaces never disagree about what's told to the player for free.
+    """
+    from gameengine.ui.tui.app import _password_markup
+    from gameengine.core.models import Dossier
+
+    # cracked_password == "" is the uncracked-but-attempted (bcrypt) state.
+    d = Dossier(submitted_hash="$2b$12$KIXQ7c5s9j2mR8vN0abcdEfGhIjKlMnOpQrStUvWxYz012345",
+                password_plain=None, credential_unsalted=False)
+    _, state_ungated = _password_markup(d, "", upgrades=set())
+    _, state_gated = _password_markup(d, "", upgrades={config.UPGRADE_HC_VERDICT})
+    assert "always safe" not in state_ungated
+    assert "always safe" in state_gated
+
+
+def test_breach_auto_upgrade_confirms_hit_on_base_ghostscan_run():
+    """Batch-3 task #4c: config.UPGRADE_BREACH_AUTO ("Breach Feed Sync")
+    confirms BREACH_HIT on the free base run, not only the paid filter run.
+    Threat-forum content must stay gated regardless — the upgrade only
+    touches the breach section.
+    """
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        if DiscrepancyKind.BREACH_HIT in {d.kind for d in c.truth.discrepancies}:
+            cand = c
+            break
+    assert cand is not None, "no BREACH_HIT candidate found in 200 seeds"
+
+    plain_state = GameState(seed=SEED, current_day=1)
+    result_plain = tools_bridge.run_ghostscan_shared(cand, plain_state)
+    assert not any("BREACH_HIT" in ln for ln in result_plain.raw_lines), (
+        "BREACH_HIT confirmed on the base run without the upgrade")
+
+    auto_state = GameState(seed=SEED, current_day=1)
+    auto_state.upgrades = {config.UPGRADE_BREACH_AUTO}
+    result_auto = tools_bridge.run_ghostscan_shared(cand, auto_state)
+    assert any("BREACH_HIT" in ln for ln in result_auto.raw_lines), (
+        "BREACH_HIT was not confirmed on the base run with the upgrade")
+    # Threat forums are a different violation family — the breach upgrade
+    # must not also leak them on the free run.
+    assert not any("[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_auto.raw_lines)
+
+
+def test_hashcrack_highlighting_actually_gated_by_credential_hud():
+    """Batch-3 task #4d: run_hashcrack_shared used to call _render_hc_log with
+    only annotate=True, so Credential HUD (hash_highlight) never gated
+    anything once the tool was run — any base run already highlighted
+    suspicious lines and injected "▲ why" annotations for free. Also checks
+    Nick's explicit requirement: the crack must still reveal the plaintext
+    without the upgrade, just without the "▲" attention-drawing.
+    """
+    import random as _random
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if kinds & {DiscrepancyKind.WEAK_CREDENTIAL, DiscrepancyKind.LEAKED_PASSWORD,
+                    DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE}:
+            cand = c
+            break
+    assert cand is not None, "no credential-violation candidate in 200 seeds"
+
+    entries = tools_bridge._hc_candidate_entries(cand, _random.Random(1), day.number)
+    plaintext = cand.dossier.password_plain
+    assert plaintext
+
+    plain_state = GameState(seed=SEED, current_day=20)
+    ungated = tools_bridge.run_hashcrack_shared(entries, cand, plain_state).raw_lines
+    assert not any("▲" in ln for ln in ungated), (
+        "attention-drawing ▲ annotation appeared without Credential HUD")
+    assert any(plaintext in ln for ln in ungated), (
+        "the crack must still reveal the plaintext without the upgrade")
+
+    gated_state = GameState(seed=SEED, current_day=20)
+    gated_state.upgrades = {config.UPGRADE_HASH_HIGHLIGHT}
+    gated = tools_bridge.run_hashcrack_shared(entries, cand, gated_state).raw_lines
+    assert any("▲" in ln for ln in gated), (
+        "Credential HUD did not restore the ▲ annotations")
+    assert any(plaintext in ln for ln in gated)
+
+
+def test_logwatch_highlighting_actually_gated_by_log_analyzer_hud():
+    """Batch-3 task #4e: same bug as #4d, for Logwatch/log_highlight. The
+    claimed-IP-mismatch call-out is intentionally excluded from this gate —
+    it's documented elsewhere (rules_content._CATCH) as always-free evidence,
+    a separate, pre-existing design decision.
+    """
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if kinds & {DiscrepancyKind.BRUTE_FORCE_IN_LOG, DiscrepancyKind.CREDENTIAL_STUFFING,
+                    DiscrepancyKind.IMPOSSIBLE_TRAVEL, DiscrepancyKind.INSIDER_BEHAVIOR}:
+            cand = c
+            break
+    assert cand is not None, "no logwatch-violation candidate in 200 seeds"
+
+    import random as _random
+    entries = tools_bridge._lw_candidate_entries(cand, _random.Random(1))
+    # The claimed-IP-mismatch call-out is free by design (unrelated to this
+    # upgrade) — exclude it so the assertion targets only the gated
+    # violation-annotation phrases.
+    violation_markers = ("rapid auth failures", "credential stuffing",
+                         "geographically distant", "after-hours privileged",
+                         "outside business hours")
+
+    plain_state = GameState(seed=SEED, current_day=20)
+    ungated = tools_bridge.run_logwatch_shared(entries, cand, plain_state).raw_lines
+    assert not any(m in ln for ln in ungated for m in violation_markers), (
+        "attention-drawing ▲ annotation appeared without Log Analyzer HUD")
+
+    gated_state = GameState(seed=SEED, current_day=20)
+    gated_state.upgrades = {config.UPGRADE_LOG_HIGHLIGHT}
+    gated = tools_bridge.run_logwatch_shared(entries, cand, gated_state).raw_lines
+    assert any(m in ln for ln in gated for m in violation_markers), (
+        "Log Analyzer HUD did not restore the ▲ annotations")
+
+
+def test_strong_password_verdict_gated_in_hashcrack_log():
+    """Batch-3 task #6a: the "(strong password — no concern)" verdict wording
+    in the Hashcrack log itself (not just the dossier chip, covered by a
+    separate test above) is gated behind UPGRADE_HC_VERDICT. The plaintext
+    must still reveal either way — only the qualitative verdict is paywalled.
+    """
+    import random as _random
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    cred_kinds = {DiscrepancyKind.WEAK_CREDENTIAL, DiscrepancyKind.LEAKED_PASSWORD,
+                 DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE}
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        kinds = {d.kind for d in c.truth.discrepancies}
+        strength = tools_bridge.password_strength(c.dossier.submitted_hash)
+        if (not (kinds & cred_kinds) and strength == "medium"
+                and tools_bridge.crack_password(c)):
+            cand = c
+            break
+    assert cand is not None, "no neutral-crack candidate found in 200 seeds"
+
+    entries = tools_bridge._hc_candidate_entries(cand, _random.Random(1), day.number)
+    plaintext = tools_bridge.crack_password(cand)
+
+    plain_state = GameState(seed=SEED, current_day=20)
+    ungated = tools_bridge.run_hashcrack_shared(entries, cand, plain_state).raw_lines
+    assert any(plaintext in ln for ln in ungated), "plaintext must still reveal"
+    assert not any("no concern" in ln for ln in ungated)
+
+    gated_state = GameState(seed=SEED, current_day=20)
+    gated_state.upgrades = {config.UPGRADE_HC_VERDICT}
+    gated = tools_bridge.run_hashcrack_shared(entries, cand, gated_state).raw_lines
+    assert any("no concern" in ln for ln in gated)
+
+
+def test_stego_rgb_coloring_gated_behind_channel_colorizer():
+    """Batch-3 task #4f: the R/G/B channel entropy numbers are always shown;
+    only their severity coloring is gated behind UPGRADE_STEGO_RGB_COLOR.
+    """
+    from gameengine.core import tools_bridge
+    import re
+
+    day = load_day(20)
+    cand = candidate_gen.generate(SEED, day, 0)
+
+    ungated = tools_bridge.get_stego_stats(cand, upgrades=set())
+    gated = tools_bridge.get_stego_stats(cand, upgrades={config.UPGRADE_STEGO_RGB_COLOR})
+
+    def channel_lines(lines):
+        return [ln for ln in lines if "channel LSB entropy" in ln]
+
+    ungated_ch, gated_ch = channel_lines(ungated), channel_lines(gated)
+    assert len(ungated_ch) == len(gated_ch) == 3
+    # Numbers must match — the upgrade only changes color, never the values.
+    _num = re.compile(r"(\d+)\[/\]\s*/\s*100")
+    assert [_num.search(l).group(1) for l in ungated_ch] == \
+           [_num.search(l).group(1) for l in gated_ch]
+    assert all("#c8d4e1" in l for l in ungated_ch), "ungated lines must be neutral-colored"
+    assert any(c in l for l in gated_ch for c in ("#ff5470", "#ff8c42", "#00ff9f")), (
+        "gated lines never used a severity color")
+
+
 # ─── Issue #60 — the ruleset expresses the ground truth ─────────────────────
 
 
@@ -2357,6 +2666,145 @@ def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
                     f"day {day_n} {c.archetype.value}: Ghostscan panel seeds "
                     f"{panel}, Hashcrack log names {log}")
     assert checked, "guard is inert"
+
+
+def _find_breach_carrier(day_n, candidate_count=8, slot=0):
+    """(archetype, seed, day, candidate, kinds) — a candidate at `slot` on a
+    `candidate_count`-slot day, carrying a Hashcrack-observable breach kind.
+    Mirrors _breach_carriers()'s search strategy, but on a specific slot of a
+    specific-sized day (needed to test the panel with several candidates
+    present at once, per the batch-3 follow-up below)."""
+    from dataclasses import replace
+    base = unconstrained_day()
+    bkinds = {DiscrepancyKind.BREACH_HIT, DiscrepancyKind.LEAKED_PASSWORD,
+              DiscrepancyKind.CROSS_BREACH_REUSE}
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=day_n, candidate_count=candidate_count,
+                      forced_includes={slot: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(60):
+            c = candidate_gen.generate(seed, day, slot)
+            kinds = {d.kind for d in c.truth.discrepancies} & bkinds
+            if kinds:
+                return archetype, seed, day, c, kinds
+    return None
+
+
+def test_breach_lists_for_day_include_every_slots_carrier():
+    """Batch-3 follow-up (Nick, playtest): get_breach_lists_for_day() must
+    seed EVERY candidate the day will ever produce, not just slot 0 — this is
+    the actual fix for "planted in the list in the middle of the round," so
+    it has to be proven for a carrier who isn't the first candidate either."""
+    from dataclasses import replace
+    from gameengine.core import tools_bridge
+
+    found = _find_breach_carrier(day_n=7, candidate_count=8, slot=5)
+    assert found, "no breach carrier found at slot 5 — guard is inert"
+    _archetype, seed, day, c, kinds = found
+
+    lists = tools_bridge.get_breach_lists_for_day(seed, day)
+    all_emails = {e for _n, _y, _cl, emails in lists for e in emails}
+    assert c.email in all_emails, (
+        f"slot-5 carrier ({kinds}) is missing from the day-wide breach "
+        f"lists — the fix must not only cover slot 0")
+
+
+def test_breach_list_panel_shows_a_carrier_before_their_turn():
+    """The actual regression: BreachListPanel used to call get_breach_lists()
+    fresh per candidate and discard everything else, so a real carrier's
+    email only existed in the panel while THEIR OWN dossier was open. Load a
+    DIFFERENT, non-carrying candidate and confirm the carrier's email is
+    still sitting in the panel, unmarked (is_match False — it isn't the
+    candidate currently under investigation, just genuinely present)."""
+    import asyncio
+    from dataclasses import replace
+    from textual.app import App, ComposeResult
+    from gameengine.core import tools_bridge
+    from gameengine.ui.tui.app import BreachListPanel
+
+    found = _find_breach_carrier(day_n=7, candidate_count=8, slot=0)
+    assert found, "no breach carrier found at slot 0 — guard is inert"
+    _archetype, seed, day, carrier, kinds = found
+    other = candidate_gen.generate(seed, day, 1)
+    assert other.email != carrier.email
+
+    class _Host(App):
+        def compose(self) -> ComposeResult:
+            yield BreachListPanel()
+
+    async def go():
+        app = _Host()
+        async with app.run_test() as pilot:
+            panel = app.query_one(BreachListPanel)
+            panel.load_candidate(other, seed, day)   # NOT the carrier's turn
+            await pilot.pause(0.05)
+            by_email = {email: is_match
+                       for _n, _y, _cl, entries in panel._lists
+                       for email, is_match in entries}
+            assert carrier.email in by_email, (
+                f"carrier ({kinds}) is absent from the panel while a "
+                f"different, unrelated candidate is loaded — still being "
+                f"planted only on their own turn")
+            assert by_email[carrier.email] is False, (
+                "the carrier's row is flagged is_match while someone else's "
+                "dossier is open — that would leak/misattribute the hit to "
+                "the wrong candidate's turn")
+            # `other` need not carry a breach kind at all (most candidates
+            # don't) — but IF their email happens to land in a corpus too,
+            # it must be the one flagged is_match, never the carrier's.
+            if other.email in by_email:
+                assert by_email[other.email] is True, (
+                    "the currently-loaded candidate's own row should be the "
+                    "one flagged is_match")
+    asyncio.run(go())
+
+
+def test_breach_list_idle_state_does_not_color_code_the_real_match():
+    """Nick's playtest report: the real match's idle-state row rendered at a
+    visibly lighter shade (#6b7785) than a noise row (#4a5568) — identifiable
+    without running a scan or buying the upgrade. Idle rendering of a real
+    match and a noise row must be byte-for-byte identical apart from the
+    email text itself."""
+    import asyncio
+    from textual.app import App, ComposeResult
+    from gameengine.ui.tui.app import BreachListPanel
+
+    found = _find_breach_carrier(day_n=7, candidate_count=4, slot=0)
+    assert found, "no breach carrier found — guard is inert"
+    _archetype, seed, day, carrier, _kinds = found
+
+    class _Host(App):
+        def compose(self) -> ComposeResult:
+            yield BreachListPanel()
+
+    async def go():
+        app = _Host()
+        async with app.run_test() as pilot:
+            panel = app.query_one(BreachListPanel)
+            panel.load_candidate(carrier, seed, day)   # it IS their turn, but idle
+            await pilot.pause(0.05)
+            assert panel._scan_state == BreachListPanel._STATE_IDLE
+            # Read what _rebuild_content ACTUALLY handed to the Static widget
+            # (name-mangled private attr set by Static.update) rather than
+            # reconstructing the expected string ourselves — this has to
+            # catch a regression in app.py, not just restate the fix.
+            rendered = panel._content._Static__content
+            assert isinstance(rendered, str)
+            lines = rendered.split("\n")
+
+            match_email = next(e for _n, _y, _cl, entries in panel._lists
+                               for e, m in entries if m)
+            noise_email = next(e for _n, _y, _cl, entries in panel._lists
+                               for e, m in entries if not m)
+            match_line = next(l for l in lines if match_email in l)
+            noise_line = next(l for l in lines if noise_email in l)
+            match_color = match_line.split(match_email)[0]
+            noise_color = noise_line.split(noise_email)[0]
+            assert match_color == noise_color, (
+                f"real match renders as {match_color!r} but a noise row "
+                f"renders as {noise_color!r} — any difference is exactly "
+                f"the 'slightly lighter' leak Nick reported")
+    asyncio.run(go())
 
 
 def test_cross_breach_reuse_is_not_plantable_below_two_databases(monkeypatch):
@@ -2679,3 +3127,153 @@ def test_affiliations_faked_excludes_the_untouchable_elite_orgs():
         f"{sorted(overlap)} is in both banks — #56 guarantees a claimed elite "
         f"organisation always confirms in the sweep, which is the player's "
         f"whole reward for recognising one")
+
+
+def test_logwatch_noise_pool_includes_many_external_cities():
+    """Batch-3 task #5: more locations for noise to hide violations in.
+    Before this, only a violation (or the candidate's own foreign login)
+    ever carried an exotic city tag, so any foreign city in the log was
+    itself the tell. Assert the location pool actually grew, and that noise
+    generation can draw a foreign city for an unrelated account.
+    """
+    from gameengine.core import tools_bridge
+
+    assert len(tools_bridge._LW_CITIES) >= 12, (
+        "batch-3 task #5 should add more locations, not just reuse the "
+        "original 8-city pool")
+    # every prefix must resolve through _lw_city (i.e. is present in the map)
+    for prefix, city in tools_bridge._LW_CITIES:
+        assert tools_bridge._LW_CITY_MAP.get(prefix) == city
+
+    import random as _random
+    saw_external_noise_city = False
+    for seed in range(200):
+        entries = tools_bridge._lw_noise_entries(_random.Random(seed), 30)
+        for e in entries:
+            if e.owner_id is None and e.event == "AUTH_OK" and e.city:
+                saw_external_noise_city = True
+                break
+        if saw_external_noise_city:
+            break
+    assert saw_external_noise_city, (
+        "with LW_NOISE_EXTERNAL_CITY_FRACTION > 0, some noise AUTH_OK rows "
+        "should carry a foreign city tag like violations do")
+
+
+def test_logwatch_noise_external_city_fraction_is_configurable():
+    """The external-city noise rate is a config knob (task #7), and turning
+    it to zero must stop noise rows from ever carrying a foreign city —
+    proving the knob actually drives the behaviour, not just documents it.
+    """
+    from gameengine.core import tools_bridge
+    from gameengine import config as _cfg
+
+    original = _cfg.LW_NOISE_EXTERNAL_CITY_FRACTION
+    try:
+        _cfg.LW_NOISE_EXTERNAL_CITY_FRACTION = 0.0
+        import random as _random
+        for seed in range(50):
+            entries = tools_bridge._lw_noise_entries(_random.Random(seed), 40)
+            for e in entries:
+                assert not (e.owner_id is None and e.event == "AUTH_OK" and e.city), (
+                    "LW_NOISE_EXTERNAL_CITY_FRACTION = 0.0 should suppress "
+                    "all foreign-city noise logins")
+    finally:
+        _cfg.LW_NOISE_EXTERNAL_CITY_FRACTION = original
+
+
+def test_logwatch_brute_force_burst_size_is_configurable():
+    """Batch-3 task #7: burst size for BRUTE_FORCE_IN_LOG was a bare literal
+    (rng.randint(4, 7)) inside _lw_candidate_entries; pulled into
+    config.LW_BRUTE_BURST_SIZE. Prove the knob actually drives generation,
+    not just documents a number nothing reads."""
+    from gameengine.core import tools_bridge
+    import random as _random
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        if DiscrepancyKind.BRUTE_FORCE_IN_LOG in {d.kind for d in c.truth.discrepancies}:
+            cand = c
+            break
+    assert cand is not None, "no brute-force candidate in 200 seeds"
+
+    def _burst_len(seed):
+        entries = tools_bridge._lw_candidate_entries(cand, _random.Random(seed))
+        return sum(1 for e in entries if e.violation_kind == "brute_force"
+                   and e.event == "AUTH_FAIL")
+
+    original = config.LW_BRUTE_BURST_SIZE
+    try:
+        config.LW_BRUTE_BURST_SIZE = (20, 20)
+        assert _burst_len(1) == 20, "LW_BRUTE_BURST_SIZE did not drive the burst count"
+    finally:
+        config.LW_BRUTE_BURST_SIZE = original
+
+
+def test_hashcrack_stuffing_burst_size_is_configurable():
+    """Same shape as above, for Hashcrack's HC_STUFFING_BURST_SIZE."""
+    from gameengine.core import tools_bridge
+    import random as _random
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        if DiscrepancyKind.CREDENTIAL_STUFFING in {d.kind for d in c.truth.discrepancies}:
+            cand = c
+            break
+    assert cand is not None, "no credential-stuffing candidate in 200 seeds"
+
+    def _burst_len(seed):
+        entries = tools_bridge._hc_candidate_entries(cand, _random.Random(seed), day.number)
+        return sum(1 for e in entries if e.violation_kind == "stuffing"
+                   and e.event == "AUTH_FAIL")
+
+    original = config.HC_STUFFING_BURST_SIZE
+    try:
+        config.HC_STUFFING_BURST_SIZE = (15, 15)
+        assert _burst_len(1) == 15, "HC_STUFFING_BURST_SIZE did not drive the burst count"
+    finally:
+        config.HC_STUFFING_BURST_SIZE = original
+
+
+def test_log_generation_timing_knobs_are_all_present_and_well_formed():
+    """Completeness/shape guard for the batch-3 task #7 config extraction —
+    every (min, max) pair is a real 2-tuple with min <= max, and every event-
+    weight list is non-empty. Cheap insurance against a typo'd knob (e.g. a
+    single int where a tuple was expected) blowing up randint() at runtime."""
+    # (min, max) pairs fed straight to rng.randint(*pair) — min must not
+    # exceed max or randint blows up at runtime.
+    range_knobs = [
+        "LW_WORKDAY_WINDOW", "LW_NORMAL_LOGIN_COUNT", "LW_NORMAL_LOGIN_GAP",
+        "LW_CLEAN_ACTIVITY_COUNT", "LW_CLEAN_ACTIVITY_GAP", "LW_BRUTE_BURST_SIZE",
+        "LW_BRUTE_COOLDOWN", "LW_STUFFING_COOLDOWN", "LW_TRAVEL_GAP",
+        "LW_TRAVEL_COOLDOWN", "LW_INSIDER_STEP1_GAP",
+        "LW_INSIDER_STEP2_GAP", "LW_AFTERHOURS_GAP",
+        "LW_SLOW_FIRST_TS", "LW_SLOW_BURST_SIZE", "LW_SLOW_GAP",
+        "LW_NOISE_TIME_WINDOW", "HC_WORKDAY_WINDOW", "HC_NORMAL_LOGIN_GAP",
+        "HC_HASH_SUBMIT_GAP", "HC_BREACH_ROW_GAP", "HC_STUFFING_BURST_SIZE",
+        "HC_STUFFING_COOLDOWN", "HC_STUFFING_POST_GAP", "HC_NOISE_TIME_WINDOW",
+    ]
+    for name in range_knobs:
+        val = getattr(config, name)
+        assert isinstance(val, tuple) and len(val) == 2, f"{name} is not a 2-tuple: {val!r}"
+        lo, hi = val
+        assert lo <= hi, f"{name} has min > max: {val!r}"
+
+    # (window-start, span) pairs — start + rng.randint(0, span) — different
+    # shape (start can legitimately exceed span), so checked separately.
+    window_knobs = ["LW_INSIDER_WINDOW", "LW_AFTERHOURS_WINDOW"]
+    for name in window_knobs:
+        val = getattr(config, name)
+        assert isinstance(val, tuple) and len(val) == 2, f"{name} is not a 2-tuple: {val!r}"
+        start, span = val
+        assert 0 <= start <= 86400 and span >= 0, f"{name} has an invalid window: {val!r}"
+
+    weight_knobs = ["LW_NOISE_EVENT_WEIGHTS", "HC_NOISE_EVENT_WEIGHTS",
+                    "LW_CLEAN_ACTIVITY_EVENTS"]
+    for name in weight_knobs:
+        val = getattr(config, name)
+        assert isinstance(val, list) and val, f"{name} is empty or not a list: {val!r}"

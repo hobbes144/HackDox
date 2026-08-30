@@ -144,6 +144,51 @@ class _BriefingHost(App):
         yield Static("root")
 
 
+def test_hostile_chat_color_gated_behind_sentiment_scanner():
+    """Batch-3 task #4: HOSTILE_CHAT lines must only render red/bold once the
+    Sentiment Scanner upgrade (config.UPGRADE_CHAT_HOSTILE) is owned — before
+    that they should read like any other neutral chat line. Only the ⚠ prefix
+    icon was gated before this fix; the line color itself was not.
+    """
+    from gameengine import config
+
+    day = load_day(20)
+    hostile_cand = None
+    for seed in range(300):
+        c = candidate_gen.generate(seed, day, 0)
+        if any(l.tag == "hostile" for l in c.chat_script):
+            hostile_cand = c
+            break
+    assert hostile_cand is not None, "no hostile-chat candidate found in 300 seeds"
+
+    calls: list[tuple] = []
+
+    class _RecordingChatPanel(ChatPanel):
+        def post(self, speaker, lines, *, color="#c8d4e1", icon="", style="",
+                 triggers=None, prefix="") -> None:
+            calls.append((color, style, prefix))
+
+    ungated = _RecordingChatPanel()
+    ungated.upgrades = set()
+    ungated.set_candidate(hostile_cand)
+    hostile_idx = [i for i, l in enumerate(hostile_cand.chat_script)
+                   if l.tag == "hostile"]
+    for i in hostile_idx:
+        color, style, prefix = calls[i]
+        assert color == "#c8d4e1" and style == "", (
+            f"hostile line rendered {color!r}/{style!r} without the upgrade")
+        assert "⚠" not in prefix
+
+    calls.clear()
+    gated = _RecordingChatPanel()
+    gated.upgrades = {config.UPGRADE_CHAT_HOSTILE}
+    gated.set_candidate(hostile_cand)
+    for i in hostile_idx:
+        color, style, prefix = calls[i]
+        assert color == "#ff5470" and style == "bold"
+        assert "⚠" in prefix
+
+
 def test_briefing_screen_plays_overseer_beat():
     """The BriefingScreen Overseer region (a TypewriterLog host) auto-plays a
     multi-line beat to completion without a keypress (#3)."""

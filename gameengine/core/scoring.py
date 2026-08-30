@@ -79,15 +79,43 @@ def board_accuracy_bonus(
     Uses an F1-style metric: perfect match = full bonus, partial = scaled.
     False positives (flagging violations that aren't there) reduce the
     bonus; correctly flagging nothing on a clean candidate pays in full.
+
+    One deliberate exception: a BREACH_HIT flag is credited against a
+    CROSS_BREACH_REUSE violation instead of scored as a false positive.
+    tools_bridge.breach_dbs_for_candidate() already shows a CROSS_BREACH_REUSE
+    carrier's email as a match in Ghostscan's breach panel — labeled
+    BREACH_HIT — even though the two stay distinct kinds in ground truth
+    (#61d). The player is reading real evidence when they flag it, so it
+    should never cost them the bonus.
     """
     actual = {d.kind for d in candidate.truth.discrepancies}
     if not actual and not player_flags:
         # Clean candidate, player correctly flagged nothing.
         return config.BOARD_ACCURACY_MAX_BONUS
 
-    true_pos  = len(player_flags & actual)
-    false_pos = len(player_flags - actual)
-    false_neg = len(actual - player_flags)
+    # Batch-3 content pass, revisiting #61(d): CROSS_BREACH_REUSE (Hashcrack)
+    # and BREACH_HIT (Ghostscan) deliberately stay separate, distinct kinds in
+    # ground truth (#61d's own words: "the two violations stay distinct").
+    # But breach_dbs_for_candidate() (tools_bridge.py) already makes a
+    # CROSS_BREACH_REUSE carrier's email genuinely show up — labeled
+    # "BREACH_HIT" — in Ghostscan's breach panel, so a player flagging
+    # BREACH_HIT there is reading real, on-screen evidence, not guessing.
+    # Credit that flag as a match against the CROSS_BREACH_REUSE violation
+    # instead of scoring it a false positive. Only ever helps: it folds a
+    # BREACH_HIT flag into the CROSS_BREACH_REUSE slot rather than adding a
+    # second required flag, so it can't create a new miss, and flagging both
+    # BREACH_HIT and CROSS_BREACH_REUSE nets to the same single true positive
+    # (not a false positive for the "redundant" one).
+    credited_flags = set(player_flags)
+    if (DiscrepancyKind.BREACH_HIT not in actual
+            and DiscrepancyKind.CROSS_BREACH_REUSE in actual
+            and DiscrepancyKind.BREACH_HIT in credited_flags):
+        credited_flags.discard(DiscrepancyKind.BREACH_HIT)
+        credited_flags.add(DiscrepancyKind.CROSS_BREACH_REUSE)
+
+    true_pos  = len(credited_flags & actual)
+    false_pos = len(credited_flags - actual)
+    false_neg = len(actual - credited_flags)
     denom = true_pos + false_pos + false_neg
     if denom == 0:
         return config.BOARD_ACCURACY_MAX_BONUS

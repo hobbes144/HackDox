@@ -216,30 +216,14 @@
   "rule_sheet": {
     "summary": "Dossier only today. Deny a throwaway email address, a stored password you can read, or anyone who threatens the service. Everything else is an admit.",
     "approved": {
-      "domains": [
-        "gmail.com",
-        "outlook.com",
-        "yahoo.com",
-        "icloud.com",
-        "any .edu / .ac.uk / .gov / .mil address",
-        "an address at the organisation they claim to work for"
-      ],
+      "domains": [],
       "affiliations": [
         "any named employer or institution",
         "\"independent\" / \"freelance\" — thin, but not disqualifying on its own"
       ]
     },
     "denied": {
-      "domains": [
-        "mailinator.com",
-        "yopmail.com",
-        "guerrillamail.com",
-        "10minutemail.com",
-        "throwawaymail.com",
-        "sharklasers.com",
-        "tempmail.org",
-        "trashmail.com"
-      ],
+      "domains": [],
       "affiliations": [
         "BreachForums",
         "RaidForums",

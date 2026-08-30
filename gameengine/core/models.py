@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+from .. import config
+
 
 # ─── Enums ──────────────────────────────────────────────────────────────────
 
@@ -430,12 +432,19 @@ class GameState:
 
     seed: int
     current_day: int = 1
-    compute_hours: int = 60       # ⏱ — finite daily tool budget (issue #27)
-    compute_capacity: int = 60    # ⏱ base of the daily-budget formula (upgradable)
-    alignment: int = 0
-    site_health: float = 100.0    # persistent % loss condition (issues #18/#20)
-    hackdollars: int = 0          # persistent between-day currency (issue #21)
-    hackdox_credits: int = 1      # ground-truth reveal consumable (issue #25)
+    # Every default below is read straight from config's STARTING_*/..._START
+    # constants rather than a hand-typed number — a fresh GameState() (a test
+    # fixture, the lab CLI, anything that doesn't go through the real
+    # new-game path in app.py, which already passes these explicitly) should
+    # never silently start from a value that disagrees with the campaign's
+    # actual starting balance. Two of these WERE separately hardcoded copies
+    # that drifted the moment the config values were tuned.
+    compute_hours: int = config.STARTING_COMPUTE     # ⏱ — finite daily tool budget (issue #27)
+    compute_capacity: int = config.STARTING_COMPUTE  # ⏱ base of the daily-budget formula (upgradable)
+    alignment: int = config.STARTING_ALIGNMENT
+    site_health: float = config.SITE_HEALTH_START     # persistent % loss condition (issues #18/#20)
+    hackdollars: int = config.STARTING_HACKDOLLARS    # persistent between-day currency (issue #21)
+    hackdox_credits: int = config.STARTING_HACKDOX_CREDITS  # ground-truth reveal consumable (issue #25)
     upgrades: set[UpgradeId] = field(default_factory=set)
     # Progressive unlock (#31): which tool pages the player has been granted.
     # Stores ToolName.value strings (JSON-friendly, like `upgrades`). The

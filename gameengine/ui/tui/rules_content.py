@@ -22,6 +22,8 @@ then tool-specific reference subsections behind clear dividers.
 
 from __future__ import annotations
 
+import re
+
 from gameengine import config
 from gameengine.core import candidate_gen, tools_bridge
 from gameengine.core.models import Day, DiscrepancyKind, Performance, ToolName
@@ -110,6 +112,114 @@ _DUPES = sorted(lbl for lbl in _LABEL.values()
 if _DUPES:
     raise AssertionError(f"duplicate violation labels (#56): {sorted(set(_DUPES))}")
 
+
+# ─── Progressive unlock — gating the catalog / tabs / rules by tool access ───
+# Single-sourced off the same _TOOL map every other lookup in this module
+# already derives from candidate_gen._SEVERITY_REVEAL: a discrepancy can never
+# be PLANTED before its revealing tool is taught (candidate_gen.intro_day), so
+# a kind whose tool is still locked can never actually be present on a
+# candidate yet. Hiding it here isn't just tidy — it means the Evidence Board
+# and every Rules-page surface never show the player something they cannot
+# possibly have evidence for. Re-tiering a kind's revealing tool updates every
+# gate below for free; nothing here is a second copy to keep in sync by hand.
+
+def _tool_unlocked(tool: ToolName | None, unlocked_tools: set[str] | None) -> bool:
+    """True if `tool` is currently accessible to the player.
+
+    `unlocked_tools` is `GameState.unlocked_tools` (never contains "dossier" —
+    that tool is always available, see config.TOOL_UNLOCK_DAY). `None` means
+    "no gating context" — tests, the rules-lab preview, anything without a
+    live GameState — and shows everything, matching this module's behaviour
+    before progressive unlock reached the Rules Pages / Evidence Board.
+    """
+    if tool is None or tool == ToolName.DOSSIER:
+        return True
+    if unlocked_tools is None:
+        return True
+    return tool.value in unlocked_tools
+
+
+# Canonical group display order for every multi-group surface (the Evidence
+# Board's category strip, visible_catalog's sort below). NOT the order groups
+# happen to be authored in VIOLATION_CATALOG (that's DOSSIER/OSINT/FORENSICS/
+# CREDENTIAL/STEGO) — CREDENTIAL reads before FORENSICS here on purpose, so a
+# second hand-kept copy of this list is exactly how it'd drift silently.
+GROUP_ORDER = ["DOSSIER", "OSINT", "CREDENTIAL", "FORENSICS", "STEGO"]
+
+
+def visible_catalog(
+    unlocked_tools: set[str] | None,
+) -> list[tuple[str, DiscrepancyKind, str]]:
+    """VIOLATION_CATALOG filtered to kinds the player can currently observe,
+    ordered by GROUP_ORDER and then by severity ascending (minor -> major ->
+    critical) within each group so the board reads calm-to-alarming.
+
+    Used by the Evidence Board (app.py) so its single scrollable list only
+    ever offers violations the player could actually have caught, in the
+    same order it has always displayed them in.
+    """
+    items = [(g, k, lbl) for g, k, lbl in VIOLATION_CATALOG
+             if _tool_unlocked(_TOOL.get(k), unlocked_tools)]
+    items.sort(key=lambda it: (
+        GROUP_ORDER.index(it[0]),
+        _SEV_RANK.get(_SEVERITY.get(it[1], "minor"), 0),
+    ))
+    return items
+
+
+def _locked_tab_text(tool: ToolName, title: str) -> str:
+    """Placeholder shown in place of a tool tab's full reference material
+    while that tool is still locked — reuses #33's ⊘ locked-tool language."""
+    unlock_day = config.TOOL_UNLOCK_DAY[tool.value]
+    lines = _band(f"{title} — LOCKED", "#3d6478")
+    lines += [
+        "",
+        "  [#3d6478][b]⊘  Not authorized yet.[/][/]",
+        f"  [dim]{_TOOL_LABEL[tool].capitalize()} unlocks on Day {unlock_day}. Its",
+        "  violation catalog and reference material open up the day the",
+        "  Overseer grants it — check back once it's live.[/]",
+    ]
+    return "\n".join(lines)
+
+
+# Rules whose predicate names one DiscrepancyKind gate on that kind's
+# revealing tool, exactly like violation_table's TODAY column already reads
+# rule.predicate against a kind. Rules on a different predicate shape
+# (has_severity: / missing_field:) aren't tied to a single tool and are
+# never gated — safer to always show than to guess.
+def _rule_tool(rule) -> ToolName | None:
+    if not rule.predicate.startswith("has_discrepancy:"):
+        return None
+    try:
+        kind = DiscrepancyKind(rule.predicate.split(":", 1)[1])
+    except ValueError:
+        return None
+    return _TOOL.get(kind)
+
+
+# Every authored rule opens with one of these two fixed boilerplate phrases
+# (checked against all 27 of Day 1's rules — the campaign-wide rulebook).
+# Dimming the boilerplate and bolding + colouring the remainder makes the
+# part that actually changes rule to rule — the trigger condition — the part
+# that stands out, instead of every line reading as the same wall of text.
+_RULE_PREFIX_STRIP = (
+    re.compile(r"^Deny any candidate who(?:se)?\s+", re.IGNORECASE),
+    re.compile(r"^Flag \(do not auto-deny\)\s+", re.IGNORECASE),
+)
+
+
+def _highlighted_rule_line(text: str, accent: str) -> str:
+    for pat in _RULE_PREFIX_STRIP:
+        m = pat.match(text)
+        if m:
+            prefix, remainder = text[:m.end()], text[m.end():]
+            remainder = remainder[:1].upper() + remainder[1:]
+            return f"[dim]{prefix}[/][{accent}][b]{remainder}[/][/]"
+    # Unrecognised phrasing (a future rule authored differently) — still an
+    # improvement over plain text, just without the dimmed lead-in to split.
+    return f"[{accent}][b]{text}[/][/]"
+
+
 SEV_COLOR   = {"minor": "#ffd93d", "major": "#ff8c42", "critical": "#ff5470"}
 _SEV_RANK   = {"minor": 0, "major": 1, "critical": 2}
 GROUP_ACCENT = {
@@ -134,7 +244,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.HOSTILE_CHAT:           "free — read the chat panel (Sentiment Scanner upgrade ⚠-marks it)",
     DiscrepancyKind.AFFILIATION_NOT_STATED: "DOSSIER — the affiliation field is blank; nothing was claimed",
     DiscrepancyKind.DISPOSABLE_EMAIL:       "free — domain visible on the dossier, no tool needed (quick deny)",
-    DiscrepancyKind.WEAK_ENCRYPTION:        "free — MD5 shown on the dossier's strength chip; a crack (if attempted) reveals a fine password — the algorithm is the problem, not the value",
+    DiscrepancyKind.WEAK_ENCRYPTION:        "free — the raw hash is on the dossier (32 hex = MD5, auto-labeled with Cipher ID HUD); a crack (if attempted) reveals a fine password — the algorithm is the problem, not the value",
     DiscrepancyKind.UNSALTED_STORAGE:       "free — the ⚠ UNSALTED marker on the dossier shows the stored password in the clear; no crack needed at all",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "base recon shows commit email · filter highlights the mismatch",
     DiscrepancyKind.BREACH_HIT:             "base recon highlights breach panel · filter confirms ▲ BREACH_HIT",
@@ -157,6 +267,157 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp for AMBER cells in a dense block; ≥60% coverage resolves ▲",
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "CRIMSON mid-density cells — filter (F) names the payload type",
+}
+
+# ─── Task #6: worked examples, one per violation ─────────────────────────────
+# Exactly 3 lines each, styled as a miniature rendering of the surface that
+# actually reveals the kind (a dossier field, a Ghostscan sweep line, a
+# Logwatch/Hashcrack log row, a Stego reading) — never invented prose. Shown
+# immediately under each violation's own table row (see violation_table
+# below), so the example is always paired with the entry it belongs to
+# instead of living in a separate reference section the player has to cross-
+# reference by hand.
+_EXAMPLE: dict[DiscrepancyKind, tuple[str, str, str]] = {
+    DiscrepancyKind.HOSTILE_CHAT: (
+        'CANDIDATE: "this whole process is a joke, you clearly have no idea what you\'re doing"',
+        'CANDIDATE: "just approve me or I will make this difficult for everyone involved"',
+        "escalating hostile tone across consecutive lines, unprompted",
+    ),
+    DiscrepancyKind.AFFILIATION_NOT_STATED: (
+        "AFFILIATION:  (blank — nothing claimed)",
+        "no employer/org listed anywhere on the dossier",
+        "nothing to corroborate, and nothing to contradict, either",
+    ),
+    DiscrepancyKind.DISPOSABLE_EMAIL: (
+        # A fictional-but-evocative domain, deliberately NOT one of the exact
+        # strings tools_bridge's own disposable-domain bank renders further
+        # down this same tab (see test_dossier_tab_no_longer_double_lists_
+        # domains) — the example teaches the PATTERN, the reference block
+        # below it is still the single source for the literal list.
+        "EMAIL:  j.torres93@throwaway.mail",
+        "throwaway.mail — disposable/burner-style domain, zero verification trail",
+        "fast DENY per rulebook, no tool required to confirm it",
+    ),
+    DiscrepancyKind.WEAK_ENCRYPTION: (
+        "SUBMITTED_HASH:  5f4dcc3b5aa765d61d8327deb882cf99",
+        "32 hex characters = MD5 — a broken algorithm, on sight",
+        "the flaw is the algorithm; a crack (if run) may reveal a fine password",
+    ),
+    DiscrepancyKind.UNSALTED_STORAGE: (
+        'UNSALTED — password stored in the clear: "Summer2023!"',
+        "no hash to crack — the plaintext is sitting right there",
+        "flag or deny on sight, don't spend ⏱ running Hashcrack on it",
+    ),
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: (
+        "GITHUB    @j_torres93   (1 repo, joined 3 days ago)",
+        "LINKEDIN  — no results —",
+        "a real candidate has more footprint than this",
+    ),
+    DiscrepancyKind.EMAIL_GITHUB_MISMATCH: (
+        "DOSSIER EMAIL   j.torres93@corp.net",
+        "GITHUB COMMIT   r.torres93@protonmail.com",
+        "commit email does not match the claimed dossier address",
+    ),
+    DiscrepancyKind.BREACH_HIT: (
+        "BREACH FEED SYNC",
+        'BREACH_HIT — j.torres93@corp.net confirmed in corpus "CollectionX_2019"',
+        "the email itself, not just the password, is in a breach dump",
+    ),
+    DiscrepancyKind.SOCK_PUPPET_ACCOUNTS: (
+        "ACCOUNT REGISTRY",
+        "@j_torres93 created 2024-01-02  ·  @jt_backup91 created 2024-01-03",
+        "CRITICAL — accounts clustered within 48 hours of each other",
+    ),
+    DiscrepancyKind.AFFILIATION_MISMATCH: (
+        "CLAIMED:  Senior Engineer @ Meridian Labs",
+        "SWEEP:    no record at Meridian Labs — profile says self-employed",
+        "the claimed org and the sweep's finding are two different things",
+    ),
+    DiscrepancyKind.AFFILIATION_UNLISTED: (
+        "CLAIMED:  Senior Engineer @ Meridian Labs",
+        "SWEEP:    profiles exist, but carry no org/employer tag at all",
+        "nothing on the public record corroborates the claim either way",
+    ),
+    DiscrepancyKind.BURNER_IDENTITY: (
+        "ACCOUNT AGE:  @j_torres93 — created 6 days ago",
+        "zero activity predating the application window",
+        "a freshly-minted identity with no history behind it",
+    ),
+    DiscrepancyKind.THREAT_FORUM_MATCH: (
+        "FORUM SWEEP",
+        'CRITICAL — handle "j_torres93" matches a known threat-forum account',
+        "the account itself, not just an associate, is the match",
+    ),
+    DiscrepancyKind.TYPOSQUAT_HANDLE: (
+        "CLAIMED ORG:      Meridian Labs  (meridianlabs.io)",
+        "REGISTERED AS:    meridian-labs.io   — note the extra hyphen",
+        "a lookalike domain, one character off the real org's",
+    ),
+    DiscrepancyKind.BRUTE_FORCE_IN_LOG: (
+        "09:41:03  AUTH_FAIL  185.220.31.7  j.torres93@corp.net",
+        "09:41:04  AUTH_FAIL  185.220.31.7  j.torres93@corp.net",
+        "09:41:09  AUTH_OK    185.220.31.7  j.torres93@corp.net",
+    ),
+    DiscrepancyKind.IMPOSSIBLE_TRAVEL: (
+        "09:12:00  AUTH_OK  185.220.31.7  j.torres93@corp.net  (Frankfurt, DE)",
+        "09:47:00  AUTH_OK  103.21.44.9   j.torres93@corp.net  (Singapore, SG)",
+        "two cities, 35 minutes apart — no flight covers that distance",
+    ),
+    DiscrepancyKind.INSIDER_BEHAVIOR: (
+        "23:41:02  FILE_READ  10.0.0.4  j.torres93@corp.net  /etc/shadow",
+        "23:41:05  SUDO_EXEC  10.0.0.4  j.torres93@corp.net  /bin/bash",
+        "sensitive path + privilege escalation, both after hours",
+    ),
+    DiscrepancyKind.CREDENTIAL_STUFFING: (
+        "09:30:00  AUTH_FAIL  45.131.9.2  r.chen@corp.net",
+        "09:30:02  AUTH_FAIL  45.131.9.2  s.patel@corp.net",
+        "09:30:11  AUTH_OK    45.131.9.2  j.torres93@corp.net",
+    ),
+    DiscrepancyKind.AFTER_HOURS_ACCESS: (
+        "22:14:00  AUTH_OK    login IP  j.torres93@corp.net",
+        "22:19:00  FILE_READ  login IP  /home/user/.bash_history",
+        "outside business hours, but a normal path — weigh it, don't auto-deny",
+    ),
+    DiscrepancyKind.LOW_AND_SLOW: (
+        "03:12  AUTH_FAIL  91.219.4.8  j.torres93@corp.net",
+        "07:58  AUTH_FAIL  91.219.4.8  j.torres93@corp.net",
+        "12:40  AUTH_FAIL  91.219.4.8  j.torres93@corp.net  (no ▲ — too spread out for the base run)",
+    ),
+    DiscrepancyKind.CLAIMED_IP_MISMATCH: (
+        "DOSSIER CLAIMED IP:  10.0.4.22",
+        "09:12:00  AUTH_OK  185.220.31.7  j.torres93@corp.net  ← doesn't match",
+        "free tier already tints this row orange — no upgrade needed to see it",
+    ),
+    DiscrepancyKind.LEAKED_PASSWORD: (
+        'CRACKED:  "dragon2019"',
+        'BREACH_MATCH — found verbatim in corpus "CollectionX_2019"',
+        "this exact password is already public knowledge",
+    ),
+    DiscrepancyKind.WEAK_CREDENTIAL: (
+        "HASH:     098f6bcd4621d373cade4e832627b4f6  (MD5)",
+        'CRACKED:  "abc123"',
+        "weak encryption cracked to a weak plaintext — minor hygiene flag",
+    ),
+    DiscrepancyKind.CROSS_BREACH_REUSE: (
+        'CRACKED:       "Summer2023!"',
+        'BREACH PANEL:  same password also confirmed in corpus "MegaLeak_2021"',
+        "reused across two separate breaches — the breach panel already shows it",
+    ),
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT: (
+        "AMBER cell cluster, dense block, ~64% coverage once stamped",
+        "R 28/100  G 61/100  B 34/100 — the cluster, not the numbers, is the tell",
+        "resolves to STEGO_PAYLOAD_PRESENT once the block is fully stamped",
+    ),
+    DiscrepancyKind.COVERT_C2_CHANNEL: (
+        "VIOLET markers scattered thin across a wide region of the grid",
+        "sparse, not clustered — easy to miss without stamping the whole zone",
+        "resolves to COVERT_C2_CHANNEL — a beacon channel, not a dropped file",
+    ),
+    DiscrepancyKind.ENCRYPTED_PAYLOAD: (
+        "CRIMSON cells, mid-density — no single channel stands out on its own",
+        "R 41/100  G 39/100  B 44/100",
+        "resolves to ENCRYPTED_PAYLOAD once filtered (F) — the filter names the type",
+    ),
 }
 
 _W = 66   # shared content width for bands / dividers
@@ -226,6 +487,9 @@ def violation_table(day: Day | None, group: str) -> list[str]:
         catch = _CATCH.get(kind)
         if catch:
             out.append(f"    [#3d6478]catch: {catch}[/]")
+        for i, ex_line in enumerate(_EXAMPLE.get(kind, ())):
+            lead = "example:" if i == 0 else "        "
+            out.append(f"      [#3d6478]{lead}[/] [dim]{ex_line}[/]")
     out.append(f"[#1c2733]{'─' * _W}[/]")
     out.append("[dim]  TODAY column: DENY = disqualifying rule · FLAG = weighted "
                "(corroborate) · — = not in today's ruleset[/]")
@@ -235,7 +499,7 @@ def violation_table(day: Day | None, group: str) -> list[str]:
 # ─── Tab 1 — RULES (day rules · quotas · resources · systems) ────────────────
 
 
-def build_rules_text(day: Day | None) -> str:
+def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
     kb     = config.KEY_BINDINGS
     lines: list[str] = []
 
@@ -260,21 +524,33 @@ def build_rules_text(day: Day | None) -> str:
             lines.append(f"  [#c8d4e1]·[/] {note}")
 
     rules = day.rules if day else ()
-    disq  = [r for r in rules if r.severity == "disqualifying"]
-    minor = [r for r in rules if r.severity != "disqualifying"]
+    # Progressive unlock: a rule keyed to a still-locked tool describes a
+    # violation that cannot possibly be planted yet (candidate_gen.intro_day
+    # gates generation the same way) — showing it early would teach the
+    # player to watch for evidence that doesn't exist. unlocked_tools=None
+    # (tests, the rules-lab preview) shows the full campaign rulebook.
+    visible = [r for r in rules if _tool_unlocked(_rule_tool(r), unlocked_tools)]
+    hidden  = len(rules) - len(visible)
+    disq  = [r for r in visible if r.severity == "disqualifying"]
+    minor = [r for r in visible if r.severity != "disqualifying"]
     if disq:
         lines.append("")
         lines.append("[#ff5470][b]DISQUALIFYING[/][/]  — any one of these → DENY")
         for r in disq:
-            lines.append(f"  [#ff5470]✗[/]  {r.text}")
+            lines.append(f"  [#ff5470]✗[/]  {_highlighted_rule_line(r.text, '#ff5470')}")
     if minor:
         lines.append("")
         lines.append("[#ff8c42][b]WEIGHTED[/][/]  — flag on the Evidence Board; "
                      "corroborate before denying")
         for r in minor:
-            lines.append(f"  [#ff8c42]△[/]  {r.text}")
+            lines.append(f"  [#ff8c42]△[/]  {_highlighted_rule_line(r.text, '#ff8c42')}")
     if not rules:
         lines.append("[dim]No rules loaded for this day.[/]")
+    elif hidden:
+        lines.append("")
+        lines.append(
+            f"[dim]  + {hidden} more rule{'s' if hidden != 1 else ''} on the books — "
+            "they surface here as you unlock the tools that reveal them.[/]")
 
     # ── Daily quotas & performance ─────────────────────────────────────
     lines.append("")
@@ -378,8 +654,19 @@ def build_rules_text(day: Day | None) -> str:
         "[#6b7785]  UPGRADE               HD$   EFFECT[/]",
         f"[#1c2733]{'─' * _W}[/]",
     ]
-    for _uid, label, price, desc in config.UPGRADE_CATALOG:
-        lines.append(f"  {_fit(label, 22)}[#00ff9f]{price:>3}[/]   [dim]{desc}[/]")
+    _by_cat: dict[str, list[tuple[str, str, int, str]]] = {
+        cat: [] for cat in config.UPGRADE_CATEGORY_ORDER
+    }
+    for uid, label, price, desc in config.UPGRADE_CATALOG:
+        _by_cat[config.UPGRADE_CATEGORY[uid]].append((uid, label, price, desc))
+    for cat in config.UPGRADE_CATEGORY_ORDER:
+        cat_upgrades = _by_cat[cat]
+        if not cat_upgrades:
+            continue
+        accent = config.UPGRADE_CATEGORY_ACCENT.get(cat, "#6b7785")
+        lines.append(f"  [{accent}]{cat}[/]")
+        for _uid, label, price, desc in cat_upgrades:
+            lines.append(f"  {_fit(label, 22)}[#00ff9f]{price:>3}[/]   [dim]{desc}[/]")
     lines.append(f"[#1c2733]{'─' * _W}[/]")
 
     # ── Evidence board ─────────────────────────────────────────────────
@@ -455,13 +742,21 @@ def build_dossier_text(day: Day | None) -> str:
         "             chip alone is enough, no tool needed). Paired with a",
         "             weak plaintext it's WEAK_CREDENTIAL instead, which",
         "             Hashcrack has to crack to confirm.",
+        "             [dim]e.g. 5f4dcc3b5aa765d61d8327deb882cf99[/] [#6b7785](32 hex)[/]",
         "[#ffd93d]MEDIUM ENC[/]  SHA256 — crackable with effort, usually clean.",
+        "             [dim]e.g. a94a8fe5ccb19ba61c4c0873d391e987…[/] [#6b7785](64 hex)[/]",
         "[#00ff9f]STRONG ENC[/]  bcrypt — always safe; never worth cracking.",
+        "             [dim]e.g. $2b$12$KIXQ7c5s9j2mR8vN…[/] [#6b7785]($2b$ prefix)[/]",
         "",
-        "  [#ff5470]⚠ UNSALTED[/]  a rarer marker next to the strength chip —",
-        "             storage has no salt at all, so the stored password is",
-        "             printed in the clear right there. UNSALTED_STORAGE",
-        "             (major): no crack needed, the dossier already shows it.",
+        "  [dim]Without Cipher ID HUD the chip label above isn't shown — count[/]",
+        "  [dim]hex characters (or spot the $2b$ prefix) against the examples[/]",
+        "  [dim]to tell the tiers apart yourself.[/]",
+        "",
+        "  [#ff5470]⚠ UNSALTED[/]  a rarer marker that replaces the hash chip",
+        "             entirely — storage has no salt at all, so the Password",
+        "             entry just IS the plaintext, printed in the clear, no",
+        "             Hashcrack run needed or possible. UNSALTED_STORAGE",
+        "             (major): e.g. [dim]monkey123  ⚠ UNSALTED[/]",
     ]
 
     # ── The day's rule sheet (#49) ─────────────────────────────────────
@@ -521,7 +816,9 @@ def build_dossier_text(day: Day | None) -> str:
 # ─── Tab 2 — OSINT (Ghostscan) ───────────────────────────────────────────────
 
 
-def build_osint_text(day: Day | None) -> str:
+def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
+    if not _tool_unlocked(ToolName.GHOSTSCAN, unlocked_tools):
+        return _locked_tab_text(ToolName.GHOSTSCAN, "GHOSTSCAN — OSINT RECONNAISSANCE")
     gs = config.TOOL_COSTS["ghostscan"]
     gf = config.FILTER_COSTS["ghostscan"]
     lines: list[str] = []
@@ -583,7 +880,9 @@ def build_osint_text(day: Day | None) -> str:
 # ─── Tab 3 — CREDENTIALS (Hashcrack) ─────────────────────────────────────────
 
 
-def build_creds_text(day: Day | None) -> str:
+def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
+    if not _tool_unlocked(ToolName.HASHCRACK, unlocked_tools):
+        return _locked_tab_text(ToolName.HASHCRACK, "HASHCRACK — CREDENTIAL ANALYSIS")
     hc = config.TOOL_COSTS["hashcrack"]
     hf = config.FILTER_COSTS["hashcrack"]
     lines: list[str] = []
@@ -594,8 +893,13 @@ def build_creds_text(day: Day | None) -> str:
         "  up front. Hashcrack attempts to crack it; on success the plaintext",
         "  replaces the encrypted value on every page.",
     ]
-    lines += _sub("encryption strength — free dossier information", "#c084fc")
+    lines += _sub("encryption strength — identify it from the raw hash", "#c084fc")
     lines += [
+        "  With [#00ff9f]Cipher ID HUD[/] bought, the dossier auto-labels this",
+        "  chip for you. Without it, the dossier shows only the raw hash —",
+        "  use its LENGTH and SHAPE against this table to identify the tier",
+        "  yourself:",
+        "",
         "[#6b7785]  TIER     HASH SHAPE          CRACKABLE   MEANING[/]",
         f"[#1c2733]{'─' * _W}[/]",
         f"  [#00ff9f]{_fit('STRONG', 9)}[/]{_fit('bcrypt  $2b$…', 20)}"
@@ -605,6 +909,10 @@ def build_creds_text(day: Day | None) -> str:
         f"  [#ff5470]{_fit('WEAK', 9)}[/]{_fit('MD5     32 hex', 20)}"
         f"{_fit('instantly', 12)}weak enc + weak plaintext = violation",
         f"[#1c2733]{'─' * _W}[/]",
+        "  [dim]example — count the hex characters after the prefix:[/]",
+        "  [#00ff9f]STRONG[/] [dim]$2b$12$KIXQ7c5s9j2mR8vN…[/]         [dim]($2b$ prefix — never a hash to crack)[/]",
+        "  [#ffd93d]MEDIUM[/] [dim]a94a8fe5ccb19ba61c4c0873d391e987…[/] [dim](64 hex characters)[/]",
+        "  [#ff5470]WEAK[/]   [dim]5f4dcc3b5aa765d61d8327deb882cf99[/]   [dim](32 hex characters)[/]",
         "",
         "  The tier is visible BEFORE spending any ⏱ — use it to decide",
         "  whether a crack is worth the hours. A bcrypt credential is a dead",
@@ -643,7 +951,9 @@ def build_creds_text(day: Day | None) -> str:
 # ─── Tab 4 — LOG ANALYSIS (Logwatch) ─────────────────────────────────────────
 
 
-def build_logs_text(day: Day | None) -> str:
+def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
+    if not _tool_unlocked(ToolName.LOGWATCH, unlocked_tools):
+        return _locked_tab_text(ToolName.LOGWATCH, "LOGWATCH — LOG ANALYSIS")
     lw = config.TOOL_COSTS["logwatch"]
     lf = config.FILTER_COSTS["logwatch"]
     lines: list[str] = []
@@ -694,8 +1004,6 @@ def build_logs_text(day: Day | None) -> str:
     ]
     lines += _sub("upgrades that change this page", "#ffb454")
     lines += [
-        "  [#00ff9f]Session Grouper[/]   groups the raw log into per-session blocks",
-        "                    instead of a flat chronological stream",
         "  [#00ff9f]Log Analyzer HUD[/]  pre-colours suspicious lines in the free",
         "                    log — before any ⏱ is spent",
     ]
@@ -705,7 +1013,9 @@ def build_logs_text(day: Day | None) -> str:
 # ─── Tab 5 — STEGANOGRAPHY (Stegotool) ───────────────────────────────────────
 
 
-def build_stego_text(day: Day | None) -> str:
+def build_stego_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
+    if not _tool_unlocked(ToolName.STEGOTOOL, unlocked_tools):
+        return _locked_tab_text(ToolName.STEGOTOOL, "STEGOTOOL — THE STAMP MINIGAME")
     cov = int(config.STEGO_STAMP_RESOLVE_COVERAGE * 100)
     lines: list[str] = []
     lines += _band("STEGOTOOL — THE STAMP MINIGAME", "#ff8cc8")

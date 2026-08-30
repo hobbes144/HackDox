@@ -60,22 +60,33 @@ def tool_cost(state, tool_name: str) -> int:
 
     Two effects, and the ORDER between them matters (issue #4):
       1. #23's toolcost_* upgrade knocks config.TOOLCOST_REDUCTION off the
-         base cost, floored at 1 ⏱.
+         base cost.
       2. #4's campaign inflation then adds config.tool_cost_inflation(day).
+      3. The 1 ⏱ floor is applied LAST, to the final total — never to the
+         intermediate (base - reduction) term.
 
-    Inflation is applied AFTER the reduction and after its floor, so a
-    purchased optimizer keeps saving exactly TOOLCOST_REDUCTION ⏱ for the whole
-    campaign. Inflating first and reducing second is the same arithmetic today,
-    but it would start clamping at the floor once inflation grew comparable to
-    the reduction — quietly erasing a 45 HD$ purchase in the late game.
+    Inflation is applied after the reduction, so a purchased optimizer keeps
+    saving exactly TOOLCOST_REDUCTION ⏱ for the whole campaign. Inflating
+    first and reducing second is the same arithmetic today, but it would
+    start clamping at the floor once inflation grew comparable to the
+    reduction — quietly erasing a 45 HD$ purchase in the late game.
+
+    Flooring the total rather than the pre-inflation intermediate matters for
+    any tool whose base cost is small enough that TOOLCOST_REDUCTION would
+    otherwise wipe it out on its own (e.g. a 2 ⏱ tool with a 2 ⏱ reduction) —
+    flooring early would silently shrink the advertised saving once inflation
+    got added back on top of an already-clamped value. Flooring the total
+    still guarantees a tool never costs less than 1 ⏱, it just does so after
+    every other effect has been applied.
 
     Filter costs are deliberately NOT inflated; see config's
     TOOL_COST_INFLATION_PERIOD block for the reasoning.
     """
     base = config.TOOL_COSTS[tool_name]
     if f"toolcost_{tool_name}" in getattr(state, "upgrades", ()):
-        base = max(1, base - config.TOOLCOST_REDUCTION)
-    return base + config.tool_cost_inflation(getattr(state, "current_day", 1))
+        base -= config.TOOLCOST_REDUCTION
+    total = base + config.tool_cost_inflation(getattr(state, "current_day", 1))
+    return max(1, total)
 
 
 def _charge(state, tool_name: str, *, filter: bool = False) -> None:
@@ -443,6 +454,7 @@ def _ghostscan_sweep_lines(
     rng: _random.Random,
     show_forums: bool = False,
     day_number: int = 1,
+    show_breach: bool | None = None,
 ) -> list[str]:
     """Render the fixed platform sweep for one candidate.
 
@@ -679,7 +691,13 @@ def _ghostscan_sweep_lines(
         noise_email = f"{rng.choice(_GS_NOISE_HANDLES)}@{rng.choice(['corp.net', 'internal.io', 'hackdox.local'])}"
         dump_name   = rng.choice(_unlocked_dumps)
         lines.append(f"[#2e3d4f]  {dump_name:<24}  {noise_email}[/]")
-    if has_breach and show_forums:
+    # Batch-3 task #4c: breach confirmation can fire independently of the
+    # forum reveal now (config.UPGRADE_BREACH_AUTO surfaces it on the free
+    # base run — "the lists are static, so it makes sense to have this
+    # automated"). Defaults to show_forums when not given, so every existing
+    # caller keeps the old show_forums-gated behavior.
+    _show_breach = show_forums if show_breach is None else show_breach
+    if has_breach and _show_breach:
         _, breach_db = _breach_db_for_candidate(candidate.id, day_number)
         lines.append(f"[#ff8c42]  {breach_db:<24}  {claimed_email}[/]")
         lines.append(f"  [#ff8c42]▲ email in breach corpus[/]")
@@ -754,22 +772,37 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
     """Base run: full platform sweep, threat forum candidate entries gated."""
     _charge(state, "ghostscan")
     rng = _random.Random(int(candidate.id, 16) ^ 0x6057CAD1)
+    # Batch-3 task #4c: config.UPGRADE_BREACH_AUTO ("Breach Feed Sync") makes
+    # breach-corpus confirmation fire on the free base run too — "the lists
+    # are static, so it makes sense to have this automated" (Nick). Threat
+    # forums stay gated behind the real filter run; only the breach section
+    # is affected.
+    _breach_auto = config.UPGRADE_BREACH_AUTO in getattr(state, "upgrades", ())
+    has_breach = any(d.kind == DiscrepancyKind.BREACH_HIT
+                     for d in candidate.truth.discrepancies)
     # Issue #28: the report REPLACES the terminal content (no stacked
     # reports), so the free identity block is folded in at the top.
-    raw_lines  = tuple(
+    raw_lines  = list(
         _ghostscan_identity_lines(candidate, hint=False)
         + [""]
         # #61: day drives which breach corpora exist today.
         + _ghostscan_sweep_lines(candidate, rng, show_forums=False,
-                                 day_number=getattr(state, 'current_day', 1))
+                                 day_number=getattr(state, 'current_day', 1),
+                                 show_breach=_breach_auto)
     )
+    if _breach_auto and has_breach:
+        raw_lines += [
+            "",
+            "[#c084fc]── [AUTO] Breach Feed Sync ─────────────────────────────[/]",
+            "  [#ff5470][b]▲ BREACH_HIT[/][/]  — email confirmed in breach corpus",
+        ]
     n_findings = len(_findings_from(candidate, ToolName.GHOSTSCAN))
     summary = (
         f"{n_findings} signal(s) in sweep — review carefully, run filter (F) to check threat forums."
         if n_findings else
         "Platform sweep complete — no anomalies on legit platforms. Run filter to check threat forums."
     )
-    return ToolResult(tool=ToolName.GHOSTSCAN, findings=(), raw_lines=raw_lines, summary=summary)
+    return ToolResult(tool=ToolName.GHOSTSCAN, findings=(), raw_lines=tuple(raw_lines), summary=summary)
 
 
 def run_ghostscan_filtered_shared(candidate: Candidate, state) -> ToolResult:
@@ -886,6 +919,61 @@ def get_breach_lists(candidate: "Candidate", game_seed: int,
     return result
 
 
+def get_breach_lists_for_day(
+    game_seed: int, day: "Day"
+) -> list[tuple[str, str, str, list[str]]]:
+    """(db_name, year, count_label, sorted_email_list) for the WHOLE day.
+
+    Batch-3 follow-up (Nick, playtest): get_breach_lists() above is correct
+    for a single candidate in isolation, but BreachListPanel used to call it
+    fresh on every load_candidate() and replace its whole state — so a real
+    breach-carrying candidate's email only ever existed in the panel while
+    THEIR dossier happened to be open. In Nick's words: "planted in the list
+    in the middle of the round. He only appears on the list when it is his
+    turn to be evaluated." That's backwards — a candidate who carries
+    BREACH_HIT, LEAKED_PASSWORD, or CROSS_BREACH_REUSE should FULLY have the
+    Ghostscan breach-match violation, a standing fact about the day, not
+    something that flickers into existence for the duration of their turn.
+
+    This walks every slot in the day (candidate_gen.generate is deterministic
+    per (game_seed, day, slot), exactly like generate_hashcrack_day_log()
+    above) and unions every candidate's breach_dbs_for_candidate() membership
+    onto the fixed per-database noise — so a candidate 4 slots away is
+    already sitting in the list the moment the player opens Ghostscan on
+    slot 0, discoverable (if not yet identifiable — see the idle-color fix
+    a few lines up in BreachListPanel) well before their turn comes up.
+
+    The implication only runs one direction, same as breach_dbs_for_candidate()
+    already enforces: a Hashcrack-side signal (BREACH_HIT / LEAKED_PASSWORD /
+    CROSS_BREACH_REUSE) always earns a seat in the relevant corpus/corpora
+    here, but a candidate can appear in a corpus without carrying a
+    Hashcrack-observable kind at all — the two tools corroborate, neither
+    implies the other must exist.
+
+    Callers wanting a specific candidate's own row highlighted/confirmed
+    layer that on top (see BreachListPanel.load_candidate): this function
+    itself carries no notion of "the current candidate," only "who really
+    belongs in this corpus today."
+    """
+    from .candidate_gen import generate as _gen_candidate
+
+    unlocked = set(config.breach_dbs_unlocked_by(day.number))
+    real: dict[str, set[str]] = {name: set() for name in unlocked}
+    for slot in range(day.candidate_count):
+        cand = _gen_candidate(game_seed, day, slot)
+        for db_name in breach_dbs_for_candidate(cand, day.number):
+            if db_name in real:
+                real[db_name].add(cand.email)
+
+    result: list[tuple[str, str, str, list[str]]] = []
+    for db_name, year, count_label in _GS_BREACH_META:
+        if db_name not in unlocked:
+            continue
+        noise = set(_breach_list_noise(game_seed, db_name))
+        result.append((db_name, year, count_label, sorted(noise | real[db_name])))
+    return result
+
+
 # ─── Hashcrack — shared credential audit log ────────────────────────────────
 #
 # Shared day log of credential events: AUTH_FAIL/OK (stuffing patterns),
@@ -939,6 +1027,8 @@ def _hc_algo(h: str | None) -> str:
 
 def _hc_candidate_entries(candidate, rng: _random.Random,
                           day_number: int) -> list[_HCLogEntry]:
+    from .. import config as _cfg
+
     # day_number added by #61: the BREACH_MATCH rows below name corpora, and
     # they must name the same ones the Ghostscan panel is showing today.
     has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
@@ -963,7 +1053,7 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
     account    = candidate.email
     claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
     ext_ip     = f"185.{rng.randint(100,220)}.{rng.randint(1,254)}.{rng.randint(1,254)}"
-    t          = rng.randint(25200, 50400)   # 7am–2pm
+    t          = rng.randint(*_cfg.HC_WORKDAY_WINDOW)
 
     entries: list[_HCLogEntry] = []
 
@@ -971,20 +1061,20 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
         # Credential-stuffing burst from external IP. Gated on the violation
         # itself (#62) — a bad password is not an attack pattern, and rendering
         # one as the other taught the player a tell that meant nothing.
-        burst = rng.randint(3, 6)
+        burst = rng.randint(*_cfg.HC_STUFFING_BURST_SIZE)
         for i in range(burst):
             entries.append(_HCLogEntry(
                 ts_secs=t+i, ts_str=_hc_ts_str(t+i),
                 event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
                 owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
             ))
-        t += burst + rng.randint(1, 3)
+        t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
             event="AUTH_OK", ip=ext_ip, account=account, detail="",
             owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
         ))
-        t += rng.randint(10, 60)
+        t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
     else:
         # Normal login
         entries.append(_HCLogEntry(
@@ -992,7 +1082,7 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
             event="AUTH_OK", ip=claimed_ip, account=account, detail="",
             owner_id=candidate.id, is_suspicious=False, violation_kind=None,
         ))
-        t += rng.randint(30, 120)
+        t += rng.randint(*_cfg.HC_NORMAL_LOGIN_GAP)
 
     # Hash submission
     h_val = candidate.dossier.submitted_hash or ""
@@ -1012,7 +1102,7 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
             owner_id=candidate.id, is_suspicious=has_hashbad,
             violation_kind=vk,
         ))
-        t += rng.randint(5, 30)
+        t += rng.randint(*_cfg.HC_HASH_SUBMIT_GAP)
 
     # Breach match rows. #61: both the first and the second corpus now come
     # from breach_dbs_for_candidate(), which is the SAME function the Ghostscan
@@ -1025,7 +1115,7 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
         corpora = breach_dbs_for_candidate(candidate, day_number)
         for i, corpus in enumerate(corpora):
             if i:
-                t += rng.randint(5, 20)
+                t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
             entries.append(_HCLogEntry(
                 ts_secs=t, ts_str=_hc_ts_str(t),
                 event="BREACH_MATCH", ip="--", account=account, detail=corpus,
@@ -1040,15 +1130,16 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
 
 
 def _hc_noise_entries(rng: _random.Random, count: int) -> list[_HCLogEntry]:
+    from .. import config as _cfg
+
     entries: list[_HCLogEntry] = []
     for _ in range(count):
         user   = rng.choice(_HC_NOISE_USERS)
         domain = rng.choice(_HC_NOISE_DOMAINS)
         ip     = rng.choice(_HC_NOISE_IPS)
-        t      = rng.randint(21600, 79200)
+        t      = rng.randint(*_cfg.HC_NOISE_TIME_WINDOW)
         acct   = f"{user}@{domain}"
-        evt    = rng.choice(["AUTH_OK", "AUTH_OK", "AUTH_FAIL", "HASH_SUBMIT",
-                              "AUTH_OK", "HASH_SUBMIT", "BREACH_MATCH"])
+        evt    = rng.choice(_cfg.HC_NOISE_EVENT_WEIGHTS)
         detail = ""
         if evt == "HASH_SUBMIT":
             algo    = rng.choice(["MD5", "SHA256", "SHA256", "SHA1"])
@@ -1066,8 +1157,10 @@ def _hc_noise_entries(rng: _random.Random, count: int) -> list[_HCLogEntry]:
 
 
 def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
-    """Shared credential audit log for the full day. Deterministic."""
+    """Shared credential audit log for the full day. Volume scales with day
+    number per config (batch-3 task #4d/#7 — was a flat max(80, 160-n))."""
     from .candidate_gen import generate as _gen_candidate
+    from .. import config as _cfg
 
     rng     = _random.Random(_stable_hash(game_seed, day.number, "hc_day") & 0xFFFFFFFF)
     entries: list[_HCLogEntry] = []
@@ -1077,7 +1170,13 @@ def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
         crng  = _random.Random(_stable_hash(game_seed, day.number, slot, "hc_entries") & 0xFFFFFFFF)
         entries.extend(_hc_candidate_entries(cand, crng, day.number))
 
-    n_noise = max(80, 160 - len(entries))
+    base_noise = _cfg.HC_ENTRIES_BY_DAY.get(day.number, _cfg.HC_ENTRIES_DEFAULT)
+    last_key   = max(_cfg.HC_ENTRIES_BY_DAY.keys()) if _cfg.HC_ENTRIES_BY_DAY else 1
+    if day.number > last_key:
+        extra_days = day.number - last_key
+        base_noise = int(_cfg.HC_ENTRIES_BY_DAY.get(last_key, _cfg.HC_ENTRIES_DEFAULT)
+                         * (_cfg.HC_ENTRIES_SCALE_FACTOR ** extra_days))
+    n_noise = max(_cfg.HC_ENTRIES_MIN, base_noise - len(entries))
     entries.extend(_hc_noise_entries(rng, n_noise))
     entries.sort(key=lambda e: e.ts_secs)
     return entries
@@ -1089,11 +1188,27 @@ def _render_hc_log(
     candidate,
     annotate:      bool = False,
     explicit_tags: bool = False,
-    upgrade_highlight: bool = False,   # hash_highlight upgrade (issue #23):
-                                       # free tier colours suspicious lines,
-                                       # WITHOUT the ▲ annotations of a base run
+    upgrade_highlight: bool = False,   # hash_highlight upgrade ("Credential
+                                       # HUD"): colours the candidate's own
+                                       # suspicious lines + the "why" annotations
+    upgrade_verdict:   bool = False,   # hashcrack_verdict_highlight upgrade
+                                       # ("Crack Verdict Analyzer"): labels a
+                                       # crack's STRENGTH VERDICT ("no concern" /
+                                       # "always safe") — the plaintext itself
+                                       # reveals on any run either way (#6a)
 ) -> tuple[str, ...]:
-    """Render the credential audit log to Rich markup lines."""
+    """Render the credential audit log to Rich markup lines.
+
+    Batch-3 tasks #4d/#6a: `annotate` alone used to be enough to turn on both
+    line-highlighting AND the inline "▲ why" annotations, which meant owning
+    hash_highlight never actually gated anything once the tool was run (any
+    base run already had annotate=True). Highlighting/annotation now key off
+    `highlight_active` (explicit_tags — the paid filter — OR upgrade_highlight)
+    instead. Cracking a password (revealing the plaintext) is NOT part of that
+    gate: it only needs `annotate` (the tool was actually run) — Nick's
+    instruction was that the crack must always work, only the "why is this
+    suspicious"/"this is a safe verdict" commentary is paywalled.
+    """
     lines: list[str] = [
         "[#3d6478]── credential audit log ──────────────────────────────────────[/]",
         f"[dim]{_HC_DATE}  (all accounts — locate your target email below)[/]",
@@ -1105,6 +1220,7 @@ def _render_hc_log(
     # matches the dossier hash. bcrypt (strong tier) never cracks.
     crack_plaintext: str | None = None
     neutral_crack = False   # clean candidate — crack succeeds, no violation
+    has_credkind = False
     if annotate and target_id and candidate is not None:
         has_credkind = any(d.kind in (
             DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
@@ -1112,6 +1228,9 @@ def _render_hc_log(
         ) for d in candidate.truth.discrepancies)
         crack_plaintext = crack_password(candidate)
         neutral_crack = crack_plaintext is not None and not has_credkind
+
+    highlight_active = explicit_tags or upgrade_highlight
+    verdict_active    = explicit_tags or upgrade_verdict
 
     evt_col = {
         "AUTH_OK":      "#00ff9f",
@@ -1129,12 +1248,13 @@ def _render_hc_log(
         det_str = f"  {e.detail}" if e.detail else ""
         raw     = f"{e.ts_str}  [{ec}]{e.event:<12}[/]  {e.ip:<18}  {e.account}{det_str}"
 
-        if is_mine and e.is_suspicious and (annotate or explicit_tags or upgrade_highlight):
+        if is_mine and e.is_suspicious and highlight_active:
             col = "#ff5470" if explicit_tags else "#ff8c42"
             lines.append(f"[{col}]{raw}[/]")
 
-            # Inline annotations
-            if annotate and not explicit_tags:
+            # Inline annotations — only the free-tier highlight styling here;
+            # explicit_tags (filter) has its own block below.
+            if upgrade_highlight and not explicit_tags:
                 if e.violation_kind == "stuffing" and prev_vk != "stuffing":
                     lines.append("  [#ff8c42]▲ rapid failure burst — credential stuffing pattern[/]")
                 elif e.violation_kind in ("weak", "leaked") and e.event == "HASH_SUBMIT" and not emitted_crack:
@@ -1172,18 +1292,38 @@ def _render_hc_log(
 
         elif is_mine:
             lines.append(f"[#ffd93d]{raw}[/]")
-            # Issue #29 — clean candidates get an honest crack verdict too.
+            # Issue #29 — the crack still runs on any base run (annotate=True)
+            # regardless of upgrades; only the WORDING differs. #4d: without
+            # Credential HUD, a violator's own HASH_SUBMIT line lands here
+            # (not the highlighted branch above) — reveal the plaintext
+            # plainly, with none of the "▲ why" framing that branch adds.
             if (annotate and e.event == "HASH_SUBMIT" and not emitted_crack
                     and candidate is not None):
                 _strength = password_strength(candidate.dossier.submitted_hash)
                 if _strength == "strong":
-                    lines.append("  [#00ff9f]✓ crack abandoned — bcrypt "
-                                 "(~100 H/s) · strong encryption, always safe[/]")
+                    if verdict_active:
+                        lines.append("  [#00ff9f]✓ crack abandoned — bcrypt "
+                                     "(~100 H/s) · strong encryption, always safe[/]")
+                    else:
+                        lines.append("  [dim]✓ crack abandoned — bcrypt "
+                                     "(~100 H/s) · no plaintext recovered[/]")
                     emitted_crack = True
                 elif neutral_crack and crack_plaintext:
-                    lines.append(f"  [#00ff9f]✓ crack result  →  "
-                                 f"[b]{crack_plaintext}[/]  "
-                                 f"(strong password — no concern)[/]")
+                    if verdict_active:
+                        lines.append(f"  [#00ff9f]✓ crack result  →  "
+                                     f"[b]{crack_plaintext}[/]  "
+                                     f"(strong password — no concern)[/]")
+                    else:
+                        lines.append(f"  [#c8d4e1]crack result  →  "
+                                     f"[b]{crack_plaintext}[/][/]")
+                    emitted_crack = True
+                elif has_credkind and crack_plaintext:
+                    # A real violation, but Credential HUD isn't owned (or
+                    # this line simply wasn't the one the highlight branch
+                    # picked) — still reveal the plaintext, just without any
+                    # "▲ this is why it's suspicious" call-out.
+                    lines.append(f"  [#c8d4e1]crack result  →  "
+                                 f"[b]{crack_plaintext}[/][/]")
                     emitted_crack = True
             prev_vk = None
         else:
@@ -1225,10 +1365,20 @@ def get_hashcrack_shared(entries: list[_HCLogEntry], candidate,
 
 
 def run_hashcrack_shared(entries: list[_HCLogEntry], candidate, state) -> ToolResult:
-    """Base run: highlights candidate + shows crack result inline."""
+    """Base run: highlights candidate + shows crack result inline.
+
+    Batch-3 task #4d: this used to call _render_hc_log with only
+    annotate=True and no upgrade flags — meaning hash_highlight ("Credential
+    HUD") never actually gated anything once the tool was run, since
+    annotate alone used to turn highlighting on. Now threads both upgrades
+    from state, same as the filtered run below.
+    """
     _charge(state, "hashcrack")
-    raw_lines = _render_hc_log(entries, target_id=candidate.id,
-                                candidate=candidate, annotate=True)
+    _ups = getattr(state, "upgrades", ())
+    raw_lines = _render_hc_log(
+        entries, target_id=candidate.id, candidate=candidate, annotate=True,
+        upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in _ups,
+        upgrade_verdict=config.UPGRADE_HC_VERDICT in _ups)
     strength = password_strength(candidate.dossier.submitted_hash)
     cracked = any(d.kind in (
         DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
@@ -1249,8 +1399,12 @@ def run_hashcrack_filtered_shared(entries: list[_HCLogEntry], candidate, state) 
     """Filter: explicit violation labels."""
     _charge(state, "hashcrack", filter=True)
     findings  = _findings_from(candidate, ToolName.HASHCRACK)
-    raw_lines = _render_hc_log(entries, target_id=candidate.id,
-                                candidate=candidate, annotate=True, explicit_tags=True)
+    _ups = getattr(state, "upgrades", ())
+    raw_lines = _render_hc_log(
+        entries, target_id=candidate.id, candidate=candidate, annotate=True,
+        explicit_tags=True,
+        upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in _ups,
+        upgrade_verdict=config.UPGRADE_HC_VERDICT in _ups)
     summary = (
         f"[FILTERED] {len(findings)} credential finding(s) confirmed."
         if findings else
@@ -1281,7 +1435,6 @@ def run_hashcrack_filtered_shared(entries: list[_HCLogEntry], candidate, state) 
 #   get_logwatch_shared(entries, candidate)                     — free, full log
 #   run_logwatch_shared(entries, candidate, state)              — ▲ inline markers
 #   run_logwatch_filtered_shared(entries, candidate, state)     — explicit labels
-#   All three accept group_by_session: bool (session grouping upgrade)
 
 _LW_DATE = "2024-01-15"
 
@@ -1304,6 +1457,17 @@ _LW_CITY_MAP: dict[str, str | None] = {
     "59.127.":   "Taipei, TW",
     "196.207.":  "Nairobi, KE",
     "177.54.":   "Sao Paulo, BR",
+    # Batch-3 task #5: more locations, so foreign-city noise (see
+    # config.LW_NOISE_EXTERNAL_CITY_FRACTION) doesn't cluster on a small,
+    # easily-memorized set of "always suspicious" cities.
+    "51.15.":    "London, GB",
+    "13.239.":   "Sydney, AU",
+    "94.200.":   "Dubai, AE",
+    "49.36.":    "Mumbai, IN",
+    "121.254.":  "Seoul, KR",
+    "189.203.":  "Mexico City, MX",
+    "102.89.":   "Lagos, NG",
+    "99.79.":    "Toronto, CA",
 }
 
 _LW_CITIES = [
@@ -1315,6 +1479,14 @@ _LW_CITIES = [
     ("59.127.",  "Taipei, TW"),
     ("196.207.", "Nairobi, KE"),
     ("177.54.",  "Sao Paulo, BR"),
+    ("51.15.",   "London, GB"),
+    ("13.239.",  "Sydney, AU"),
+    ("94.200.",  "Dubai, AE"),
+    ("49.36.",   "Mumbai, IN"),
+    ("121.254.", "Seoul, KR"),
+    ("189.203.", "Mexico City, MX"),
+    ("102.89.",  "Lagos, NG"),
+    ("99.79.",   "Toronto, CA"),
 ]
 
 _LW_NOISE_USERS   = ["j.morris", "r.chen", "s.patel", "admin", "k.okonkwo",
@@ -1367,6 +1539,8 @@ class _LogEntry:
 
 
 def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
+    from .. import config as _cfg
+
     kinds = {d.kind for d in candidate.truth.discrepancies}
     has_brute    = DiscrepancyKind.BRUTE_FORCE_IN_LOG  in kinds
     has_travel   = DiscrepancyKind.IMPOSSIBLE_TRAVEL   in kinds
@@ -1379,7 +1553,7 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
     claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
     account    = candidate.email
     entries: list[_LogEntry] = []
-    t = rng.randint(25200, 54000)   # 7am–3pm spread
+    t = rng.randint(*_cfg.LW_WORKDAY_WINDOW)
 
     # The candidate's real login origin. v2: when the claimed IP doesn't match,
     # their logins come from an external address (≠ the dossier claim), which
@@ -1390,19 +1564,19 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
         login_ip, login_city = claimed_ip, _lw_city(claimed_ip)
 
     # Normal logins from the candidate's login IP
-    for _ in range(rng.randint(2, 3)):
+    for _ in range(rng.randint(*_cfg.LW_NORMAL_LOGIN_COUNT)):
         entries.append(_LogEntry(
             ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
             ip=login_ip, account=account, extra="",
             owner_id=candidate.id, is_suspicious=False, violation_kind=None,
             city=login_city,
         ))
-        t += rng.randint(1800, 7200)
+        t += rng.randint(*_cfg.LW_NORMAL_LOGIN_GAP)
 
     if has_brute:
         # Brute force: rapid AUTH_FAIL on the SAME account, then AUTH_OK.
         ext_ip, ext_city = _lw_ext_ip(rng, "185.220.")
-        burst = rng.randint(4, 7)
+        burst = rng.randint(*_cfg.LW_BRUTE_BURST_SIZE)
         for i in range(burst):
             entries.append(_LogEntry(
                 ts_secs=t+i, ts_str=_lw_ts(t+i), event="AUTH_FAIL",
@@ -1417,13 +1591,14 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             owner_id=candidate.id, is_suspicious=True, violation_kind="brute_force",
             city=ext_city,
         ))
-        t += rng.randint(1800, 3600)
+        t += rng.randint(*_cfg.LW_BRUTE_COOLDOWN)
 
     if has_stuffing:
         # v2 Credential stuffing: one external IP sprays AUTH_FAIL across many
         # *other* accounts (few tries each), then lands AUTH_OK on the candidate.
         ext_ip, ext_city = _lw_ext_ip(rng, "45.131.")
-        sprayed = rng.sample(_LW_NOISE_USERS, min(5, len(_LW_NOISE_USERS)))
+        sprayed = rng.sample(_LW_NOISE_USERS,
+                              min(_cfg.LW_STUFFING_SPRAY_SIZE, len(_LW_NOISE_USERS)))
         for i, fake_user in enumerate(sprayed):
             fake_domain = rng.choice(_LW_NOISE_DOMAINS)
             entries.append(_LogEntry(
@@ -1439,7 +1614,7 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
             city=ext_city,
         ))
-        t += rng.randint(1800, 3600)
+        t += rng.randint(*_cfg.LW_STUFFING_COOLDOWN)
 
     if has_travel:
         city_a_entry, city_b_entry = rng.sample(_LW_CITIES, 2)
@@ -1451,17 +1626,18 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             owner_id=candidate.id, is_suspicious=True, violation_kind="impossible_travel",
             city=city_a_entry[1],
         ))
-        t += rng.randint(2100, 5400)   # 35–90 min apart
+        t += rng.randint(*_cfg.LW_TRAVEL_GAP)   # 35–90 min apart
         entries.append(_LogEntry(
             ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
             ip=ip_b, account=account, extra="",
             owner_id=candidate.id, is_suspicious=True, violation_kind="impossible_travel",
             city=city_b_entry[1],
         ))
-        t += rng.randint(1800, 3600)
+        t += rng.randint(*_cfg.LW_TRAVEL_COOLDOWN)
 
     if has_insider:
-        t_after = 82800 + rng.randint(0, 3600)   # 11pm–midnight
+        _win_start, _win_span = _cfg.LW_INSIDER_WINDOW
+        t_after = _win_start + rng.randint(0, _win_span)   # 11pm–midnight
         sens1 = rng.choice(_LW_SENSITIVE_PATHS)
         sens2 = rng.choice([p for p in _LW_SENSITIVE_PATHS if p != sens1])
         entries.append(_LogEntry(
@@ -1470,14 +1646,14 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             owner_id=candidate.id, is_suspicious=True, violation_kind="insider",
             city=None,
         ))
-        t2 = t_after + rng.randint(1, 5)
+        t2 = t_after + rng.randint(*_cfg.LW_INSIDER_STEP1_GAP)
         entries.append(_LogEntry(
             ts_secs=t2, ts_str=_lw_ts(t2), event="SUDO_EXEC",
             ip=claimed_ip, account=account, extra="/bin/bash",
             owner_id=candidate.id, is_suspicious=True, violation_kind="insider",
             city=None,
         ))
-        t3 = t2 + rng.randint(1, 10)
+        t3 = t2 + rng.randint(*_cfg.LW_INSIDER_STEP2_GAP)
         entries.append(_LogEntry(
             ts_secs=t3, ts_str=_lw_ts(t3), event="FILE_READ",
             ip=claimed_ip, account=account, extra=sens2,
@@ -1489,14 +1665,15 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
         # v2 After-hours: benign-looking activity outside business hours on
         # NORMAL paths (not sensitive). Minor — the player must weigh it, not
         # auto-deny. is_suspicious=True so base/filter call it out.
-        t_pm = 79200 + rng.randint(0, 9000)   # ~22:00 onward
+        _win_start, _win_span = _cfg.LW_AFTERHOURS_WINDOW
+        t_pm = _win_start + rng.randint(0, _win_span)   # ~22:00 onward
         entries.append(_LogEntry(
             ts_secs=t_pm, ts_str=_lw_ts(t_pm), event="AUTH_OK",
             ip=login_ip, account=account, extra="",
             owner_id=candidate.id, is_suspicious=True, violation_kind="after_hours",
             city=login_city,
         ))
-        t2 = t_pm + rng.randint(120, 900)
+        t2 = t_pm + rng.randint(*_cfg.LW_AFTERHOURS_GAP)
         entries.append(_LogEntry(
             ts_secs=t2, ts_str=_lw_ts(t2), event="FILE_READ",
             ip=login_ip, account=account, extra=rng.choice(_LW_NORMAL_PATHS),
@@ -1509,9 +1686,9 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
         # window trips. is_suspicious=False → base run does NOT flag it; only the
         # filter's cross-day correlation (see _lw_render) surfaces it.
         ext_ip, _c = _lw_ext_ip(rng, "91.219.")
-        ts0 = rng.randint(3600, 10800)
-        for i in range(rng.randint(3, 4)):
-            tt = (ts0 + i * rng.randint(9000, 16000)) % 86400
+        ts0 = rng.randint(*_cfg.LW_SLOW_FIRST_TS)
+        for i in range(rng.randint(*_cfg.LW_SLOW_BURST_SIZE)):
+            tt = (ts0 + i * rng.randint(*_cfg.LW_SLOW_GAP)) % 86400
             entries.append(_LogEntry(
                 ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_FAIL",
                 ip=ext_ip, account=account, extra="",
@@ -1520,8 +1697,8 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             ))
 
     if not (has_brute or has_travel or has_insider or has_stuffing or has_after or has_slow):
-        for _ in range(rng.randint(3, 5)):
-            evt  = rng.choice(["AUTH_OK", "FILE_READ", "AUTH_OK", "SESSION_END"])
+        for _ in range(rng.randint(*_cfg.LW_CLEAN_ACTIVITY_COUNT)):
+            evt  = rng.choice(_cfg.LW_CLEAN_ACTIVITY_EVENTS)
             path = rng.choice(_LW_NORMAL_PATHS) if evt == "FILE_READ" else ""
             entries.append(_LogEntry(
                 ts_secs=t, ts_str=_lw_ts(t), event=evt,
@@ -1529,26 +1706,37 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
                 owner_id=candidate.id, is_suspicious=False, violation_kind=None,
                 city=(login_city if evt == "AUTH_OK" else None),
             ))
-            t += rng.randint(900, 3600)
+            t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
 
     return entries
 
 
 def _lw_noise_entries(rng: _random.Random, count: int) -> list[_LogEntry]:
+    from .. import config as _cfg
+
     entries: list[_LogEntry] = []
     for _ in range(count):
         user   = rng.choice(_LW_NOISE_USERS)
         domain = rng.choice(_LW_NOISE_DOMAINS)
-        ip     = rng.choice(_LW_NOISE_IPS)
-        t      = rng.randint(21600, 86399)
-        evt    = rng.choice(["AUTH_OK", "AUTH_OK", "AUTH_FAIL", "FILE_READ",
-                              "SESSION_END", "AUTH_OK"])
+        t      = rng.randint(*_cfg.LW_NOISE_TIME_WINDOW)
+        evt    = rng.choice(_cfg.LW_NOISE_EVENT_WEIGHTS)
         path   = rng.choice(_LW_NORMAL_PATHS) if evt == "FILE_READ" else ""
+        # Batch-3 task #5: a slice of noise AUTH_OK logins come from the same
+        # external-city pool violations use (_LW_CITIES), rather than only
+        # the internal noise IPs. Otherwise a foreign city tag is ALWAYS a
+        # violation or the candidate's own legit foreign login — the player
+        # can "solve" Logwatch by scanning for exotic cities alone, never
+        # reading the account/pattern around them.
+        if evt == "AUTH_OK" and rng.random() < _cfg.LW_NOISE_EXTERNAL_CITY_FRACTION:
+            ip, city = _lw_ext_ip(rng)
+        else:
+            ip   = rng.choice(_LW_NOISE_IPS)
+            city = _lw_city(ip) if evt == "AUTH_OK" else None
         entries.append(_LogEntry(
             ts_secs=t, ts_str=_lw_ts(t), event=evt,
             ip=ip, account=f"{user}@{domain}", extra=path,
             owner_id=None, is_suspicious=False, violation_kind=None,
-            city=(_lw_city(ip) if evt == "AUTH_OK" else None),
+            city=city,
         ))
     return entries
 
@@ -1573,7 +1761,7 @@ def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
         extra_days = day.number - last_key
         base_noise = int(_cfg.LW_ENTRIES_BY_DAY.get(last_key, _cfg.LW_ENTRIES_DEFAULT)
                          * (_cfg.LW_ENTRIES_SCALE_FACTOR ** extra_days))
-    target_noise = max(20, base_noise - len(all_entries))
+    target_noise = max(_cfg.LW_ENTRIES_MIN, base_noise - len(all_entries))
     all_entries.extend(_lw_noise_entries(rng, target_noise))
     all_entries.sort(key=lambda e: e.ts_secs)
     return all_entries
@@ -1585,7 +1773,6 @@ def _lw_render(
     candidate,
     annotate:         bool = False,
     explicit_tags:    bool = False,
-    group_by_session: bool = False,
     upgrade_highlight: bool = False,   # log_highlight upgrade (issue #23):
                                        # free tier colours suspicious lines,
                                        # WITHOUT the ▲ annotations of a base run
@@ -1595,7 +1782,6 @@ def _lw_render(
     Free tier  : full log, candidate rows in yellow, claimed-IP mismatches in orange.
     Annotate   : adds ▲ inline markers for violations.
     Explicit   : adds ▲ VIOLATION_TYPE labels.
-    Session    : groups entries by (ip, account) blocks when group_by_session=True.
     """
     claimed_ip = (candidate.dossier.claimed_ip or "") if candidate else ""
 
@@ -1615,6 +1801,13 @@ def _lw_render(
         "SUDO_EXEC":    "#ff8c42",
         "SESSION_END":  "#6b7785",
     }
+    # Batch-3 task #4e: `annotate` alone used to be enough to trigger
+    # highlighting — meaning log_highlight ("Log Analyzer HUD") never
+    # actually gated anything once the tool was run. The claimed-IP mismatch
+    # special-case below is intentionally NOT part of this gate — it's
+    # documented elsewhere (rules_content._CATCH) as always-free evidence,
+    # a different, pre-existing design decision this task doesn't touch.
+    highlight_active = explicit_tags or upgrade_highlight
     prev_vk: str | None = None
 
     def _format_entry(e: _LogEntry, mine: bool, sus: bool, col: str) -> str:
@@ -1635,10 +1828,10 @@ def _lw_render(
         nonlocal prev_vk
         for e in entries_list:
             is_mine = (e.owner_id == target_id)
-            if is_mine and e.is_suspicious and (annotate or explicit_tags or upgrade_highlight):
+            if is_mine and e.is_suspicious and highlight_active:
                 col = "#ff5470" if explicit_tags else "#ff8c42"
                 lines.append(_format_entry(e, True, True, col))
-                if annotate and not explicit_tags:
+                if upgrade_highlight and not explicit_tags:
                     if e.violation_kind == "brute_force" and e.event == "AUTH_FAIL" and prev_vk != "brute_force":
                         lines.append("  [#ff8c42]▲ rapid auth failures on this account[/]")
                     elif e.violation_kind == "stuffing" and e.event == "AUTH_OK" and prev_vk != "stuffing":
@@ -1677,81 +1870,7 @@ def _lw_render(
                 prev_vk = None
                 lines.append(_format_entry(e, False, False, "#2e3d4f"))
 
-    def _render_grouped(entries_list: list[_LogEntry]) -> None:
-        """Render with session grouping: blocks share the same IP+account."""
-        nonlocal prev_vk
-        i = 0
-        while i < len(entries_list):
-            e      = entries_list[i]
-            grp_ip = e.ip
-            grp_ac = e.account
-            # Collect contiguous entries with same ip+account (within 30 min)
-            group: list[_LogEntry] = [e]
-            j = i + 1
-            while j < len(entries_list):
-                n = entries_list[j]
-                if n.ip == grp_ip and n.account == grp_ac and (n.ts_secs - group[-1].ts_secs) < 1800:
-                    group.append(n)
-                    j += 1
-                else:
-                    break
-            # Session header
-            city_s  = f" · {e.city}" if e.city else ""
-            h, r    = divmod(e.ts_secs % 86400, 3600)
-            m, _s   = divmod(r, 60)
-            ts_hm   = f"{h:02d}:{m:02d}"
-            is_mine = (e.owner_id == target_id)
-            hdr_col = "#7dd3c0" if is_mine else "#2e3d4f"
-            sep_len = max(1, 52 - len(grp_ip) - len(ts_hm))
-            lines.append(
-                f"[{hdr_col}]── session [{ts_hm} · {grp_ip}{city_s}]"
-                f" {'─' * sep_len}[/]"
-            )
-            for ge in group:
-                ge_mine = (ge.owner_id == target_id)
-                if ge_mine and ge.is_suspicious and (annotate or explicit_tags or upgrade_highlight):
-                    col = "#ff5470" if explicit_tags else "#ff8c42"
-                    lines.append("  " + _format_entry(ge, True, True, col))
-                    if annotate and not explicit_tags:
-                        if ge.violation_kind == "brute_force" and ge.event == "AUTH_FAIL" and prev_vk != "brute_force":
-                            lines.append("    [#ff8c42]▲ rapid auth failures on this account[/]")
-                        elif ge.violation_kind == "stuffing" and ge.event == "AUTH_OK":
-                            lines.append("    [#ff8c42]▲ credential stuffing — same IP, multiple accounts[/]")
-                        elif ge.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
-                            lines.append(f"    [#ff8c42]▲ geographically impossible login  [{ge.city}][/]")
-                        elif ge.violation_kind == "insider" and prev_vk != "insider":
-                            lines.append("    [#ff8c42]▲ after-hours privileged access[/]")
-                        elif ge.violation_kind == "after_hours" and prev_vk != "after_hours":
-                            lines.append("    [#ff8c42]▲ activity outside business hours[/]")
-                    if explicit_tags:
-                        if ge.violation_kind == "brute_force" and prev_vk != "brute_force":
-                            lines.append("    [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]")
-                        elif ge.violation_kind == "stuffing" and prev_vk != "stuffing":
-                            lines.append("    [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]")
-                        elif ge.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
-                            lines.append(f"    [#ff5470][b]▲ IMPOSSIBLE_TRAVEL[/][/]  [{ge.city}]")
-                        elif ge.violation_kind == "insider" and prev_vk != "insider":
-                            lines.append("    [#ff5470][b]▲ INSIDER_BEHAVIOR[/][/]")
-                        elif ge.violation_kind == "after_hours" and prev_vk != "after_hours":
-                            lines.append("    [#ff8c42][b]▲ AFTER_HOURS_ACCESS[/][/]")
-                    prev_vk = ge.violation_kind
-                elif ge_mine:
-                    prev_vk = None
-                    if ge.event == "AUTH_OK" and claimed_ip and ge.ip != claimed_ip:
-                        lines.append("  " + _format_entry(ge, True, False, "#ff8c42"))
-                        if annotate:
-                            lines.append("    [#ff8c42]▲ login IP differs from dossier claim[/]")
-                    else:
-                        lines.append("  " + _format_entry(ge, True, False, "#ffd93d"))
-                else:
-                    prev_vk = None
-                    lines.append("  " + _format_entry(ge, False, False, "#2e3d4f"))
-            i = j
-
-    if group_by_session:
-        _render_grouped(entries)
-    else:
-        _render_flat(entries)
+    _render_flat(entries)
 
     # v2 Low-and-slow only surfaces under the filter's cross-day correlation —
     # the individual failures are sub-threshold and unflagged in the base run.
@@ -1771,21 +1890,24 @@ def _lw_render(
 
 
 def get_logwatch_shared(entries: list[_LogEntry], candidate,
-                        group_by_session: bool = False,
                         upgrade_highlight: bool = False) -> tuple[str, ...]:
     """Free full log — candidate highlighted, claimed-IP mismatches in orange.
     With the log_highlight upgrade, suspicious lines are pre-coloured."""
     return _lw_render(entries, candidate.id, candidate,
-                      group_by_session=group_by_session,
                       upgrade_highlight=upgrade_highlight)
 
 
-def run_logwatch_shared(entries: list[_LogEntry], candidate, state,
-                        group_by_session: bool = False) -> ToolResult:
-    """Base run: ▲ inline markers on anomalous entries. findings=() — player judges."""
+def run_logwatch_shared(entries: list[_LogEntry], candidate, state) -> ToolResult:
+    """Base run: ▲ inline markers on anomalous entries. findings=() — player judges.
+
+    Batch-3 task #4e: previously called _lw_render with only annotate=True —
+    log_highlight ("Log Analyzer HUD") never actually gated anything once
+    the tool was run. Now threads the upgrade from state.
+    """
     _charge(state, "logwatch")
-    raw_lines  = _lw_render(entries, candidate.id, candidate,
-                             annotate=True, group_by_session=group_by_session)
+    _highlight = config.UPGRADE_LOG_HIGHLIGHT in getattr(state, "upgrades", ())
+    raw_lines  = _lw_render(entries, candidate.id, candidate, annotate=True,
+                            upgrade_highlight=_highlight)
     n_findings = len(_findings_from(candidate, ToolName.LOGWATCH))
     summary = (
         f"{n_findings} anomalous pattern(s) flagged — review highlighted entries."
@@ -1795,14 +1917,14 @@ def run_logwatch_shared(entries: list[_LogEntry], candidate, state,
     return ToolResult(tool=ToolName.LOGWATCH, findings=(), raw_lines=raw_lines, summary=summary)
 
 
-def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state,
-                                  group_by_session: bool = False) -> ToolResult:
+def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state) -> ToolResult:
     """Filter: explicit ▲ VIOLATION_TYPE labels."""
     _charge(state, "logwatch", filter=True)
     findings  = _findings_from(candidate, ToolName.LOGWATCH)
+    _highlight = config.UPGRADE_LOG_HIGHLIGHT in getattr(state, "upgrades", ())
     raw_lines = _lw_render(entries, candidate.id, candidate,
                             annotate=True, explicit_tags=True,
-                            group_by_session=group_by_session)
+                            upgrade_highlight=_highlight)
     summary = (
         f"[FILTERED] {len(findings)} violation(s) confirmed — see ▲ labels."
         if findings else
@@ -1976,13 +2098,23 @@ def _stego_pixel_grid(candidate: Candidate, tier: str) -> list[str]:
     return lines
 
 
-def get_stego_image_info(candidate: Candidate) -> tuple[str, ...]:
+def get_stego_image_info(candidate: Candidate,
+                         upgrades: "set | None" = None) -> tuple[str, ...]:
     """Free image metadata — always visible in the stegotool terminal, no cost."""
-    return tuple(_stego_image_lines(candidate))
+    return tuple(_stego_image_lines(candidate, upgrades))
 
 
-def _stego_image_lines(candidate: Candidate) -> list[str]:
-    """Free tier: pixel-art grid + raw image statistics — always visible, no cost."""
+def _stego_image_lines(candidate: Candidate,
+                       upgrades: "set | None" = None) -> list[str]:
+    """Free tier: pixel-art grid + raw image statistics — always visible, no cost.
+
+    Batch-3 task #4f: the R/G/B channel entropy NUMBERS are always shown —
+    only their red/orange/green severity colouring is gated behind
+    config.UPGRADE_STEGO_RGB_COLOR ("Channel Colorizer"). Fractions are a
+    dead giveaway in color, per Nick; the raw numbers alone are what a
+    player is meant to be able to read unaided.
+    """
+    _rgb_color = bool(upgrades) and config.UPGRADE_STEGO_RGB_COLOR in upgrades
     rng = _random.Random(int(candidate.id, 16) ^ 0x57E60001)
 
     has_payload = any(d.kind == DiscrepancyKind.STEGO_PAYLOAD_PRESENT
@@ -2033,6 +2165,8 @@ def _stego_image_lines(candidate: Candidate) -> list[str]:
             else: b_score = second_score
 
     def score_col(s: int) -> str:
+        if not _rgb_color:
+            return "#c8d4e1"
         if s >= 61: return "#ff5470"
         if s >= 31: return "#ff8c42"
         return "#00ff9f"
@@ -2581,11 +2715,12 @@ def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> lis
     ]
 
 
-def get_stego_stats(candidate: Candidate) -> tuple[str, ...]:
+def get_stego_stats(candidate: Candidate,
+                    upgrades: "set | None" = None) -> tuple[str, ...]:
     """Free-tier statistics block for the stego findings terminal.
     Same numbers as the legacy free tier, but WITHOUT the pixel grid —
     the grid now lives in the dedicated image panel."""
-    lines = _stego_image_lines(candidate)
+    lines = _stego_image_lines(candidate, upgrades)
 
     out: list[str] = []
     skipping = False
