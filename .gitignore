@@ -57,3 +57,6 @@ dmypy.json
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Jenkins CI output (JUnit + coverage reports, gitignored — archived as build artifacts instead)
+reports/

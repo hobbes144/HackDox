@@ -1029,7 +1029,8 @@ def build_stego_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines += [
         f"  [#00ff9f]X[/] / [#00ff9f]extract[/]  enter stamp mode on the image viewer",
         f"  [#00ff9f]arrows[/]       move the {config.STEGO_STAMP_W}×{config.STEGO_STAMP_H} stamp",
-        f"  [#00ff9f]Space[/]        stamp — reveal the cells underneath   "
+        f"  [#00ff9f]mouse[/]        hover to move the stamp, click to place it",
+        f"  [#00ff9f]Space[/] / [#00ff9f]click[/] stamp — reveal the cells underneath   "
         f"[dim]{config.STEGO_STAMP_COST} ⏱ per stamp[/]",
         f"  [#00ff9f]F[/] / [#00ff9f]filter[/]   classify the payload TYPE by name    "
         f"[dim]+{config.STEGO_FILTER_COST} ⏱[/]",

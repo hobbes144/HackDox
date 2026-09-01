@@ -16,6 +16,7 @@ from gameengine import config
 from gameengine.core.content_loader import load_day
 from gameengine.core.models import GameState, ToolName
 from gameengine.ui.tui.app import BriefingScreen, IntakeScreen, StatusHeader
+from gameengine import config
 
 SEED = 0xC0FFEE
 
@@ -425,4 +426,194 @@ def test_verdict_buttons_reset_and_reenable_on_the_next_candidate():
             await pilot.pause(0.1)
             assert not scr._verdict_locked
             assert not scr.btn_admit.disabled and not scr.btn_deny.disabled
+    asyncio.run(go())
+
+
+# ─── Mouse control for the stego stamp minigame (batch-3 follow-up) ─────────
+#
+# Setup shared by every test below: unlock stegotool, navigate to page 4
+# (Stegotool), enter stamp mode, then move focus off the ChatPanel onto the
+# Dossier. ChatPanel is a TypewriterLog (see its on_key): while it still has
+# unplayed dialogue queued AND is focused, it consumes Space itself to
+# advance the typewriter effect, which has nothing to do with stamping — a
+# real player only runs into this if they mash Space mid-dialogue, and it
+# pre-dates this feature. Moving focus to the Dossier sidesteps it so the
+# regression checks below are deterministic.
+
+
+async def _enter_stego_stamp_mode(pilot, scr):
+    # Each step gets its own pause: focusing the Dossier (see module note
+    # above) has to happen after the page-switch and stamp-mode-entry have
+    # actually settled, or Textual can silently leave focus on the
+    # ChatPanel — flaky, not a bug in the stamp/mouse code itself.
+    scr._goto_page(4)
+    await pilot.pause(0.1)
+    scr._enter_stamp_mode()
+    await pilot.pause(0.1)
+    scr.dossier.focus()
+    await pilot.pause(0.05)
+
+
+def test_mouse_move_repositions_the_stamp_cursor_at_no_cost():
+    """Hovering over the image should move the stamp window to the cell
+    under the pointer — pure local state, same as an arrow press, no ⏱
+    spent."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            await _enter_stego_stamp_mode(pilot, scr)
+            await pilot.pause(0.1)
+            panel = scr.image_st
+            before = (panel._cur_x, panel._cur_y)
+            credits_before = state.hackdox_credits
+
+            await pilot.hover(panel, offset=(10, 6))
+            await pilot.pause(0.1)
+
+            assert (panel._cur_x, panel._cur_y) != before, "hover did not move the stamp cursor"
+            assert (panel._cur_x, panel._cur_y) == (10, 6)
+            assert panel.stamps_used == 0, "hover alone must not stamp"
+            assert state.hackdox_credits == credits_before, "hover must not cost anything"
+    asyncio.run(go())
+
+
+def test_left_click_moves_cursor_and_stamps_through_the_same_do_stamp():
+    """A left click both repositions the stamp AND triggers the exact same
+    _do_stamp() the Space key uses — charging ⏱ and logging a result, not a
+    second, parallel implementation."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            await _enter_stego_stamp_mode(pilot, scr)
+            await pilot.pause(0.1)
+            panel = scr.image_st
+            compute_before = state.compute_hours
+
+            await pilot.click(panel, offset=(20, 8))
+            await pilot.pause(0.1)
+
+            assert (panel._cur_x, panel._cur_y) == (20, 8)
+            assert panel.stamps_used == 1, "left click did not trigger a stamp"
+            assert state.compute_hours == compute_before - config.STEGO_STAMP_COST
+    asyncio.run(go())
+
+
+def test_click_outside_the_image_bounds_is_inert():
+    """Clicking the border/status-line area under the pixel grid (not a
+    pixel cell) must not move the cursor or spend a stamp — mirrors the
+    existing bounds check in _mouse_to_cell()."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            await _enter_stego_stamp_mode(pilot, scr)
+            await pilot.pause(0.1)
+            panel = scr.image_st
+            pos_before = (panel._cur_x, panel._cur_y)
+
+            await pilot.click(panel, offset=(0, panel._img.rows + 2))
+            await pilot.pause(0.1)
+
+            assert (panel._cur_x, panel._cur_y) == pos_before
+            assert panel.stamps_used == 0
+    asyncio.run(go())
+
+
+def test_click_while_not_in_stamp_mode_is_inert():
+    """Mouse control is layered on stamp mode only — clicking the image
+    panel outside stamp mode (e.g. while just browsing the Stegotool page)
+    must not stamp anything."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            scr._goto_page(4)
+            await pilot.pause(0.1)
+            panel = scr.image_st
+            assert not panel._stamp_mode
+
+            await pilot.click(panel, offset=(5, 2))
+            await pilot.pause(0.1)
+
+            assert panel.stamps_used == 0
+    asyncio.run(go())
+
+
+def test_right_click_is_ignored():
+    """Only a left click (button 1) stamps — a right click over the image
+    must be a no-op."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            await _enter_stego_stamp_mode(pilot, scr)
+            await pilot.pause(0.1)
+            panel = scr.image_st
+            pos_before = (panel._cur_x, panel._cur_y)
+
+            await pilot.click(panel, offset=(15, 3), button=3)
+            await pilot.pause(0.1)
+
+            assert (panel._cur_x, panel._cur_y) == pos_before
+            assert panel.stamps_used == 0
+    asyncio.run(go())
+
+
+def test_keyboard_arrows_space_and_esc_still_work_alongside_mouse():
+    """Regression check (Nick: 'the traditional method of using the arrow
+    keys and space should still work'): arrows nudge the cursor, Space
+    stamps, Esc exits — unchanged by the new mouse handlers."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            await _enter_stego_stamp_mode(pilot, scr)
+            await pilot.pause(0.1)
+            panel = scr.image_st
+
+            before_key = (panel._cur_x, panel._cur_y)
+            await pilot.press("right")
+            await pilot.pause(0.05)
+            assert (panel._cur_x, panel._cur_y) != before_key, "arrow key movement regressed"
+
+            stamps_before_kb = panel.stamps_used
+            await pilot.press("space")
+            await pilot.pause(0.1)
+            assert panel.stamps_used == stamps_before_kb + 1, "space-bar stamping regressed"
+
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert not panel._stamp_mode, "Esc no longer exits stamp mode"
     asyncio.run(go())
