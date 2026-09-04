@@ -31,7 +31,6 @@ from gameengine.ui.tui.shared import (
     _REF_HASHCRACK,
     _REF_LOGWATCH,
     _REF_STEGOTOOL,
-    _format_day_rules,
 )
 from gameengine.ui.tui.widgets import (
     BreachListPanel,
@@ -403,11 +402,6 @@ class IntakeScreen(Screen):
             cd.upgrades = ups
             cd.cracked_password = None         # issue #29 — fresh password state
             cd.set_candidate(c)
-
-        # The day's rulebook is shown on EVERY page's reference panel so the
-        # player can always see what disqualifies a candidate today and then
-        # check the tool terminal on the right to decide if it's a violation.
-        rules_block = _format_day_rules(self._day.rules)
 
         # Candidate-page reference: today's rules + global accept/reject guide
         self.ref_main.update_content(_REF_CANDIDATE)
