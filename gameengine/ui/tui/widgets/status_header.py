@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from textual.message import Message
+from collections.abc import Callable
+
 from textual.widgets import Static
+
 from gameengine import config
 from gameengine.core import tools_bridge
 from gameengine.core.models import Day, GameState
-
 from gameengine.ui.tui.shared import (
     _PAGE_NAMES,
     _PAGE_TOOL,
@@ -33,7 +34,7 @@ class StatusHeader(Static):
         self.day         = day
         self.slot_index  = slot_index
         self.page_index  = page_index
-        self.on_tab_click: "Callable[[int], None] | None" = None
+        self.on_tab_click: Callable[[int], None] | None = None
         # (start, end) cell-offset ranges for each tab on the tab-strip
         # line, recomputed every render() so a click always maps against
         # what's actually on screen right now.

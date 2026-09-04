@@ -16,7 +16,6 @@ from gameengine import config
 from gameengine.core.content_loader import load_day
 from gameengine.core.models import GameState, ToolName
 from gameengine.ui.tui.app import BriefingScreen, IntakeScreen, StatusHeader
-from gameengine import config
 
 SEED = 0xC0FFEE
 
@@ -197,7 +196,6 @@ def test_status_header_resource_cluster_is_right_justified():
     slot info — the 'spread out'/'full-width bar' half of task #8."""
     from rich.text import Text
     from textual.app import App as _TestApp
-    from textual.widgets import Static as _Static
 
     day = load_day(1)
     state = GameState(seed=SEED)

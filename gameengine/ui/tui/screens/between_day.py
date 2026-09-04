@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
+
 from gameengine import config
 from gameengine.core import persistence, scoring, tools_bridge
 from gameengine.core.models import Day, GameState
-
-from gameengine.ui.tui.widgets import (
-    TypewriterLog,
-)
 from gameengine.ui.tui.screens._narration import (
     _play_overseer,
+)
+from gameengine.ui.tui.widgets import (
+    TypewriterLog,
 )
 
 
@@ -29,7 +31,7 @@ class BetweenDayScreen(Screen):
     Purchases deduct HackDollar$ and persist immediately.
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("up",    "cursor_up",   "Up",   show=False),
         Binding("down",  "cursor_down", "Down", show=False),
         Binding("enter", "buy",         "Buy",  show=False),
@@ -179,8 +181,8 @@ class BetweenDayScreen(Screen):
                         if self._hd_bonus else "  [dim](no health bonus)[/]")
         return "\n".join([
             f"[#6b7785]Verdicts[/]        [b]{correct}[/]/{total} correct",
-            f"[#6b7785]⏱ spent[/]         [#ffb454]−{spent}[/] of {budget}"
-            f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]",
+            (f"[#6b7785]⏱ spent[/]         [#ffb454]−{spent}[/] of {budget}"
+            f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]"),
             f"[#6b7785]Next shift[/]      {self._next_shift_terms()}",
             f"[#6b7785]Board accuracy[/]  {board_pct}%  [dim](paid as HD$ bonus)[/]",
             f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]"
@@ -190,25 +192,25 @@ class BetweenDayScreen(Screen):
             f"[#6b7785]HackDollar$[/]     [#00ff9f]+{self._hd_earned}[/] verdicts{hd_bonus_str}",
             f"[#6b7785]Balance[/]         [#00ff9f][b]{st.hackdollars} HD$[/][/]",
             "",
-            f"[#6b7785]Site Health[/]     [{hcol}]{bar}[/]  [{hcol}][b]{h:.0f}%[/][/]"
-            f"  [{dcol}]({self._health_delta:+.1f} applied at end of day)[/]",
-            f"[dim]health only moves at shift end · game over below "
+            (f"[#6b7785]Site Health[/]     [{hcol}]{bar}[/]  [{hcol}][b]{h:.0f}%[/][/]"
+            f"  [{dcol}]({self._health_delta:+.1f} applied at end of day)[/]"),
+            (f"[dim]health only moves at shift end · game over below "
             f"{config.SITE_HEALTH_LOSS_THRESHOLD:.0f}%"
-            f" · bonus above {config.SITE_HEALTH_REWARD_THRESHOLD:.0f}%[/]",
+            f" · bonus above {config.SITE_HEALTH_REWARD_THRESHOLD:.0f}%[/]"),
         ] + ([
             "",
-            f"[#ff5470][b]▼ SITE HEALTH BELOW {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}% "
-            f"— HACKDOX IS LOST[/][/]",
-            "[#ff5470]The day's admissions took the site down. "
-            "Press N to face the consequences.[/]",
+            (f"[#ff5470][b]▼ SITE HEALTH BELOW {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}% "
+            f"— HACKDOX IS LOST[/][/]"),
+            ("[#ff5470]The day's admissions took the site down. "
+            "Press N to face the consequences.[/]"),
         ] if scoring.health_below_loss(st) else []))
 
     def _shop_text(self) -> str:
         st = self._state
         lines = [
-            f"[#6b7785]balance[/] [#00ff9f][b]{st.hackdollars} HD$[/][/]"
+            (f"[#6b7785]balance[/] [#00ff9f][b]{st.hackdollars} HD$[/][/]"
             f"   [#6b7785]credits[/] [#c084fc]{st.hackdox_credits}/{config.HACKDOX_CREDIT_MAX}[/]"
-            f"   [#6b7785]⏱ cap[/] [#ffb454]{st.compute_capacity}[/]",
+            f"   [#6b7785]⏱ cap[/] [#ffb454]{st.compute_capacity}[/]"),
             "",
         ]
         for idx, (kind, iid, price, label, desc) in enumerate(self._items):

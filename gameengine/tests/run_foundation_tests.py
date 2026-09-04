@@ -23,7 +23,6 @@ from gameengine.core.models import (
     Verdict,
 )
 
-
 SEED = 0xC0FFEE
 
 
@@ -264,6 +263,7 @@ def test_persistence_round_trip_new_economy() -> None:
     """Issues #20/#21/#25: site_health / hackdollars / credits / capacity
     survive save→load; no `lives` field is written (issue #24)."""
     import json
+
     from gameengine.core import persistence
 
     prior = (config.SAVE_FILE.read_text(encoding="utf-8")
@@ -330,7 +330,9 @@ def main() -> int:
         except AssertionError as e:
             failed += 1
             print(f"  FAIL  {fn.__name__}: {e}")
-        except Exception:
+        except Exception:  # noqa: BLE001 -- a broken test must not abort the whole run;
+            # mirrors pytest's own per-test isolation. Traceback is printed below, so
+            # nothing is swallowed silently.
             failed += 1
             print(f"  ERROR  {fn.__name__}:")
             traceback.print_exc()

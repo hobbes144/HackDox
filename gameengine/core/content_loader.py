@@ -9,17 +9,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 
 from .. import config
 from .candidate_gen import stable_hash
 from .models import (
+    RULE_MUTABILITIES,
     Archetype,
     Day,
     DiscrepancyKind,
     Performance,
     Quotas,
-    RULE_MUTABILITIES,
     Rule,
     RuleSheet,
 )

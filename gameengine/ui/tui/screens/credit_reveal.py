@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.widgets import Static
+
 from gameengine.core.models import Candidate, Verdict
 from gameengine.ui.tui import rules_content
 
@@ -18,7 +21,7 @@ class CreditRevealScreen(ModalScreen):
     (descriptions / which tool reveals what) per the issue AC. Distinct
     violet styling marks it as a paid debug view, not normal tool output."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "dismiss_reveal", "Close"),
         Binding("enter",  "dismiss_reveal", "Close"),
     ]

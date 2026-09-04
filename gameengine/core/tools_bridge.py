@@ -20,16 +20,16 @@ Live-data implementations will land in v1.1 once the loop is proven.
 from __future__ import annotations
 
 import random as _random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .. import config
-from .models import Candidate, Discrepancy, DiscrepancyKind, ToolName
-from .candidate_gen import (AFFILIATIONS_LEGIT as _LEGIT_ORGS_BANK,
-                            DOMAINS_DISPOSABLE as _DISPOSABLE_DOMAINS,
-                            DOMAINS_PRIVACY as _PRIVACY_DOMAINS_BANK,
-                            DOMAINS_TRUSTED as _TRUSTED_DOMAINS_BANK,
-                            _ELITE_ORG_HANDLE as _ORG_HANDLE,
-                            stable_hash as _stable_hash)
+from .candidate_gen import _ELITE_ORG_HANDLE as _ORG_HANDLE
+from .candidate_gen import AFFILIATIONS_LEGIT as _LEGIT_ORGS_BANK
+from .candidate_gen import DOMAINS_DISPOSABLE as _DISPOSABLE_DOMAINS
+from .candidate_gen import DOMAINS_PRIVACY as _PRIVACY_DOMAINS_BANK
+from .candidate_gen import DOMAINS_TRUSTED as _TRUSTED_DOMAINS_BANK
+from .candidate_gen import stable_hash as _stable_hash
+from .models import Candidate, Day, Discrepancy, DiscrepancyKind, ToolName
 
 
 class InsufficientCompute(RuntimeError):
@@ -299,7 +299,7 @@ def _second_breach_db_for_candidate(candidate_id: str, day_number: int,
     return unlocked[rng.randint(0, len(unlocked) - 1)]
 
 
-def breach_dbs_for_candidate(candidate: "Candidate",
+def breach_dbs_for_candidate(candidate: Candidate,
                              day_number: int) -> list[str]:
     """Every corpus this candidate's email should appear in, on this day.
 
@@ -384,7 +384,6 @@ def get_ghostscan_identity(candidate: Candidate) -> tuple[str, ...]:
 
 def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[str]:
     d = candidate.dossier
-    has_typo = any(k.kind == DiscrepancyKind.TYPOSQUAT_HANDLE for k in candidate.truth.discrepancies)  # v2
     email_domain = candidate.email.split("@")[-1].lower() if "@" in candidate.email else ""
 
     if email_domain in _GS_SUSPICIOUS_DOMAINS:
@@ -428,8 +427,8 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[s
 
     return [
         *_gs_band("IDENTITY CHECK", "#7dd3c0", "passive — no ⏱ spent"),
-        f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]"
-        f"  [#6b7785]handle[/] [#c8d4e1]{candidate.handle}[/]",
+        (f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]"
+        f"  [#6b7785]handle[/] [#c8d4e1]{candidate.handle}[/]"),
         # #53: the free "possible typosquat" line was removed. It named the
         # violation before any hours were spent, which is why the violation was
         # only ever "caught" by reading a label. The handle now genuinely is a
@@ -521,13 +520,13 @@ def _ghostscan_sweep_lines(
     # signal, and #56 exists precisely because two violations sharing one
     # signal is unresolvable for the player.
     if has_mismatch and "GitHub" not in cand_platforms:
-        cand_platforms.discard(sorted(cand_platforms)[-1])
+        cand_platforms.discard(max(cand_platforms))
         cand_platforms.add("GitHub")
 
     lines: list[str] = [
-        f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]  "
+        (f"[#6b7785]target[/]  [b #e8f0f8]{candidate.display_name}[/]  "
         f"[#6b7785]handle[/] [#c8d4e1]{claimed_handle}[/]  "
-        f"[#6b7785]claimed org[/] [#c8d4e1]{claimed_affil}[/]",
+        f"[#6b7785]claimed org[/] [#c8d4e1]{claimed_affil}[/]"),
         "",
         # ── SECTION 1 — PLATFORM SWEEP (issue #28: distinct cyan band) ───
         *_gs_band("PLATFORM SWEEP", "#6ad4ff",
@@ -589,10 +588,10 @@ def _ghostscan_sweep_lines(
                         f"    [#ff8c42]▲ dossier says [b]{claimed_affil}[/] — "
                         f"profile says [b]{candidate.dossier.actual_affiliation}[/][/]"
                         if has_affil_fake else
-                        f"    [#ffd93d]▲ no organisation listed on any profile[/]")
+                        "    [#ffd93d]▲ no organisation listed on any profile[/]")
                     prev_affil_ann = True
                 if is_mismatch_suspicious:
-                    lines.append(f"    [#ff8c42]▲ commit email differs from dossier[/]")
+                    lines.append("    [#ff8c42]▲ commit email differs from dossier[/]")
             else:
                 lines.append(row)
 
@@ -654,7 +653,7 @@ def _ghostscan_sweep_lines(
     advisory_hit = rng.choice(_GS_ADVISORY_FORUMS) if has_sock else None
 
     # Critical forums
-    lines.append(f"  [#3d4f5e]▌ CRITICAL[/]  [dim]BreachForums · RaidForums · HackForums · XSS.is[/]")
+    lines.append("  [#3d4f5e]▌ CRITICAL[/]  [dim]BreachForums · RaidForums · HackForums · XSS.is[/]")
     first_crit_ann = True
     for forum in _GS_CRITICAL_FORUMS:
         noise_h = rng.choice(_GS_NOISE_HANDLES)
@@ -663,14 +662,14 @@ def _ghostscan_sweep_lines(
             if show_forums:
                 lines.append(f"[#ff5470]  {forum:<20}  {claimed_handle}  [CRITICAL][/]")
                 if first_crit_ann:
-                    lines.append(f"  [#ff8c42]▲ handle on known threat actor forum[/]")
+                    lines.append("  [#ff8c42]▲ handle on known threat actor forum[/]")
                     first_crit_ann = False
             else:
                 # Blended — same dim colour as noise, no label
                 lines.append(f"[#2e3d4f]  {forum:<20}  {claimed_handle}[/]")
 
     lines.append("")
-    lines.append(f"  [#2e3d4f]▌ ADVISORY[/]  [dim]nulled.to · CrackingKing · Dread · CrackingPro[/]")
+    lines.append("  [#2e3d4f]▌ ADVISORY[/]  [dim]nulled.to · CrackingKing · Dread · CrackingPro[/]")
     for forum in _GS_ADVISORY_FORUMS:
         noise_h = rng.choice(_GS_NOISE_HANDLES)
         lines.append(f"[#2e3d4f]  {forum:<20}  {noise_h}[/]")
@@ -683,7 +682,7 @@ def _ghostscan_sweep_lines(
     # Breach dump summary — delegate detail to the breach list panel (right column)
     lines.append("")
     lines.append("[#ff8c42]-- breach dumps ---------------------------------------------[/]")
-    lines.append(f"  [dim]full databases in the breach panel →[/]")
+    lines.append("  [dim]full databases in the breach panel →[/]")
     # #61: the noise dumps name only UNLOCKED corpora. A summary line citing a
     # database the panel does not render is a dead end the player cannot check.
     _unlocked_dumps = config.breach_dbs_unlocked_by(day_number) or _GS_BREACH_DUMPS
@@ -700,7 +699,7 @@ def _ghostscan_sweep_lines(
     if has_breach and _show_breach:
         _, breach_db = _breach_db_for_candidate(candidate.id, day_number)
         lines.append(f"[#ff8c42]  {breach_db:<24}  {claimed_email}[/]")
-        lines.append(f"  [#ff8c42]▲ email in breach corpus[/]")
+        lines.append("  [#ff8c42]▲ email in breach corpus[/]")
 
     return lines
 
@@ -869,7 +868,7 @@ def _breach_list_noise(game_seed: int, db_name: str) -> tuple[str, ...]:
     return out
 
 
-def get_breach_lists(candidate: "Candidate", game_seed: int,
+def get_breach_lists(candidate: Candidate, game_seed: int,
                      day_number: int) -> list[tuple[str, str, str, list[tuple[str, bool]]]]:
     """Breach database entries for the BreachListPanel (#61).
 
@@ -920,7 +919,7 @@ def get_breach_lists(candidate: "Candidate", game_seed: int,
 
 
 def get_breach_lists_for_day(
-    game_seed: int, day: "Day"
+    game_seed: int, day: Day
 ) -> list[tuple[str, str, str, list[str]]]:
     """(db_name, year, count_label, sorted_email_list) for the WHOLE day.
 
@@ -1035,7 +1034,6 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
     has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
     has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)  # v2
     has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)  # v2
-    has_cred   = has_leaked or has_weak
     has_hashbad = has_leaked or has_weak or has_reuse or has_unsalt
     # #62: the burst below used to fire on `has_cred`, so EVERY weak- or
     # leaked-credential candidate got an AUTH_FAIL storm annotated "credential
@@ -1159,8 +1157,8 @@ def _hc_noise_entries(rng: _random.Random, count: int) -> list[_HCLogEntry]:
 def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
     """Shared credential audit log for the full day. Volume scales with day
     number per config (batch-3 task #4d/#7 — was a flat max(80, 160-n))."""
-    from .candidate_gen import generate as _gen_candidate
     from .. import config as _cfg
+    from .candidate_gen import generate as _gen_candidate
 
     rng     = _random.Random(_stable_hash(game_seed, day.number, "hc_day") & 0xFFFFFFFF)
     entries: list[_HCLogEntry] = []
@@ -1263,14 +1261,14 @@ def _render_hc_log(
                         lines.append(f"  [#ff8c42]▲ crack result  →  [b]{crack_plaintext}[/]  ({attempts})[/]")
                         emitted_crack = True
                 elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
-                    lines.append(f"  [#ff8c42]▲ email confirmed in breach corpus[/]")
+                    lines.append("  [#ff8c42]▲ email confirmed in breach corpus[/]")
                 elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
                     if crack_plaintext:
                         _note = "reused across breaches" if e.violation_kind == "reuse" else "unsalted -- cracks instantly"
                         lines.append(f"  [#ff8c42]▲ crack result  ->  [b]{crack_plaintext}[/]  ({_note})[/]")
                         emitted_crack = True
                 elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    lines.append(f"  [#ff8c42]▲ same password seen in another breach corpus[/]")
+                    lines.append("  [#ff8c42]▲ same password seen in another breach corpus[/]")
 
             if explicit_tags:
                 if e.violation_kind == "stuffing" and prev_vk != "stuffing":
@@ -1743,8 +1741,8 @@ def _lw_noise_entries(rng: _random.Random, count: int) -> list[_LogEntry]:
 
 def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
     """Shared server log for the full day. Volume scales with day number per config."""
-    from .candidate_gen import generate as _gen_candidate
     from .. import config as _cfg
+    from .candidate_gen import generate as _gen_candidate
 
     rng = _random.Random(_stable_hash(game_seed, day.number, "day_log") & 0xFFFFFFFF)
     all_entries: list[_LogEntry] = []
@@ -1952,13 +1950,21 @@ def run_logwatch(candidate: Candidate, state) -> ToolResult:
 
 
 def run_hashcrack(candidate: Candidate, state) -> ToolResult:
-    """Legacy stub — callers should use run_hashcrack_shared() via app.py."""
+    """Legacy stub — callers should use run_hashcrack_shared() via app.py.
+
+    Pre-refactor this called two module-level helpers, _hashcrack_raw_lines()
+    and _hashcrack_filter_lines(), that no longer exist -- they were removed
+    when the shared-log Hashcrack implementation (run_hashcrack_shared,
+    above) replaced this path. Nothing calls run_hashcrack()/
+    run_hashcrack_filtered() any more (app.py routes through the *_shared
+    variants), so this was dead code that would have raised NameError if it
+    ever ran. Brought in line with the run_logwatch() stub just above, which
+    got the same treatment during that refactor.
+    """
     _charge(state, "hashcrack")
-    raw_lines = tuple(_hashcrack_raw_lines(candidate))
-    cracked   = any(d.kind in (DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL)
-                    for d in candidate.truth.discrepancies)
-    summary   = "Hash cracked -- review the plaintext carefully." if cracked else "No match found."
-    return ToolResult(tool=ToolName.HASHCRACK, findings=(), raw_lines=raw_lines, summary=summary)
+    return ToolResult(tool=ToolName.HASHCRACK, findings=(),
+                      raw_lines=("(legacy — use shared hashcrack log)",),
+                      summary="Run via hashcrack page.")
 
 # ─── Stegotool constants & helpers ────────────────────────────────────────────
 
@@ -2099,13 +2105,13 @@ def _stego_pixel_grid(candidate: Candidate, tier: str) -> list[str]:
 
 
 def get_stego_image_info(candidate: Candidate,
-                         upgrades: "set | None" = None) -> tuple[str, ...]:
+                         upgrades: set | None = None) -> tuple[str, ...]:
     """Free image metadata — always visible in the stegotool terminal, no cost."""
     return tuple(_stego_image_lines(candidate, upgrades))
 
 
 def _stego_image_lines(candidate: Candidate,
-                       upgrades: "set | None" = None) -> list[str]:
+                       upgrades: set | None = None) -> list[str]:
     """Free tier: pixel-art grid + raw image statistics — always visible, no cost.
 
     Batch-3 task #4f: the R/G/B channel entropy NUMBERS are always shown —
@@ -2135,8 +2141,7 @@ def _stego_image_lines(candidate: Candidate,
 
     # ── Pixel art grid (free tier) ─────────────────────────────────────────
     lines.append(f"[#3d6478]┌─ {img_file}  {width}×{height}  {img_type}  {file_kb}KB {'─' * max(0, 34 - len(img_file))}┐[/]")
-    for row in _stego_pixel_grid(candidate, "free"):
-        lines.append(row)
+    lines.extend(_stego_pixel_grid(candidate, "free"))
     lines.append("[#3d6478]└" + "─" * 42 + "┘[/]")
     lines.append("")
 
@@ -2225,8 +2230,7 @@ def _stego_scan_lines(candidate: Candidate) -> list[str]:
         lines.append("[#ff8c42]-- anomalous region detected ----------------------------[/]")
     else:
         lines.append("[#00ff9f]-- image appears clean ----------------------------------[/]")
-    for row in _stego_pixel_grid(candidate, "scan"):
-        lines.append(row)
+    lines.extend(_stego_pixel_grid(candidate, "scan"))
     lines.append("")
 
     # ── Suspicion score + stats ───────────────────────────────────────────
@@ -2258,8 +2262,7 @@ def _stego_filter_lines(candidate: Candidate) -> list[str]:
 
     # -- Transformed grid (filter tier) --
     if suspicious:
-        for row in _stego_pixel_grid(candidate, "filter"):
-            lines.append(row)
+        lines.extend(_stego_pixel_grid(candidate, "filter"))
         lines.append("")
 
     # -- Explicit violation + detail --
@@ -2273,7 +2276,7 @@ def _stego_filter_lines(candidate: Candidate) -> list[str]:
         payload_hint = rng.choice(_ST_C2_PAYLOADS)
         lines += [
             "  [#ff5470][b]^ COVERT_C2_CHANNEL[/][/]",
-            f"  [#6b7785]detail:[/]  LSB anomaly across multiple channels",
+            "  [#6b7785]detail:[/]  LSB anomaly across multiple channels",
             f"  [#6b7785]payload:[/] {payload_hint}",
         ]
     elif has_payload:
@@ -2322,14 +2325,16 @@ def run_logwatch_filtered(candidate: Candidate, state) -> ToolResult:
 
 
 def run_hashcrack_filtered(candidate: Candidate, state) -> ToolResult:
-    """Legacy stub -- callers should use run_hashcrack_filtered_shared() via app.py."""
+    """Legacy stub -- callers should use run_hashcrack_filtered_shared() via app.py.
+
+    See run_hashcrack() above -- same dead reference to helpers removed in
+    the shared-log refactor, fixed the same way.
+    """
     _charge(state, "hashcrack", filter=True)
-    findings  = _findings_from(candidate, ToolName.HASHCRACK)
-    raw_lines = tuple(_hashcrack_raw_lines(candidate) + _hashcrack_filter_lines(candidate))
-    summary   = (f"[FILTERED] {len(findings)} credential finding(s) confirmed."
-                 if findings else "[FILTERED] Credential clean.")
+    findings = _findings_from(candidate, ToolName.HASHCRACK)
     return ToolResult(tool=ToolName.HASHCRACK, findings=findings,
-                      raw_lines=raw_lines, summary=summary, filtered=True)
+                      raw_lines=("(legacy -- use shared hashcrack log)",),
+                      summary="[FILTERED] Run via hashcrack page.", filtered=True)
 
 def run_stegotool_filtered(candidate: Candidate, state) -> ToolResult:
     """Per-channel LSB breakdown -- explicitly confirms payload type."""
@@ -2661,8 +2666,8 @@ def stamp_log_lines(img: StegoImageData, res: StampResult,
     lines = [head]
     if reveal_type:
         lines += [
-            f"  [{col}][b]▲ carrier detected[/][/]  "
-            f"{res.anomalous_cells} / {res.total_cells} cells  [dim]({dens}% density)[/]",
+            (f"  [{col}][b]▲ carrier detected[/][/]  "
+            f"{res.anomalous_cells} / {res.total_cells} cells  [dim]({dens}% density)[/]"),
             f"  signature: [{col}][b]{res.signature}[/][/]",
         ]
     else:
@@ -2670,10 +2675,10 @@ def stamp_log_lines(img: StegoImageData, res: StampResult,
         # cells are painted in the payload colour on the image; the player
         # classifies by eye (or spends ⏱ on the filter, F).
         lines += [
-            f"  [#c8d4e1][b]▲ carrier detected[/][/]  "
-            f"{res.anomalous_cells} / {res.total_cells} cells  [dim]({dens}% density)[/]",
-            f"  signature: [dim]unclassified — read the stamp colour, "
-            f"or run filter (F) to name it[/]",
+            (f"  [#c8d4e1][b]▲ carrier detected[/][/]  "
+            f"{res.anomalous_cells} / {res.total_cells} cells  [dim]({dens}% density)[/]"),
+            ("  signature: [dim]unclassified — read the stamp colour, "
+            "or run filter (F) to name it[/]"),
         ]
     lines.append(
         f"  zone coverage: [b]{round(res.coverage * 100)}%[/]"
@@ -2691,7 +2696,7 @@ def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> lis
     (the stamp-mechanic equivalent of the old filter tier)."""
     if img.kind is None or img.zone is None:
         return []
-    sig, col, desc = _STAMP_KIND_META[img.kind]
+    _sig, col, desc = _STAMP_KIND_META[img.kind]
     _, _, zw, zh = img.zone
     dens = round(img.density * 100)
     size_word = ("sprawling" if zw * zh >= img.cols * img.rows // 4
@@ -2716,7 +2721,7 @@ def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> lis
 
 
 def get_stego_stats(candidate: Candidate,
-                    upgrades: "set | None" = None) -> tuple[str, ...]:
+                    upgrades: set | None = None) -> tuple[str, ...]:
     """Free-tier statistics block for the stego findings terminal.
     Same numbers as the legacy free tier, but WITHOUT the pixel grid —
     the grid now lives in the dedicated image panel."""

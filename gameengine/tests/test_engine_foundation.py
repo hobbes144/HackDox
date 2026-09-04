@@ -7,6 +7,8 @@ the Textual UI in task #7.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from gameengine import config
@@ -20,7 +22,6 @@ from gameengine.core.models import (
     GameState,
     Verdict,
 )
-
 
 SEED = 0xC0FFEE
 
@@ -424,7 +425,7 @@ def test_candidate_count_curve_shape():
 
     ramp = [config.DAY_CANDIDATE_COUNT(d) for d in range(1, 21)]
     # Monotonic non-decreasing, and never above the cap.
-    assert all(b >= a for a, b in zip(ramp, ramp[1:]))
+    assert all(b >= a for a, b in itertools.pairwise(ramp))
     assert max(ramp) == config.CANDIDATE_COUNT_CAP
     # The ramp actually ramps — a late day is strictly longer than a tutorial one.
     assert config.DAY_CANDIDATE_COUNT(20) > config.DAY_CANDIDATE_COUNT(1)
@@ -528,8 +529,8 @@ def test_reward_decay_shape_and_floors():
     assert admit[:4] == [config.HACKDOLLAR_PER_CORRECT_ADMIT] * 4
     assert deny[:4]  == [config.HACKDOLLAR_PER_CORRECT_DENY] * 4
     # Monotonically non-increasing, and bottoming out at the floors.
-    assert all(b <= a for a, b in zip(admit, admit[1:]))
-    assert all(b <= a for a, b in zip(deny, deny[1:]))
+    assert all(b <= a for a, b in itertools.pairwise(admit))
+    assert all(b <= a for a, b in itertools.pairwise(deny))
     assert min(admit) == config.HACKDOLLAR_FLOOR_ADMIT
     assert min(deny)  == config.HACKDOLLAR_FLOOR_DENY
     # The floors are reached around the campaign's climax, not mid-run.
@@ -760,6 +761,7 @@ def test_rule_flips_are_deterministic_and_not_every_morning(day1):
 def test_broadcast_lines_are_prose_not_a_diff_dump(day1):
     """#36 AC: casual and in-fiction, one line per changed rule."""
     from dataclasses import replace
+
     from gameengine.ui.tui.app import rule_change_lines
 
     var_rule = next(r for r in day1.rules
@@ -945,8 +947,9 @@ def _elite_faker(archetype, kind):
 
 def test_ghostscan_never_corroborates_an_unbacked_affiliation_claim():
     """The sweep must not print an org the ground truth says isn't there."""
-    from gameengine.core import tools_bridge
     import random as _r
+
+    from gameengine.core import tools_bridge
 
     c = _elite_faker(Archetype.SNEAKY_BUGGER, DiscrepancyKind.AFFILIATION_MISMATCH)
     org = c.claimed_affiliation
@@ -1000,9 +1003,10 @@ def test_the_professional_still_gets_its_affiliation_confirmed():
     pool and is SUPPOSED to have ghostscan corroborate the claim — that is the
     whole 'quick admit' read. Suppressing the org for everyone would have
     broken it."""
-    from dataclasses import replace
-    from gameengine.core import tools_bridge
     import random as _r
+    from dataclasses import replace
+
+    from gameengine.core import tools_bridge
 
     base = unconstrained_day()
     day = replace(base, number=1,
@@ -1079,7 +1083,7 @@ EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
 }
 
 
-def _tool_tier_kinds() -> dict[DiscrepancyKind, "object"]:
+def _tool_tier_kinds() -> dict[DiscrepancyKind, object]:
     """Every DiscrepancyKind whose evidence lives behind a tool run."""
     from gameengine.core.models import ToolName
     return {
@@ -1398,6 +1402,7 @@ def test_single_artifact_groups_are_mutually_exclusive():
     had already happened once with credentials (2026-08-16).
     """
     from dataclasses import replace
+
     from gameengine.core import tools_bridge
 
     # Named explicitly rather than read from _EXCLUSIVE_ARTIFACT_GROUPS. A guard
@@ -1638,6 +1643,7 @@ def test_typosquat_generation_is_deterministic():
 
 def _stego_images(limit=30, day_n=6):
     from dataclasses import replace
+
     from gameengine.core import tools_bridge
     base = unconstrained_day()
     out = []
@@ -1700,6 +1706,7 @@ def test_clean_image_has_no_zone_and_no_hint_region():
     """A clean candidate must never light up — the tint can't be a false
     positive."""
     from dataclasses import replace
+
     from gameengine.core import tools_bridge
 
     base = unconstrained_day()
@@ -1753,6 +1760,7 @@ def test_every_stego_payload_can_be_found_before_it_resolves():
 
 def test_stego_image_is_deterministic():
     from dataclasses import replace
+
     from gameengine.core import tools_bridge
 
     base = unconstrained_day()
@@ -1781,6 +1789,7 @@ def test_every_generated_disposable_candidate_is_actually_detectable():
     because comparing constants is what people already thought they were doing.
     """
     from dataclasses import replace
+
     from gameengine.core import tools_bridge
 
     base = unconstrained_day()
@@ -1873,6 +1882,7 @@ def test_no_hint_text_tells_the_player_to_flag_a_nonexistent_violation():
     player to flag must correspond to a real violation.
     """
     from dataclasses import replace
+
     from gameengine.core import tools_bridge
 
     base = unconstrained_day()
@@ -2214,7 +2224,6 @@ def test_unsalted_password_shows_plaintext_directly_no_crack_prompt():
     credential_unsalted first and returns early, so that prompt string (which
     only exists in the salted branch further down) can never appear."""
     from gameengine.ui.tui.app import _password_markup
-    from gameengine.core.models import Dossier
 
     d = Dossier(submitted_hash="5f4dcc3b5aa765d61d8327deb882cf99",
                 password_plain="monkey123", credential_unsalted=True)
@@ -2236,7 +2245,6 @@ def test_strong_password_verdict_line_gated_behind_crack_verdict_analyzer():
     surfaces never disagree about what's told to the player for free.
     """
     from gameengine.ui.tui.app import _password_markup
-    from gameengine.core.models import Dossier
 
     # cracked_password == "" is the uncracked-but-attempted (bcrypt) state.
     d = Dossier(submitted_hash="$2b$12$KIXQ7c5s9j2mR8vN0abcdEfGhIjKlMnOpQrStUvWxYz012345",
@@ -2289,6 +2297,7 @@ def test_hashcrack_highlighting_actually_gated_by_credential_hud():
     without the upgrade, just without the "▲" attention-drawing.
     """
     import random as _random
+
     from gameengine.core import tools_bridge
 
     day = load_day(20)
@@ -2368,6 +2377,7 @@ def test_strong_password_verdict_gated_in_hashcrack_log():
     must still reveal either way — only the qualitative verdict is paywalled.
     """
     import random as _random
+
     from gameengine.core import tools_bridge
 
     day = load_day(20)
@@ -2402,8 +2412,9 @@ def test_stego_rgb_coloring_gated_behind_channel_colorizer():
     """Batch-3 task #4f: the R/G/B channel entropy numbers are always shown;
     only their severity coloring is gated behind UPGRADE_STEGO_RGB_COLOR.
     """
-    from gameengine.core import tools_bridge
     import re
+
+    from gameengine.core import tools_bridge
 
     day = load_day(20)
     cand = candidate_gen.generate(SEED, day, 0)
@@ -2649,6 +2660,7 @@ def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
     `(int(id,16) >> 8) % len(...)` pick.
     """
     import random as _r
+
     from gameengine.core import tools_bridge
     checked = 0
     for kind in (DiscrepancyKind.LEAKED_PASSWORD,
@@ -2695,7 +2707,6 @@ def test_breach_lists_for_day_include_every_slots_carrier():
     seed EVERY candidate the day will ever produce, not just slot 0 — this is
     the actual fix for "planted in the list in the middle of the round," so
     it has to be proven for a carrier who isn't the first candidate either."""
-    from dataclasses import replace
     from gameengine.core import tools_bridge
 
     found = _find_breach_carrier(day_n=7, candidate_count=8, slot=5)
@@ -2717,9 +2728,9 @@ def test_breach_list_panel_shows_a_carrier_before_their_turn():
     still sitting in the panel, unmarked (is_match False — it isn't the
     candidate currently under investigation, just genuinely present)."""
     import asyncio
-    from dataclasses import replace
+
     from textual.app import App, ComposeResult
-    from gameengine.core import tools_bridge
+
     from gameengine.ui.tui.app import BreachListPanel
 
     found = _find_breach_carrier(day_n=7, candidate_count=8, slot=0)
@@ -2766,7 +2777,9 @@ def test_breach_list_idle_state_does_not_color_code_the_real_match():
     match and a noise row must be byte-for-byte identical apart from the
     email text itself."""
     import asyncio
+
     from textual.app import App, ComposeResult
+
     from gameengine.ui.tui.app import BreachListPanel
 
     found = _find_breach_carrier(day_n=7, candidate_count=4, slot=0)
@@ -3165,8 +3178,8 @@ def test_logwatch_noise_external_city_fraction_is_configurable():
     it to zero must stop noise rows from ever carrying a foreign city —
     proving the knob actually drives the behaviour, not just documents it.
     """
-    from gameengine.core import tools_bridge
     from gameengine import config as _cfg
+    from gameengine.core import tools_bridge
 
     original = _cfg.LW_NOISE_EXTERNAL_CITY_FRACTION
     try:
@@ -3187,8 +3200,9 @@ def test_logwatch_brute_force_burst_size_is_configurable():
     (rng.randint(4, 7)) inside _lw_candidate_entries; pulled into
     config.LW_BRUTE_BURST_SIZE. Prove the knob actually drives generation,
     not just documents a number nothing reads."""
-    from gameengine.core import tools_bridge
     import random as _random
+
+    from gameengine.core import tools_bridge
 
     day = load_day(20)
     cand = None
@@ -3214,8 +3228,9 @@ def test_logwatch_brute_force_burst_size_is_configurable():
 
 def test_hashcrack_stuffing_burst_size_is_configurable():
     """Same shape as above, for Hashcrack's HC_STUFFING_BURST_SIZE."""
-    from gameengine.core import tools_bridge
     import random as _random
+
+    from gameengine.core import tools_bridge
 
     day = load_day(20)
     cand = None

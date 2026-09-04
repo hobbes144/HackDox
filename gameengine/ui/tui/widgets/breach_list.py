@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
-from textual.widgets import Footer, Static
+from textual.widgets import Static
+
 from gameengine.core import tools_bridge
 from gameengine.core.models import Candidate, Day
 
@@ -52,8 +53,8 @@ class BreachListPanel(VerticalScroll):
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def load_candidate(self, candidate: "Candidate", game_seed: int,
-                       day: "Day") -> None:
+    def load_candidate(self, candidate: Candidate, game_seed: int,
+                       day: Day) -> None:
         """Populate lists for a new candidate and reset to idle state.
 
         #61: the lists are no longer per-candidate. `game_seed` fixes their

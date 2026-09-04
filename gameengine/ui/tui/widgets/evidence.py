@@ -6,13 +6,13 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.events import Key
 from textual.widgets import Static
-from gameengine.core.models import Candidate, DiscrepancyKind
-from gameengine.ui.tui import rules_content
 
+from gameengine.core.models import DiscrepancyKind
+from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.shared import (
-    _sev_color,
-    _GROUP_ORDER,
     _GROUP_META,
+    _GROUP_ORDER,
+    _sev_color,
 )
 
 
@@ -78,10 +78,10 @@ class EvidenceBoard(VerticalScroll):
 
     can_focus = True
 
-    def __init__(self, state: "EvidenceState", widget_id: str = "evidence-board",
+    def __init__(self, state: EvidenceState, widget_id: str = "evidence-board",
                  classes: str | None = None, summary: bool = False,
                  home_group: str | None = None,
-                 unlocked_tools: "set[str] | None" = None) -> None:
+                 unlocked_tools: set[str] | None = None) -> None:
         super().__init__(id=widget_id, classes=classes)
         # Summary mode (Candidate page): read-only — lists only the violations
         # the player has flagged. Editable mode (tool pages): full checklist.
@@ -118,7 +118,8 @@ class EvidenceBoard(VerticalScroll):
         if not self._summary and self._focused:
             try:
                 self.scroll_to(y=max(0, self._cursor_line - 3), animate=False)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 -- scrolling before the widget is fully
+                # mounted/sized is a no-op, not a failure worth surfacing.
                 pass
 
     def reset_cursor(self) -> None:
@@ -128,7 +129,7 @@ class EvidenceBoard(VerticalScroll):
         self.repaint()
         try:
             self.scroll_home(animate=False)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 -- same as above: pre-mount scroll is a no-op.
             pass
 
     def focus_home_group(self) -> None:

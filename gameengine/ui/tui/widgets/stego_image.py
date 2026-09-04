@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
+
 from gameengine import config
 from gameengine.core import tools_bridge
 from gameengine.core.models import Candidate, DiscrepancyKind
@@ -43,20 +47,20 @@ class StegoImagePanel(VerticalScroll):
 
     can_focus = False
 
-    _MOVES = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
+    _MOVES: ClassVar[dict[str, tuple[int, int]]] = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 
     def __init__(self) -> None:
         super().__init__(id="stego-image-panel", classes="panel")
         self.border_title = " Image Viewer "
         self._content: Static | None = None
-        self._img: "tools_bridge.StegoImageData | None" = None
+        self._img: tools_bridge.StegoImageData | None = None
         self._revealed: set[tuple[int, int]] = set()
         self._stamp_mode = False
         self._cur_x = 0
         self._cur_y = 0
         self._stamps_used = 0
         self.tint_boost = False   # Spectral Lens upgrade (issue #23)
-        self.on_stamp_click: "Callable[[], None] | None" = None
+        self.on_stamp_click: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
         self._content = Static("[dim italic]Awaiting candidate...[/]",
@@ -66,7 +70,7 @@ class StegoImagePanel(VerticalScroll):
     # ── Public API ────────────────────────────────────────────────────────
 
     @property
-    def image(self) -> "tools_bridge.StegoImageData | None":
+    def image(self) -> tools_bridge.StegoImageData | None:
         return self._img
 
     @property
@@ -78,7 +82,7 @@ class StegoImagePanel(VerticalScroll):
         return (self._cur_x, self._cur_y,
                 config.STEGO_STAMP_W, config.STEGO_STAMP_H)
 
-    def load_candidate(self, candidate: "Candidate", day: int = 1) -> None:
+    def load_candidate(self, candidate: Candidate, day: int = 1) -> None:
         self._img = tools_bridge.build_stego_image(candidate, day)
         self._revealed = set()
         self._stamp_mode = False
@@ -122,7 +126,7 @@ class StegoImagePanel(VerticalScroll):
         self._cur_x, self._cur_y = self._clamp_stamp(x, y)
         self._rebuild_content()
 
-    def _mouse_to_cell(self, event) -> "tuple[int, int] | None":
+    def _mouse_to_cell(self, event) -> tuple[int, int] | None:
         """Translate a raw mouse event's widget-relative (x, y) into image-
         grid (col, row) coordinates, or None if the pointer is over the
         border/padding/status-line area rather than a pixel. Uses
@@ -154,7 +158,7 @@ class StegoImagePanel(VerticalScroll):
             self.set_stamp_position(*cell)
             self.on_stamp_click()
 
-    def do_stamp(self) -> "tools_bridge.StampResult | None":
+    def do_stamp(self) -> tools_bridge.StampResult | None:
         """Evaluate the stamp at the cursor. Caller charges ⏱ first."""
         if self._img is None:
             return None
@@ -232,7 +236,7 @@ class StegoImagePanel(VerticalScroll):
             lines.append(f"[#00ffd5][b]STAMP MODE[/][/]  [dim]@ ({sx},{sy})[/]  "
                          f"[dim]arrows move · Space stamp (−{config.STEGO_STAMP_COST} ⏱) · Esc exit[/]")
         else:
-            lines.append(f"[dim]Press [b]X[/] to enter stamp mode[/]")
+            lines.append("[dim]Press [b]X[/] to enter stamp mode[/]")
         lines.append(f"[dim]stamps: {self._stamps_used} · spent: {spent} ⏱ · "
                      f"revealed: {len(self._revealed)} px[/]")
         self._content.update("\n".join(lines))

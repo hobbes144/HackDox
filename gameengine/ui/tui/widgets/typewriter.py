@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.events import Key
 from textual.message import Message
 from textual.widgets import Static
+
 from gameengine import config
 from gameengine.core.models import Candidate
 
@@ -12,7 +15,7 @@ from gameengine.core.models import Candidate
 class _TWMessage:
     """One queued TypewriterLog message. Plain class (no dataclass import)."""
 
-    __slots__ = ("speaker", "lines", "color", "icon", "style", "triggers", "prefix")
+    __slots__ = ("color", "icon", "lines", "prefix", "speaker", "style", "triggers")
 
     def __init__(self, speaker, lines, color, icon, style, triggers, prefix):
         self.speaker = speaker
@@ -53,7 +56,7 @@ class TypewriterLog(Static):
         """Posted when a queued message's last line finishes. `triggers` is
         whatever the caller handed to `post(...)` (None if it had none)."""
 
-        def __init__(self, log: "TypewriterLog", triggers) -> None:
+        def __init__(self, log: TypewriterLog, triggers) -> None:
             super().__init__()
             self.log = log
             self.triggers = triggers
@@ -247,7 +250,7 @@ class ChatPanel(TypewriterLog):
         self.border_title = " Chat "
         self.upgrades: set = set()   # Sentiment Scanner upgrade (issue #23)
 
-    _TAG_STYLE: dict[str, tuple[str, str]] = {
+    _TAG_STYLE: ClassVar[dict[str, tuple[str, str]]] = {
         "neutral":  ("#c8d4e1", ""),
         "warm":     ("#7dd3c0", ""),
         "hostile":  ("#ff5470", "bold"),

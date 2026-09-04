@@ -21,94 +21,162 @@ Key principles:
 from __future__ import annotations
 
 from textual.app import App
+
 from gameengine import config
 from gameengine.core import persistence, scoring
-from gameengine.core.content_loader import generic_outro_key, load_day, load_narratives, resolve_narrative
+from gameengine.core.content_loader import (
+    generic_outro_key,
+    load_day,
+    load_narratives,
+    resolve_narrative,
+)
 from gameengine.core.models import Day, GameState, Performance, Verdict
-
-from gameengine.ui.tui.screens.intro import IntroScreen
-from gameengine.ui.tui.screens.briefing import BriefingScreen
-from gameengine.ui.tui.screens.intake import IntakeScreen
-from gameengine.ui.tui.screens.eod import EODScreen
-from gameengine.ui.tui.screens.between_day import BetweenDayScreen
-from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
-from gameengine.ui.tui.screens.game_over import GameOverScreen
-
 
 # ─── Backward-compat facade ─────────────────────────────────────────────────
 # gameengine/ui/tui/app.py used to be a single ~3,700-line module holding every
 # widget and screen. It is now split into shared.py / widgets/ / screens/; the
 # re-exports below keep `from gameengine.ui.tui.app import X` working for the
 # existing test suite and hackdox.py without either needing changes.
+#
+# Ruff's F401 (unused-import) would otherwise call every name below dead code,
+# since nothing else in this module references them directly. __all__ is the
+# standard way to tell the linter — and the next reader — that these are
+# intentional re-exports, not leftovers from the split.
+from gameengine.ui.tui.screens._narration import (
+    _RULE_CHANGE_PHRASINGS,
+    _UNLOCK_LINES,
+    _overseer_lines,
+    _play_overseer,
+    _rule_fragment,
+    _starts_a_sentence,
+    rule_change_lines,
+)
+from gameengine.ui.tui.screens.between_day import BetweenDayScreen
+from gameengine.ui.tui.screens.briefing import BriefingScreen
+from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
+from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
+from gameengine.ui.tui.screens.eod import EODScreen
+from gameengine.ui.tui.screens.game_over import GameOverScreen
+from gameengine.ui.tui.screens.intake import IntakeScreen
+from gameengine.ui.tui.screens.intro import IntroScreen
+from gameengine.ui.tui.screens.rules import RulesScreen
 from gameengine.ui.tui.shared import (
     _B,
-    EVIDENCE_ITEMS,
-    _SEVERITY,
-    _SEV_COLOR,
-    _sev_color,
-    _GROUP_ORDER,
-    _GROUP_META,
     _BOARD_HOME_GROUP,
+    _COMMAND_ALIASES,
+    _ERROR_MSGS,
+    _GROUP_META,
+    _GROUP_ORDER,
+    _PAGE_IDS,
+    _PAGE_NAMES,
+    _PAGE_TAB,
+    _PAGE_TOOL,
+    _PW_STRENGTH_META,
     _REF_CANDIDATE,
     _REF_GHOSTSCAN,
     _REF_HASHCRACK,
     _REF_LOGWATCH,
     _REF_STEGOTOOL,
-    _COMMAND_ALIASES,
-    _ERROR_MSGS,
-    _PAGE_NAMES,
-    _PAGE_IDS,
-    _PAGE_TOOL,
-    _PAGE_TAB,
-    _hl_email,
-    _hl_affil,
-    _PW_STRENGTH_META,
-    _password_markup,
+    _SEV_COLOR,
+    _SEVERITY,
+    EVIDENCE_ITEMS,
     _format_day_rules,
+    _hl_affil,
+    _hl_email,
+    _password_markup,
+    _sev_color,
 )
 from gameengine.ui.tui.widgets import (
-    StatusHeader,
-    DossierPanel,
-    CondensedDossier,
-    _TWMessage,
-    TypewriterLog,
+    BreachListPanel,
     ChatPanel,
-    EvidenceState,
+    CommandBar,
+    CondensedDossier,
+    DebugPanel,
+    DossierPanel,
     EvidenceBoard,
+    EvidenceState,
     OverseerPanel,
     ReferencePanel,
-    ToolTerminal,
-    BreachListPanel,
+    StatusHeader,
     StegoImagePanel,
-    DebugPanel,
     Toast,
-    CommandBar,
+    ToolTerminal,
+    TypewriterLog,
+    _TWMessage,
 )
-from gameengine.ui.tui.screens.rules import RulesScreen
-from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
-from gameengine.ui.tui.screens.intro import IntroScreen
-from gameengine.ui.tui.screens.briefing import BriefingScreen
-from gameengine.ui.tui.screens.intake import IntakeScreen
-from gameengine.ui.tui.screens.eod import EODScreen
-from gameengine.ui.tui.screens.between_day import BetweenDayScreen
-from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
-from gameengine.ui.tui.screens.game_over import GameOverScreen
-from gameengine.ui.tui.screens._narration import (
-    _overseer_lines,
-    _play_overseer,
-    _UNLOCK_LINES,
-    _RULE_CHANGE_PHRASINGS,
-    _rule_fragment,
-    _starts_a_sentence,
-    rule_change_lines,
-)
+
+__all__ = [
+    # shared.py internals
+    "EVIDENCE_ITEMS",
+    "_B",
+    "_BOARD_HOME_GROUP",
+    "_COMMAND_ALIASES",
+    "_ERROR_MSGS",
+    "_GROUP_META",
+    "_GROUP_ORDER",
+    "_PAGE_IDS",
+    "_PAGE_NAMES",
+    "_PAGE_TAB",
+    "_PAGE_TOOL",
+    "_PW_STRENGTH_META",
+    "_REF_CANDIDATE",
+    "_REF_GHOSTSCAN",
+    "_REF_HASHCRACK",
+    "_REF_LOGWATCH",
+    "_REF_STEGOTOOL",
+    "_RULE_CHANGE_PHRASINGS",
+    "_SEVERITY",
+    "_SEV_COLOR",
+    "_UNLOCK_LINES",
+    # Screens
+    "BetweenDayScreen",
+    # widgets
+    "BreachListPanel",
+    "BriefingScreen",
+    "CampaignEndScreen",
+    "ChatPanel",
+    "CommandBar",
+    "CondensedDossier",
+    "CreditRevealScreen",
+    "DebugPanel",
+    "DossierPanel",
+    "EODScreen",
+    "EvidenceBoard",
+    "EvidenceState",
+    "GameOverScreen",
+    "HackDoxApp",
+    "IntakeScreen",
+    "IntroScreen",
+    "OverseerPanel",
+    "ReferencePanel",
+    "RulesScreen",
+    "StatusHeader",
+    "StegoImagePanel",
+    "Toast",
+    "ToolTerminal",
+    "TypewriterLog",
+    "_TWMessage",
+    "_format_day_rules",
+    "_hl_affil",
+    "_hl_email",
+    # screens/_narration.py internals
+    "_overseer_lines",
+    "_password_markup",
+    "_play_overseer",
+    "_rule_fragment",
+    "_sev_color",
+    "_starts_a_sentence",
+    "rule_change_lines",
+    "run",
+]
+
 
 class HackDoxApp(App):
     CSS_PATH = "app.tcss"
     TITLE    = "HackDox Terminal"
     SUB_TITLE = "Cybersecurity Access Review"
 
-    def __init__(self, seed: int = 0xC0FFEE, lab_day: "Day | None" = None) -> None:
+    def __init__(self, seed: int = 0xC0FFEE, lab_day: Day | None = None) -> None:
         super().__init__()
         self._seed       = seed
         # #52: `hackdox lab --play` hands in a pre-constrained Day so a shift can
@@ -272,7 +340,7 @@ class HackDoxApp(App):
         return Performance.PASSING
 
 
-def run(seed: int = 0xC0FFEE, lab_day: "Day | None" = None) -> None:
+def run(seed: int = 0xC0FFEE, lab_day: Day | None = None) -> None:
     HackDoxApp(seed=seed, lab_day=lab_day).run()
 
 

@@ -15,7 +15,6 @@ from typing import Literal
 
 from .. import config
 
-
 # ─── Enums ──────────────────────────────────────────────────────────────────
 
 
@@ -379,7 +378,7 @@ class Day:
     forced_includes: dict[int, Archetype] = field(default_factory=dict)
     forced_violations: dict[int, tuple[DiscrepancyKind, ...]] = field(
         default_factory=dict)
-    rule_sheet: "RuleSheet | None" = None
+    rule_sheet: RuleSheet | None = None
 
 
 # ─── Day results & game state ───────────────────────────────────────────────

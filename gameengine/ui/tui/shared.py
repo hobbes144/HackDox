@@ -5,9 +5,8 @@ from __future__ import annotations
 
 from gameengine import config
 from gameengine.core import candidate_gen, tools_bridge
-from gameengine.core.models import Candidate, DiscrepancyKind, ToolName, Verdict
+from gameengine.core.models import DiscrepancyKind, ToolName, Verdict
 from gameengine.ui.tui import rules_content
-
 
 # Shortcut so BINDINGS class attributes can be built from config at import time.
 _B = config.KEY_BINDINGS
@@ -17,7 +16,6 @@ _B = config.KEY_BINDINGS
 # Rules Pages tables render from the SAME catalog, so changing a violation
 # there updates labels, colours, and sorting everywhere at once.
 
-from gameengine.ui.tui import rules_content
 
 # rules_content.visible_catalog(None) = every kind, unfiltered, already
 # ordered by rules_content.GROUP_ORDER then severity ascending (minor ->
@@ -313,7 +311,7 @@ _PW_STRENGTH_META: dict[str, tuple[str, str, str]] = {
 
 
 def _password_markup(dossier, cracked_password: str | None,
-                     upgrades: "set | None" = None,
+                     upgrades: set | None = None,
                      prefix_len: int = 14) -> tuple[str, str]:
     """(hash line, state line) for the dossier password field.
 

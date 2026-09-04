@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from textual.widgets import Static
+
 from gameengine.core.models import Candidate, Verdict
 from gameengine.ui.tui import rules_content
 

@@ -146,7 +146,6 @@ def score(
     correct = candidate.truth.correct_verdict == player_verdict
     moral   = candidate.truth.moral_modifier
 
-    correct_admit = (candidate.truth.correct_verdict == Verdict.ADMIT)
     player_admit  = (player_verdict == Verdict.ADMIT)
 
     # Evidence-board bonus (HD$) — only for correct verdicts (issue #27:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -10,49 +11,49 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.screen import Screen
 from textual.widgets import Button, ContentSwitcher, Static
+
 from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
 from gameengine.core.models import Candidate, Day, GameState, ToolName, Verdict
-
+from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
+from gameengine.ui.tui.screens.rules import RulesScreen
 from gameengine.ui.tui.shared import (
     _B,
     _BOARD_HOME_GROUP,
+    _COMMAND_ALIASES,
+    _ERROR_MSGS,
+    _PAGE_IDS,
+    _PAGE_NAMES,
+    _PAGE_TAB,
+    _PAGE_TOOL,
     _REF_CANDIDATE,
     _REF_GHOSTSCAN,
     _REF_HASHCRACK,
     _REF_LOGWATCH,
     _REF_STEGOTOOL,
-    _COMMAND_ALIASES,
-    _ERROR_MSGS,
-    _PAGE_NAMES,
-    _PAGE_IDS,
-    _PAGE_TOOL,
-    _PAGE_TAB,
     _format_day_rules,
 )
 from gameengine.ui.tui.widgets import (
-    StatusHeader,
-    DossierPanel,
-    CondensedDossier,
+    BreachListPanel,
     ChatPanel,
-    EvidenceState,
+    CommandBar,
+    CondensedDossier,
+    DebugPanel,
+    DossierPanel,
     EvidenceBoard,
+    EvidenceState,
     OverseerPanel,
     ReferencePanel,
-    ToolTerminal,
-    BreachListPanel,
+    StatusHeader,
     StegoImagePanel,
-    DebugPanel,
-    CommandBar,
+    ToolTerminal,
 )
-from gameengine.ui.tui.screens.rules import RulesScreen
-from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
 
 
 class IntakeScreen(Screen):
     """The main play screen."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         # Page navigation — number row (immediate, no command bar)
         Binding(_B["page_candidate"], "page_1",      "Candidate", show=False),
         Binding(_B["page_ghostscan"], "page_2",      "Ghostscan", show=False),
@@ -253,13 +254,13 @@ class IntakeScreen(Screen):
 
     # ── Internal helpers ──────────────────────────────────────────────
 
-    _TOOL_TERM: dict[ToolName, str] = {
+    _TOOL_TERM: ClassVar[dict[ToolName, str]] = {
         ToolName.GHOSTSCAN: "terminal-gs",
         ToolName.LOGWATCH:  "terminal-lw",
         ToolName.HASHCRACK: "terminal-hc",
         ToolName.STEGOTOOL: "terminal-st",
     }
-    _TOOL_PAGE: dict[ToolName, int] = {
+    _TOOL_PAGE: ClassVar[dict[ToolName, int]] = {
         ToolName.GHOSTSCAN: 1,
         ToolName.LOGWATCH:  3,
         ToolName.HASHCRACK: 2,
@@ -308,15 +309,17 @@ class IntakeScreen(Screen):
             board.display = self._evidence_open
             try:
                 self.query_one(f"#{side_id}").display = not self._evidence_open
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 -- side panel may not be mounted on
+                # every page (only tool pages have one); skipping the toggle is the
+                # correct no-op, not an error.
                 pass
 
-    def _current_tool_board(self) -> "EvidenceBoard | None":
+    def _current_tool_board(self) -> EvidenceBoard | None:
         if 1 <= self._page_index <= 4:
             return self._tool_boards[self._page_index - 1]
         return None
 
-    def _active_editable_board(self) -> "EvidenceBoard | None":
+    def _active_editable_board(self) -> EvidenceBoard | None:
         """The editable board for the current page (Candidate or a tool page)."""
         if self._page_index == 0:
             return self.board_c0
@@ -829,7 +832,7 @@ class IntakeScreen(Screen):
 
     # ── Command execution ─────────────────────────────────────────────────────
 
-    _FILTER_PAGE_MAP: dict[int, ToolName] = {
+    _FILTER_PAGE_MAP: ClassVar[dict[int, ToolName]] = {
         1: ToolName.GHOSTSCAN,
         2: ToolName.HASHCRACK,
         3: ToolName.LOGWATCH,

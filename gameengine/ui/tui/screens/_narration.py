@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from gameengine.core import candidate_gen
-from gameengine.core.models import GameState
-
 from gameengine.ui.tui.widgets import (
     TypewriterLog,
 )
@@ -19,7 +17,7 @@ def _overseer_lines(narrative: str) -> list[str]:
     return narrative.split("\n") if narrative else [""]
 
 
-def _play_overseer(log: "TypewriterLog", narrative: str, *, triggers_on_last=None) -> None:
+def _play_overseer(log: TypewriterLog, narrative: str, *, triggers_on_last=None) -> None:
     """Stream an Overseer beat, one auto-chaining message per line.
 
     Each line is its own message so the beat plays out without the player
@@ -59,29 +57,29 @@ _UNLOCK_LINES: dict[str, str] = {
 _RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
     # A rule got teeth: advisory → disqualifying.
     "tightened": (
-        "Oh — one thing before you start. That guidance about {rule}? Policy "
-        "now. Not a suggestion. Don't make me explain it twice.",
-        "Small note. {rule} — that's a hard deny from today. Compliance "
-        "wanted it in writing, so now it's in writing.",
-        "Quick amendment: {rule}. It used to be your judgement. It isn't "
-        "anymore.",
+        ("Oh — one thing before you start. That guidance about {rule}? Policy "
+        "now. Not a suggestion. Don't make me explain it twice."),
+        ("Small note. {rule} — that's a hard deny from today. Compliance "
+        "wanted it in writing, so now it's in writing."),
+        ("Quick amendment: {rule}. It used to be your judgement. It isn't "
+        "anymore."),
     ),
     # A rule lost its teeth: disqualifying → advisory.
     "relaxed": (
-        "Before I forget — {rule}. That's a note now, not a bar. Flag it, "
-        "wave them through. Don't overthink it.",
-        "Legal's been busy. {rule} is advisory from this morning. Use your "
-        "judgement, which I'm told you have.",
-        "Minor thing. {rule} — we're not denying on that on its own anymore. "
-        "Log it and move on.",
+        ("Before I forget — {rule}. That's a note now, not a bar. Flag it, "
+        "wave them through. Don't overthink it."),
+        ("Legal's been busy. {rule} is advisory from this morning. Use your "
+        "judgement, which I'm told you have."),
+        ("Minor thing. {rule} — we're not denying on that on its own anymore. "
+        "Log it and move on."),
     ),
     "added": (
         "New line in the book today: {rule}. Read it properly at some point.",
         "They've added one. {rule}. I didn't write it, I just pass it along.",
     ),
     "removed": (
-        "That clause about {rule} is gone as of this morning. Don't ask me "
-        "why; I stopped asking.",
+        ("That clause about {rule} is gone as of this morning. Don't ask me "
+        "why; I stopped asking."),
         "We've dropped the line about {rule}. Nobody's said why.",
     ),
 }

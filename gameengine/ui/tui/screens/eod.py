@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Static
+
 from gameengine import config
 from gameengine.core import persistence
 from gameengine.core.models import Day, GameState, Performance
-
-from gameengine.ui.tui.widgets import (
-    TypewriterLog,
-)
 from gameengine.ui.tui.screens._narration import (
     _play_overseer,
+)
+from gameengine.ui.tui.widgets import (
+    TypewriterLog,
 )
 
 
 class EODScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("space", "continue_game", "Continue"),
         Binding("q", "quit_app", "Quit"),
     ]

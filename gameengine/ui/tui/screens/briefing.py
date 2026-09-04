@@ -2,27 +2,29 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Static
+
 from gameengine import config
 from gameengine.core import rules_engine
 from gameengine.core.models import Day, GameState
-
+from gameengine.ui.tui.screens._narration import (
+    _UNLOCK_LINES,
+    _play_overseer,
+    rule_change_lines,
+)
 from gameengine.ui.tui.widgets import (
     TypewriterLog,
-)
-from gameengine.ui.tui.screens._narration import (
-    _play_overseer,
-    _UNLOCK_LINES,
-    rule_change_lines,
 )
 
 
 class BriefingScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("space", "begin_day", "Begin shift"),
         Binding("q", "quit_app", "Quit"),
     ]
@@ -70,7 +72,7 @@ class BriefingScreen(Screen):
             self._overseer_log.post("", line, color="#00ff9f",
                                     triggers=self._unlock_tool)
 
-    def on_typewriter_log_finished(self, msg: "TypewriterLog.Finished") -> None:
+    def on_typewriter_log_finished(self, msg: TypewriterLog.Finished) -> None:
         # #34: the unlock beat flips the tool on — not just cosmetically.
         if isinstance(msg.triggers, str):
             self._state.unlocked_tools.add(msg.triggers)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from textual.app import App, ComposeResult
+from typing import ClassVar
+
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
@@ -10,7 +12,7 @@ from textual.widgets import Static
 
 
 class GameOverScreen(Screen):
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("r", "restart", "Restart"),
         Binding("q", "quit_app", "Quit"),
     ]

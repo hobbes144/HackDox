@@ -30,9 +30,12 @@ from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
 from gameengine.core.content_loader import load_day, load_narratives, synthesize_day
 from gameengine.core.models import (
-    Archetype, DiscrepancyKind, GameState, ToolName, Verdict,
+    Archetype,
+    DiscrepancyKind,
+    GameState,
+    ToolName,
+    Verdict,
 )
-
 
 app = typer.Typer(add_completion=False, help="HackDox game engine.")
 console = Console()
@@ -210,10 +213,14 @@ def _lab_tool_output(candidate, tool: ToolName, day, seed: int) -> list[str]:
 
 @app.command("lab")
 def lab(
-    archetype: list[str] = typer.Option(
+    # noqa: B008 -- typer.Option(...) in the default position is the required
+    # Typer idiom: Typer inspects these call objects at import time to build
+    # the CLI's flags/help text, so moving the call into the function body
+    # (bugbear's usual fix) would break `hackdox lab --help` entirely.
+    archetype: list[str] = typer.Option(  # noqa: B008
         [], "--archetype", "-a",
         help="Pin an archetype into a slot. Repeatable, one per slot."),
-    violation: list[str] = typer.Option(
+    violation: list[str] = typer.Option(  # noqa: B008
         [], "--violation", "-v",
         help="Restrict planted violations to these kinds. Repeatable."),
     tool: str = typer.Option(

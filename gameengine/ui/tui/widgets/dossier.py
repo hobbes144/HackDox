@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from textual.widgets import Static
-from gameengine.core.models import Candidate
 
+from gameengine.core.models import Candidate
 from gameengine.ui.tui.shared import (
-    _hl_email,
     _hl_affil,
+    _hl_email,
     _password_markup,
 )
 
@@ -48,7 +48,7 @@ class DossierPanel(Static):
             "",
             "[#3d6478]-- submitted artifacts --------------------------------[/]",
             f"  [#6b7785]IP[/]           {ip}",
-            f"               [dim]breadcrumb — corroborate against Logwatch login IPs before denying[/]",
+            "               [dim]breadcrumb — corroborate against Logwatch login IPs before denying[/]",
             f"  [#6b7785]Password[/]     {pw_head}",
             *( [f"               {pw_state}"] if pw_state else [] ),
             f"  [#6b7785]Image[/]        {img}",

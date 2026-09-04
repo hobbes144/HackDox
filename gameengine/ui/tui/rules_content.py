@@ -26,7 +26,7 @@ import re
 
 from gameengine import config
 from gameengine.core import candidate_gen, tools_bridge
-from gameengine.core.models import Day, DiscrepancyKind, Performance, ToolName
+from gameengine.core.models import Day, DiscrepancyKind, ToolName
 
 # ─── Violation catalog — (group, kind, player-facing label) ─────────────────
 # The Evidence Board (app.EVIDENCE_ITEMS) is built from this list, so board
@@ -560,10 +560,10 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         lines += [
             "[#6b7785]  QUOTA                       THRESHOLD   MISSING IT MEANS[/]",
             f"[#1c2733]{'─' * _W}[/]",
-            f"  {_fit('minimum correct admits', 28)}[#ffd93d]{q.min_correct_admits:<12}[/]"
-            f"[#ff8c42]POOR day rating[/]",
-            f"  {_fit('maximum false admits', 28)}[#ffd93d]{q.max_false_admits:<12}[/]"
-            f"[#ff5470]FAILED day rating[/]",
+            (f"  {_fit('minimum correct admits', 28)}[#ffd93d]{q.min_correct_admits:<12}[/]"
+            f"[#ff8c42]POOR day rating[/]"),
+            (f"  {_fit('maximum false admits', 28)}[#ffd93d]{q.max_false_admits:<12}[/]"
+            f"[#ff5470]FAILED day rating[/]"),
             f"[#1c2733]{'─' * _W}[/]",
         ]
     lines += [
@@ -573,8 +573,8 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         f"  [#00ff9f]{_fit('EXCELLENT', 12)}[/]quotas met and zero wrong verdicts",
         f"  [#7dd3c0]{_fit('PASSING', 12)}[/]quotas met",
         f"  [#ff8c42]{_fit('POOR', 12)}[/]too few correct admits",
-        f"  [#ff5470]{_fit('FAILED', 12)}[/]false admits over quota, or Site Health "
-        "below the loss line",
+        (f"  [#ff5470]{_fit('FAILED', 12)}[/]false admits over quota, or Site Health "
+        "below the loss line"),
         f"[#1c2733]{'─' * _W}[/]",
     ]
 
@@ -591,8 +591,8 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  Running out mid-day disables tools for the rest of the shift;",
         "  there is no other penalty. Ration the pool across all candidates.",
         "",
-        f"  [#6b7785]base budget[/]      [#ffb454]{base} ⏱[/]  "
-        f"[dim](+{config.DAILY_BUDGET_GROWTH} ⏱ per day · raise the base in the shop)[/]",
+        (f"  [#6b7785]base budget[/]      [#ffb454]{base} ⏱[/]  "
+        f"[dim](+{config.DAILY_BUDGET_GROWTH} ⏱ per day · raise the base in the shop)[/]"),
         f"  [#6b7785]today's budget[/]   [#ffb454]{today_budget} ⏱[/]",
     ]
     lines += _sub("tool costs", "#ffb454")
@@ -627,10 +627,10 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  land in ONE batch at end of day (watch the pending value in the",
         "  status bar). Wrong denials cost you nothing but the reward.",
         "",
-        f"  [#ff5470]▼ below {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}%[/]"
-        "   at end of day — HackDox is lost (game over)",
-        f"  [#00ff9f]▲ above {config.SITE_HEALTH_REWARD_THRESHOLD:.0f}%[/]"
-        f"   at end of day — HackDollar$ bonus (max {config.HACKDOLLAR_SITE_HEALTH_BONUS})",
+        (f"  [#ff5470]▼ below {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}%[/]"
+        "   at end of day — HackDox is lost (game over)"),
+        (f"  [#00ff9f]▲ above {config.SITE_HEALTH_REWARD_THRESHOLD:.0f}%[/]"
+        f"   at end of day — HackDollar$ bonus (max {config.HACKDOLLAR_SITE_HEALTH_BONUS})"),
     ]
 
     # ── HackDollar$ + credits + upgrades ───────────────────────────────
@@ -638,16 +638,16 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines += _band("HACKDOLLAR$ · CREDITS · UPGRADES", "#00ff9f")
     lines += [
         "  HackDollar$ (HD$) is the persistent between-day currency. Earned on",
-        f"  correct verdicts ([#00ff9f]+{config.HACKDOLLAR_PER_CORRECT_ADMIT}[/] admit · "
-        f"[#00ff9f]+{config.HACKDOLLAR_PER_CORRECT_DENY}[/] deny) plus the evidence-board",
+        (f"  correct verdicts ([#00ff9f]+{config.HACKDOLLAR_PER_CORRECT_ADMIT}[/] admit · "
+        f"[#00ff9f]+{config.HACKDOLLAR_PER_CORRECT_DENY}[/] deny) plus the evidence-board"),
         "  bonus and the end-of-day health bonus. Spent only in the night shop.",
         "",
-        f"  [#c084fc]HackDox Credits[/] — type [b]reveal[/] to spend one and see the",
+        "  [#c084fc]HackDox Credits[/] — type [b]reveal[/] to spend one and see the",
         "  current candidate's ground truth (correct verdict + planted",
-        f"  violations, no evidence trail). Max {config.HACKDOX_CREDIT_MAX} slots · "
-        f"{config.SHOP_PRICE_CREDIT} HD$ each.",
-        f"  [#ffb454]⏱ capacity[/] — +{config.COMPUTE_CAPACITY_STEP} base budget "
-        f"per purchase · {config.SHOP_PRICE_CAPACITY} HD$.",
+        (f"  violations, no evidence trail). Max {config.HACKDOX_CREDIT_MAX} slots · "
+        f"{config.SHOP_PRICE_CREDIT} HD$ each."),
+        (f"  [#ffb454]⏱ capacity[/] — +{config.COMPUTE_CAPACITY_STEP} base budget "
+        f"per purchase · {config.SHOP_PRICE_CAPACITY} HD$."),
     ]
     lines += _sub("upgrade catalog (permanent · bought in the night shop)", "#00ff9f")
     lines += [
@@ -677,8 +677,8 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [dim]unknown[/] → [b]marked[/] (present) → [#6b7785]✗ absent[/] (ruled out) → unknown.",
         "  Only MARKED items are scored, against the candidate's real violations:",
         "",
-        f"  [#00ff9f]bonus = {config.BOARD_ACCURACY_MAX_BONUS} HD$ × hits ÷ "
-        "(hits + false flags + misses)[/]   [dim](on correct verdicts)[/]",
+        (f"  [#00ff9f]bonus = {config.BOARD_ACCURACY_MAX_BONUS} HD$ × hits ÷ "
+        "(hits + false flags + misses)[/]   [dim](on correct verdicts)[/]"),
         "",
         "  [#ff8c42]Do NOT flag everything[/] — every false flag divides the bonus",
         "  down. A clean candidate with an empty board pays the FULL bonus.",
@@ -689,8 +689,8 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines.append("")
     lines += _band("ALIGNMENT — THE MORAL AXIS", "#c084fc")
     lines += [
-        f"  A hidden bar from {config.ALIGNMENT_MIN} (Dark Web) to "
-        f"+{config.ALIGNMENT_MAX} (White Hat), shown as dots in the status bar.",
+        (f"  A hidden bar from {config.ALIGNMENT_MIN} (Dark Web) to "
+        f"+{config.ALIGNMENT_MAX} (White Hat), shown as dots in the status bar."),
         "  Most candidates carry no moral weight; two kinds do:",
         "",
         "  [#ff5470]Dark Web operatives[/]  admit → drift Dark Web · deny → drift White Hat",
@@ -798,8 +798,8 @@ def build_dossier_text(day: Day | None) -> str:
         # it as a false positive — the UI was instructing an action the scoring
         # model punishes. This copy still said it. Same bug, same fix: context,
         # not an instruction.
-        f"[#ff8c42]?  PRIVACY[/]   {privacy}"
-        "   [dim](legitimate — but leaves no identity trail)[/]",
+        (f"[#ff8c42]?  PRIVACY[/]   {privacy}"
+        "   [dim](legitimate — but leaves no identity trail)[/]"),
     ]
     lines += _sub("affiliations", "#7dd3c0")
     orgs   = " · ".join(sorted(tools_bridge._GS_LEGIT_ORGS))
@@ -807,8 +807,8 @@ def build_dossier_text(day: Day | None) -> str:
     lines += [
         f"[#00ff9f]✓  TRUSTED[/]   {orgs}",
         f"[#ff5470]✗  THREAT COMMUNITIES[/] {forums}",
-        "[#ff8c42]?  UNVERIFIABLE[/] \"independent\" · \"freelance\" · \"self-employed\""
-        "   [dim](needs corroboration)[/]",
+        ("[#ff8c42]?  UNVERIFIABLE[/] \"independent\" · \"freelance\" · \"self-employed\""
+        "   [dim](needs corroboration)[/]"),
     ]
     return "\n".join(lines)
 
@@ -826,14 +826,14 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines += [
         "  Ghostscan sweeps public platforms for the candidate's handle and",
         "  cross-references their claims. The report has two sections:",
-        f"  [#6ad4ff]▌ PLATFORM SWEEP[/] (identity claims) and "
-        "[#ff8c42]▌ BREACH DETECTION[/] (forums + dumps).",
+        ("  [#6ad4ff]▌ PLATFORM SWEEP[/] (identity claims) and "
+        "[#ff8c42]▌ BREACH DETECTION[/] (forums + dumps)."),
         "  The filter re-renders the SAME report with annotations lit — it",
         "  never prints a second copy.",
     ]
     lines += _sub("investigation tiers", "#6ad4ff")
     lines += [
-        f"  [#00ff9f]free[/]     passive identity check — email domain, affiliation, GitHub claim",
+        "  [#00ff9f]free[/]     passive identity check — email domain, affiliation, GitHub claim",
         f"  [#ffb454]run G[/]    platform sweep + account registry + forum lists   [dim]{gs} ⏱[/]",
         f"  [#c084fc]filter[/]   ▲ VIOLATION labels · forum tiers · breach confirm  [dim]+{gf} ⏱[/]",
     ]
@@ -842,10 +842,10 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
 
     lines += _sub("two affiliation violations — don't confuse them", "#6ad4ff")
     lines += [
-        f"  [#ff8c42]AFFILIATION_UNVERIFIED[/] [dim](dossier-tier, minor)[/]",
+        "  [#ff8c42]AFFILIATION_UNVERIFIED[/] [dim](dossier-tier, minor)[/]",
         "    An ordinary claimed org that the sweep can't corroborate — the",
         "    handle shows up with no org tag or a different one. Weak signal.",
-        f"  [#ff8c42]AFFILIATION_MISMATCH[/] [dim](ghostscan-tier, major)[/]",
+        "  [#ff8c42]AFFILIATION_MISMATCH[/] [dim](ghostscan-tier, major)[/]",
         "    An ELITE org claim (MIT CSAIL, Google Security…) that ghostscan",
         "    contradicts. This is deliberate camouflage — the filter run is",
         "    what confirms it. The Professional's claim checks out; a faker's",
@@ -902,12 +902,12 @@ def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "",
         "[#6b7785]  TIER     HASH SHAPE          CRACKABLE   MEANING[/]",
         f"[#1c2733]{'─' * _W}[/]",
-        f"  [#00ff9f]{_fit('STRONG', 9)}[/]{_fit('bcrypt  $2b$…', 20)}"
-        f"{_fit('never', 12)}always safe — no violation possible",
-        f"  [#ffd93d]{_fit('MEDIUM', 9)}[/]{_fit('SHA256  64 hex', 20)}"
-        f"{_fit('with effort', 12)}crack it, then judge the plaintext",
-        f"  [#ff5470]{_fit('WEAK', 9)}[/]{_fit('MD5     32 hex', 20)}"
-        f"{_fit('instantly', 12)}weak enc + weak plaintext = violation",
+        (f"  [#00ff9f]{_fit('STRONG', 9)}[/]{_fit('bcrypt  $2b$…', 20)}"
+        f"{_fit('never', 12)}always safe — no violation possible"),
+        (f"  [#ffd93d]{_fit('MEDIUM', 9)}[/]{_fit('SHA256  64 hex', 20)}"
+        f"{_fit('with effort', 12)}crack it, then judge the plaintext"),
+        (f"  [#ff5470]{_fit('WEAK', 9)}[/]{_fit('MD5     32 hex', 20)}"
+        f"{_fit('instantly', 12)}weak enc + weak plaintext = violation"),
         f"[#1c2733]{'─' * _W}[/]",
         "  [dim]example — count the hex characters after the prefix:[/]",
         "  [#00ff9f]STRONG[/] [dim]$2b$12$KIXQ7c5s9j2mR8vN…[/]         [dim]($2b$ prefix — never a hash to crack)[/]",
@@ -1027,14 +1027,14 @@ def build_stego_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     ]
     lines += _sub("controls & costs", "#ff8cc8")
     lines += [
-        f"  [#00ff9f]X[/] / [#00ff9f]extract[/]  enter stamp mode on the image viewer",
+        "  [#00ff9f]X[/] / [#00ff9f]extract[/]  enter stamp mode on the image viewer",
         f"  [#00ff9f]arrows[/]       move the {config.STEGO_STAMP_W}×{config.STEGO_STAMP_H} stamp",
-        f"  [#00ff9f]mouse[/]        hover to move the stamp, click to place it",
-        f"  [#00ff9f]Space[/] / [#00ff9f]click[/] stamp — reveal the cells underneath   "
-        f"[dim]{config.STEGO_STAMP_COST} ⏱ per stamp[/]",
-        f"  [#00ff9f]F[/] / [#00ff9f]filter[/]   classify the payload TYPE by name    "
-        f"[dim]+{config.STEGO_FILTER_COST} ⏱[/]",
-        f"  [#00ff9f]Esc[/]          exit stamp mode",
+        "  [#00ff9f]mouse[/]        hover to move the stamp, click to place it",
+        (f"  [#00ff9f]Space[/] / [#00ff9f]click[/] stamp — reveal the cells underneath   "
+        f"[dim]{config.STEGO_STAMP_COST} ⏱ per stamp[/]"),
+        (f"  [#00ff9f]F[/] / [#00ff9f]filter[/]   classify the payload TYPE by name    "
+        f"[dim]+{config.STEGO_FILTER_COST} ⏱[/]"),
+        "  [#00ff9f]Esc[/]          exit stamp mode",
         "",
         f"  Reveal ≥{cov}% of a hidden zone and its ▲ signature resolves.",
         "  Without the filter you read the stamp COLOUR yourself; with it the",

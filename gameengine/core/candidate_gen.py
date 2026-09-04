@@ -17,9 +17,8 @@ ARCHETYPE_SPECS plus, if needed, the word banks below.
 
 from __future__ import annotations
 
-import random
 import hashlib as _hashlib
-import uuid
+import random
 from dataclasses import dataclass, field
 
 from .. import config
@@ -35,7 +34,6 @@ from .models import (
     ToolName,
     Verdict,
 )
-
 
 # ─── Word banks ─────────────────────────────────────────────────────────────
 

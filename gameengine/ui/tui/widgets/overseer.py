@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from textual.widgets import Static
+
 from gameengine.core.models import CandidateResult, Verdict
 
 
@@ -47,8 +48,8 @@ class OverseerPanel(Static):
         lines = [
             f"[italic #c8d4e1]{self._intro}[/]",
             "",
-            f"[#6b7785]Admits[/]    [#7dd3c0]{self._admits}[/]   "
-            f"[#6b7785]Denies[/] [#7dd3c0]{self._denies}[/]",
+            (f"[#6b7785]Admits[/]    [#7dd3c0]{self._admits}[/]   "
+            f"[#6b7785]Denies[/] [#7dd3c0]{self._denies}[/]"),
             f"[#6b7785]Accuracy[/]  [#7dd3c0]{accuracy}[/]",
             f"[#6b7785]⏱ spent[/]   [#ffb454]{self._compute_spent}[/]",
         ]

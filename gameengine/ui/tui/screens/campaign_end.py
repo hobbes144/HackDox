@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Static
-from gameengine.core.models import Day
 
 
 class CampaignEndScreen(Screen):
     """Shown when the next day's content doesn't exist yet."""
 
-    BINDINGS = [Binding("q", "quit_app", "Quit")]
+    BINDINGS: ClassVar[list[Binding]] = [Binding("q", "quit_app", "Quit")]
 
     def __init__(self, day_number: int) -> None:
         super().__init__()

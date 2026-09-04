@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.widgets import Static
 
 from gameengine.ui.tui.shared import (
@@ -18,7 +20,7 @@ class ReferencePanel(Static):
 
     can_focus = True
 
-    _CONTENT: dict[str, str] = {
+    _CONTENT: ClassVar[dict[str, str]] = {
         "candidate": _REF_CANDIDATE,
         "ghostscan": _REF_GHOSTSCAN,
         "hashcrack": _REF_HASHCRACK,

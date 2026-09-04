@@ -4,10 +4,6 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
-from gameengine.ui.tui.shared import (
-    _COMMAND_ALIASES,
-)
-
 
 class CommandBar(Static):
     """Always-visible command-line strip at the bottom of the intake screen.

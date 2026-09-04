@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, TabbedContent, TabPane
+
 from gameengine.core.models import Day
 from gameengine.ui.tui import rules_content
-
 from gameengine.ui.tui.shared import (
     _B,
 )
 from gameengine.ui.tui.widgets import (
-    EvidenceState,
     EvidenceBoard,
+    EvidenceState,
 )
 
 
@@ -26,15 +28,15 @@ class RulesScreen(ModalScreen):
     Press 0 or Esc to dismiss.
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding(_B["page_rules"], "dismiss_rules", "Close"),
         Binding("escape",         "dismiss_rules", "Close"),
     ]
 
-    def __init__(self, day: Day, evidence_state: "EvidenceState | None" = None,
+    def __init__(self, day: Day, evidence_state: EvidenceState | None = None,
                  initial_tab: str | None = None,
                  scroll_memory: dict[str, float] | None = None,
-                 unlocked_tools: "set[str] | None" = None) -> None:
+                 unlocked_tools: set[str] | None = None) -> None:
         super().__init__()
         self._day = day
         # #50: which tab to open on, and where each tab was last scrolled to.
@@ -59,25 +61,19 @@ class RulesScreen(ModalScreen):
         with Container(id="rules-modal"):
             yield Static("[b][#7dd3c0]HACKDOX  DOCUMENTATION HUB[/][/]", id="rules-title")
             with TabbedContent(id="rules-tabs"):
-                with TabPane("Rules", id="tab-rules"):
-                    with VerticalScroll():
-                        yield Static(self._build_rules_text(), classes="rules-section")
+                with TabPane("Rules", id="tab-rules"), VerticalScroll():
+                    yield Static(self._build_rules_text(), classes="rules-section")
                 # #50: the dossier-tier reference split out of the Rules tab.
-                with TabPane("Dossier", id="tab-dossier"):
-                    with VerticalScroll():
-                        yield Static(self._build_dossier_text(), classes="rules-section")
-                with TabPane("OSINT", id="tab-osint"):
-                    with VerticalScroll():
-                        yield Static(self._build_osint_text(), classes="rules-section")
-                with TabPane("Credentials", id="tab-creds"):
-                    with VerticalScroll():
-                        yield Static(self._build_creds_text(), classes="rules-section")
-                with TabPane("Log Analysis", id="tab-logs"):
-                    with VerticalScroll():
-                        yield Static(self._build_logs_text(), classes="rules-section")
-                with TabPane("Steganography", id="tab-stego"):
-                    with VerticalScroll():
-                        yield Static(self._build_stego_text(), classes="rules-section")
+                with TabPane("Dossier", id="tab-dossier"), VerticalScroll():
+                    yield Static(self._build_dossier_text(), classes="rules-section")
+                with TabPane("OSINT", id="tab-osint"), VerticalScroll():
+                    yield Static(self._build_osint_text(), classes="rules-section")
+                with TabPane("Credentials", id="tab-creds"), VerticalScroll():
+                    yield Static(self._build_creds_text(), classes="rules-section")
+                with TabPane("Log Analysis", id="tab-logs"), VerticalScroll():
+                    yield Static(self._build_logs_text(), classes="rules-section")
+                with TabPane("Steganography", id="tab-stego"), VerticalScroll():
+                    yield Static(self._build_stego_text(), classes="rules-section")
                 if self._ev_board is not None:
                     with TabPane("Evidence", id="tab-evidence"):
                         yield self._ev_board
@@ -116,19 +112,19 @@ class RulesScreen(ModalScreen):
         if self._initial_tab:
             try:
                 self.query_one("#rules-tabs", TabbedContent).active = self._initial_tab
-            except Exception:
-                # An unknown id would otherwise take the whole overlay down; the
-                # default tab is a perfectly good fallback.
+            except Exception:  # noqa: BLE001, S110 -- an unknown id would otherwise take
+                # the whole overlay down; the default tab is a perfectly good fallback.
                 pass
         self._restore_scroll()
 
-    def _active_scroll(self) -> "VerticalScroll | None":
+    def _active_scroll(self) -> VerticalScroll | None:
         """The VerticalScroll inside the currently active TabPane."""
         try:
             tabs = self.query_one("#rules-tabs", TabbedContent)
             pane = tabs.get_pane(tabs.active)
             return pane.query(VerticalScroll).first()
-        except Exception:
+        except Exception:  # noqa: BLE001 -- no active pane / no scrollable child yet;
+            # None is a valid "nothing to scroll" answer for every caller of this helper.
             return None
 
     def _restore_scroll(self) -> None:
@@ -147,7 +143,7 @@ class RulesScreen(ModalScreen):
             self._scroll_memory[tabs.active] = view.scroll_offset.y
 
     def on_tabbed_content_tab_activated(
-            self, event: "TabbedContent.TabActivated") -> None:
+            self, event: TabbedContent.TabActivated) -> None:
         # Restore the newly-shown tab's position. Its own offset was saved when
         # the player last switched away from or closed it.
         self._restore_scroll()
