@@ -48,7 +48,7 @@ pipeline {
                 }
                 sh '''
                     python3 -m venv "$VENV"
-                    "$VENV/$VENV_BIN/pip" install --upgrade pip
+                    "$VENV/$VENV_BIN/python" -m pip install --upgrade pip
                 '''
             }
         }
