@@ -2,9 +2,9 @@
 //
 // Declarative pipeline: builds a throwaway venv, lints, runs the stdlib
 // foundation-test runner, then the full pytest suite with JUnit + coverage
-// reporting. Written for a Linux/WSL2 Jenkins agent (Java 11+, no Docker
-// required) — swap the `sh` steps for `bat` if you ever point a native
-// Windows agent at this instead.
+// reporting. Runs on Linux, macOS, or native Windows agents — Git for
+// Windows' bundled sh.exe handles the `sh` steps fine, and VENV_BIN below
+// auto-detects the Windows Scripts/ vs. Unix bin/ venv layout difference.
 //
 // Local setup: see JENKINS_SETUP.md.
 
@@ -40,9 +40,15 @@ pipeline {
 
         stage('Set Up Python') {
             steps {
+                script {
+                    // Windows venvs put executables in Scripts/, Unix venvs
+                    // in bin/ — detect once here so every later stage can
+                    // just reference "$VENV/$VENV_BIN/<tool>".
+                    env.VENV_BIN = isUnix() ? 'bin' : 'Scripts'
+                }
                 sh '''
                     python3 -m venv "$VENV"
-                    "$VENV/bin/pip" install --upgrade pip
+                    "$VENV/$VENV_BIN/pip" install --upgrade pip
                 '''
             }
         }
@@ -50,8 +56,8 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
-                    "$VENV/bin/pip" install -r gameengine/requirements.txt
-                    "$VENV/bin/pip" install pytest-cov ruff
+                    "$VENV/$VENV_BIN/pip" install -r gameengine/requirements.txt
+                    "$VENV/$VENV_BIN/pip" install pytest-cov ruff
                 '''
             }
         }
@@ -63,7 +69,7 @@ pipeline {
                 // failing it. Tighten this to a hard failure once the
                 // backlog of findings is cleared.
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    sh '"$VENV/bin/ruff" check gameengine'
+                    sh '"$VENV/$VENV_BIN/ruff" check gameengine'
                 }
             }
         }
@@ -72,7 +78,7 @@ pipeline {
             steps {
                 // Legacy stdlib-only runner — see run_foundation_tests.py's
                 // own docstring for why it exists alongside pytest.
-                sh '"$VENV/bin/python" -m gameengine.tests.run_foundation_tests'
+                sh '"$VENV/$VENV_BIN/python" -m gameengine.tests.run_foundation_tests'
             }
         }
 
@@ -80,7 +86,7 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p "$REPORTS"
-                    "$VENV/bin/pytest" gameengine/tests/ \
+                    "$VENV/$VENV_BIN/pytest" gameengine/tests/ \
                         --junitxml="$REPORTS/junit.xml" \
                         --cov=gameengine --cov-report=xml:"$REPORTS/coverage.xml" \
                         -v
