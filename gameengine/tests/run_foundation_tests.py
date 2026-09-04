@@ -23,7 +23,6 @@ from gameengine.core.models import (
     Verdict,
 )
 
-
 SEED = 0xC0FFEE
 
 
@@ -75,24 +74,46 @@ def test_bad_actor_triggers_disqualifying_rules() -> None:
     raise AssertionError("No Bad Actor in Day 1 mix?")
 
 
-def test_sneaky_bugger_evades_dossier_rules() -> None:
-    """Sneaky Bugger should NOT trigger dossier-only rules — they're
-    tool-only by design. Day 1's rulebook still catches them via
-    has_discrepancy:stego_payload_present."""
-    day = load_day(1)
+def test_sneaky_bugger_cannot_be_caught_from_the_dossier_alone() -> None:
+    """A Sneaky Bugger must always carry at least one TOOL-revealed violation.
+
+    Two corrections to what this test used to assert, both of them the test
+    being out of date rather than the engine being wrong.
+
+    First, it read `dataclasses.replace(load_day(1), number=5)` and relied on
+    day 1 scheduling a Sneaky Bugger. #15 removed it from that mix, and that
+    removal is correct — every kind the archetype is eligible for is
+    tool-revealed, no tool is unlocked on day 1, so it generated with zero
+    discrepancies while still scoring as a DENY. The old docstring said as
+    much and deferred the fix to #15/#32; this is that fix landing, so the
+    test now loads the real day 5, where the archetype actually lives.
+
+    Second, "never dossier-level" stopped being true when WEAK_ENCRYPTION
+    (dossier-tier, minor) joined the archetype's eligible kinds — it passed
+    only because SEED happened not to roll it. The property that actually
+    matters, and the one the design intends, is weaker and truer: a Sneaky
+    Bugger's DISQUALIFYING evidence is always behind a tool, so the player can
+    never resolve one from the dossier alone. A free minor hygiene flag on top
+    of that does not break the read — it is a hint that something is worth
+    spending hours on, which is precisely the archetype's job.
+    """
+    from gameengine.core.models import ToolName
+    day = load_day(5)          # all five tools taught by day 5
+    seen = 0
     for i in range(day.candidate_count):
         c = candidate_gen.generate(SEED, day, i)
-        if c.archetype == Archetype.SNEAKY_BUGGER:
-            assert c.truth.discrepancies, "Sneaky Bugger must have planted discrepancies"
-            # All discrepancies must be tool-revealed, never DOSSIER.
-            from gameengine.core.models import ToolName
-            for d in c.truth.discrepancies:
-                assert d.revealed_by != ToolName.DOSSIER, (
-                    f"Sneaky Bugger's discrepancies must be tool-only; "
-                    f"got dossier-level {d.kind.value}"
-                )
-            return
-    raise AssertionError("No Sneaky Bugger in Day 1 mix?")
+        if c.archetype != Archetype.SNEAKY_BUGGER:
+            continue
+        seen += 1
+        assert c.truth.discrepancies, "Sneaky Bugger must have planted discrepancies"
+        tool_revealed = [d for d in c.truth.discrepancies
+                         if d.revealed_by != ToolName.DOSSIER]
+        assert tool_revealed, (
+            f"slot {i}: Sneaky Bugger carries only dossier-level evidence "
+            f"({[d.kind.value for d in c.truth.discrepancies]}) — the whole "
+            f"archetype is the candidate you cannot resolve for free"
+        )
+    assert seen, "no Sneaky Bugger in day 5's mix — test is inert"
 
 
 def _find(day, archetype):
@@ -242,6 +263,7 @@ def test_persistence_round_trip_new_economy() -> None:
     """Issues #20/#21/#25: site_health / hackdollars / credits / capacity
     survive save→load; no `lives` field is written (issue #24)."""
     import json
+
     from gameengine.core import persistence
 
     prior = (config.SAVE_FILE.read_text(encoding="utf-8")
@@ -284,7 +306,7 @@ TESTS: list[Callable[[], None]] = [
     test_day1_archetype_mix_matches_spec,
     test_obvious_admit_has_no_discrepancies,
     test_bad_actor_triggers_disqualifying_rules,
-    test_sneaky_bugger_evades_dossier_rules,
+    test_sneaky_bugger_cannot_be_caught_from_the_dossier_alone,
     test_scoring_correct_admit_rewards_hackdollars_not_compute,
     test_daily_compute_budget_formula,
     test_every_candidate_has_password_field,
@@ -308,7 +330,9 @@ def main() -> int:
         except AssertionError as e:
             failed += 1
             print(f"  FAIL  {fn.__name__}: {e}")
-        except Exception:
+        except Exception:  # noqa: BLE001 -- a broken test must not abort the whole run;
+            # mirrors pytest's own per-test isolation. Traceback is printed below, so
+            # nothing is swallowed silently.
             failed += 1
             print(f"  ERROR  {fn.__name__}:")
             traceback.print_exc()

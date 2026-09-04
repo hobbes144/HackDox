@@ -1,0 +1,72 @@
+{
+  "number": 3,
+  "title": "Day 3 — Credentials",
+  "candidate_count": 6,
+
+  "_comment": "Hashcrack day (#45). Rulebook inherited from day_01.json.",
+
+  "archetype_mix": {
+    "obvious_admit": 1,
+    "day_to_day": 2,
+    "clumsy_cutie": 1,
+    "the_professional": 1,
+    "bad_actor": 1
+  },
+
+  "allowed_violations": [
+    "disposable_email", "hostile_chat", "unsalted_storage",
+    "affiliation_not_stated", "weak_encryption",
+    "breach_hit", "email_github_mismatch", "affiliation_mismatch",
+    "affiliation_unlisted", "missing_public_profile",
+    "weak_credential", "leaked_password", "cross_breach_reuse"
+  ],
+
+  "forced_includes": {
+    "0": "obvious_admit",
+    "1": "day_to_day",
+    "2": "clumsy_cutie",
+    "3": "the_professional",
+    "4": "bad_actor",
+    "5": "day_to_day"
+  },
+
+  "_comment_script": "The whole day is one comparison: slot 1 is a weak password (flag, still admit), slot 4 is a breached one (deny). Slot 2 teaches reuse, which is why LinkedIn (2016) unlocks today — reuse needs a second corpus to be visible at all.",
+  "forced_violations": {
+    "1": ["weak_credential"],
+    "2": ["cross_breach_reuse"],
+    "4": ["leaked_password"]
+  },
+
+  "quotas": {
+    "min_correct_admits": 2,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "easy",
+  "overseer_intro_key": "day3_intro",
+  "overseer_outro_keys": {
+    "excellent": "day3_outro_excellent",
+    "passing": "day3_outro_passing",
+    "poor": "day3_outro_poor",
+    "failed": "day3_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Hashcrack is live, and a second breach corpus with it. A bad password is sloppiness; a breached one is a deny.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "bcrypt is always safe and never worth cracking. SHA256 is usually fine. MD5 cracks instantly.",
+      "A cracked password found in a breach corpus is a deny.",
+      "The same password turning up in two corpora is a deny — that is reuse, and it is why there are two lists now.",
+      "A weak password behind weak encryption is a flag. Poor hygiene is not malice.",
+      "The claimed connection IP is on the dossier. It is worth comparing, but on its own it is a flag."
+    ]
+  }
+}

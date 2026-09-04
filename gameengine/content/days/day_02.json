@@ -1,0 +1,77 @@
+{
+  "number": 2,
+  "title": "Day 2 — Public Traces",
+  "candidate_count": 6,
+
+  "_comment": "Ghostscan day (#44). 'rules' is omitted deliberately: the rulebook is campaign-wide and inherited from day_01.json with this day's Overseer-Variable flips applied. An authored day carries only what is DIFFERENT about it.",
+
+  "archetype_mix": {
+    "the_professional": 1,
+    "clumsy_cutie": 1,
+    "obvious_admit": 1,
+    "bad_actor": 1,
+    "day_to_day": 1,
+    "sneaky_bugger": 1
+  },
+
+  "allowed_violations": [
+    "disposable_email", "hostile_chat", "unsalted_storage",
+    "affiliation_not_stated", "weak_encryption",
+    "breach_hit", "email_github_mismatch", "affiliation_mismatch",
+    "affiliation_unlisted", "missing_public_profile"
+  ],
+
+  "forced_includes": {
+    "0": "the_professional",
+    "1": "clumsy_cutie",
+    "2": "obvious_admit",
+    "3": "bad_actor",
+    "4": "day_to_day",
+    "5": "sneaky_bugger"
+  },
+
+  "_comment_script": "Slot 0 is the fast-admit lesson (elite org, sweep confirms, no hours spent). 1 teaches the commit-email compare, 3 the breach corpus, 5 the faked affiliation. 2 and 4 are unscripted so the day is not wall-to-wall violations.",
+  "forced_violations": {
+    "1": ["email_github_mismatch"],
+    "3": ["breach_hit"],
+    "5": ["affiliation_mismatch"]
+  },
+
+  "quotas": {
+    "min_correct_admits": 2,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "easy",
+  "overseer_intro_key": "day2_intro",
+  "overseer_outro_keys": {
+    "excellent": "day2_outro_excellent",
+    "passing": "day2_outro_passing",
+    "poor": "day2_outro_poor",
+    "failed": "day2_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Ghostscan is live. Yesterday's dossier rules still stand; today you can also check whether the person on the form exists in public.",
+    "approved": {
+      "domains": ["everything approved yesterday"],
+      "affiliations": [
+        "MIT CSAIL", "Google Security Team", "Oxford Internet Institute",
+        "Cloudflare Research", "Mozilla Security",
+        "— a trusted organisation can never be faked. If they claim one, the sweep will confirm it. Admit and move on."
+      ]
+    },
+    "denied": {
+      "domains": ["everything denied yesterday"],
+      "affiliations": [
+        "an organisation the sweep shows differently — that is AFFILIATION_MISMATCH, a deny",
+        "any threat-forum community"
+      ]
+    },
+    "notes": [
+      "An email in a breach corpus is a deny. The corpora are on the right-hand panel; they never change, so learn them.",
+      "A commit email that differs from the dossier email is a deny.",
+      "Profiles that exist but list no organisation, or a handle that barely appears at all — flag, don't deny."
+    ]
+  }
+}

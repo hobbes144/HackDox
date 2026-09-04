@@ -4,10 +4,10 @@
   "candidate_count": 6,
   "archetype_mix": {
     "obvious_admit": 2,
+    "the_incompatible": 1,
     "day_to_day": 1,
     "clumsy_cutie": 1,
-    "bad_actor": 1,
-    "sneaky_bugger": 1
+    "bad_actor": 1
   },
   "rules": [
     {
@@ -83,16 +83,109 @@
       "severity": "disqualifying"
     },
     {
+      "id": "rule_unsalted_storage",
+      "text": "Deny any candidate whose submitted credential is unsalted / plaintext-equivalent — the password is exposed outright on the dossier.",
+      "predicate": "has_discrepancy:unsalted_storage",
+      "severity": "disqualifying"
+    },
+    {
       "id": "rule_claimed_ip",
       "text": "Flag (do not auto-deny) a claimed connection IP that does not match the submitted logs — corroborate before denying.",
       "predicate": "has_discrepancy:claimed_ip_mismatch",
-      "severity": "weighted"
+      "severity": "weighted",
+      "mutability": "overseer_variable"
     },
     {
       "id": "rule_weak_credential",
       "text": "Flag (do not auto-deny) a weakly-encrypted credential that cracks to a weak password — poor hygiene, not proof of malice.",
       "predicate": "has_discrepancy:weak_credential",
+      "severity": "weighted",
+      "mutability": "overseer_variable"
+    },
+    {
+      "id": "rule_weak_encryption",
+      "text": "Flag (do not auto-deny) a password stored with weak encryption (MD5) — a hygiene issue, not proof the password itself is weak.",
+      "predicate": "has_discrepancy:weak_encryption",
+      "severity": "weighted",
+      "mutability": "overseer_variable"
+    },
+    {
+      "id": "rule_missing_public_profile",
+      "text": "Flag (do not auto-deny) a handle with almost no public presence — corroborate before denying.",
+      "predicate": "has_discrepancy:missing_public_profile",
       "severity": "weighted"
+    },
+    {
+      "id": "rule_affiliation_not_stated",
+      "text": "Flag (do not auto-deny) a dossier with no affiliation stated — an omission, not proof of anything.",
+      "predicate": "has_discrepancy:affiliation_not_stated",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_sock_puppet_accounts",
+      "text": "Deny any candidate whose handle appears across a network of sock-puppet accounts.",
+      "predicate": "has_discrepancy:sock_puppet_accounts",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_affiliation_mismatch",
+      "text": "Deny any candidate whose dossier affiliation does not match the organisation on their public profiles.",
+      "predicate": "has_discrepancy:affiliation_mismatch",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_affiliation_unlisted",
+      "text": "Flag (do not auto-deny) a candidate whose public profiles list no organisation at all.",
+      "predicate": "has_discrepancy:affiliation_unlisted",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_disposable_email",
+      "text": "Deny any candidate whose email domain is a known disposable / throwaway service.",
+      "predicate": "has_discrepancy:disposable_email",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_impossible_travel",
+      "text": "Deny any candidate whose logins occur from locations too far apart to be travelled between.",
+      "predicate": "has_discrepancy:impossible_travel",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_insider_behavior",
+      "text": "Deny any candidate whose logs show after-hours access combined with privilege escalation.",
+      "predicate": "has_discrepancy:insider_behavior",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_covert_c2_channel",
+      "text": "Deny any candidate whose submitted image hides a covert command-and-control beacon.",
+      "predicate": "has_discrepancy:covert_c2_channel",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_burner_identity",
+      "text": "Deny any candidate whose public accounts were all created within days of each other.",
+      "predicate": "has_discrepancy:burner_identity",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_typosquat_handle",
+      "text": "Flag (do not auto-deny) a handle that is a lookalike of a listed organisation's handle.",
+      "predicate": "has_discrepancy:typosquat_handle",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_after_hours_access",
+      "text": "Flag (do not auto-deny) activity outside business hours — common enough to be innocent alone.",
+      "predicate": "has_discrepancy:after_hours_access",
+      "severity": "weighted"
+    },
+    {
+      "id": "rule_cross_breach_reuse",
+      "text": "Deny any candidate whose cracked password recurs across multiple breach corpora.",
+      "predicate": "has_discrepancy:cross_breach_reuse",
+      "severity": "disqualifying"
     }
   ],
   "quotas": {
@@ -105,5 +198,56 @@
     "passing": "day1_outro_measured",
     "poor": "day1_outro_warning",
     "failed": "day1_outro_failed"
+  },
+  "allowed_violations": [
+    "disposable_email",
+    "hostile_chat",
+    "unsalted_storage",
+    "affiliation_not_stated",
+    "weak_encryption"
+  ],
+  "forced_includes": {
+    "0": "obvious_admit",
+    "1": "the_incompatible",
+    "2": "day_to_day",
+    "3": "clumsy_cutie",
+    "4": "obvious_admit",
+    "5": "bad_actor"
+  },
+  "forced_violations": {
+    "1": [
+      "disposable_email"
+    ],
+    "3": [
+      "unsalted_storage"
+    ],
+    "5": [
+      "hostile_chat"
+    ]
+  },
+  "rule_sheet": {
+    "summary": "Dossier only today. Deny a throwaway email address, a stored password you can read, or anyone who threatens the service. Everything else is an admit.",
+    "approved": {
+      "domains": [],
+      "affiliations": [
+        "any named employer or institution",
+        "\"independent\" / \"freelance\" — thin, but not disqualifying on its own"
+      ]
+    },
+    "denied": {
+      "domains": [],
+      "affiliations": [
+        "BreachForums",
+        "RaidForums",
+        "HackForums",
+        "nulled.to",
+        "exploit.in"
+      ]
+    },
+    "notes": [
+      "A blank affiliation is an omission, not a lie — flag it, don't deny on it.",
+      "MD5 on the strength chip is poor hygiene, not proof of anything. Flag.",
+      "UNSALTED is different: the password is printed in the clear. That is a deny."
+    ]
   }
 }

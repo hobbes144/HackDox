@@ -20,6 +20,7 @@ def save(state: GameState) -> None:
         "hackdollars":        state.hackdollars,
         "hackdox_credits":    state.hackdox_credits,
         "upgrades":           sorted(state.upgrades),
+        "unlocked_tools":     sorted(state.unlocked_tools),
         "current_slot_index": state.current_slot_index,
         # DayResult / CandidateResult round-trip deferred to v1.1 —
         # saves happen at EOD only so mid-day resume isn't needed yet.
@@ -43,5 +44,11 @@ def load() -> GameState | None:
     state.hackdollars      = raw.get("hackdollars", config.STARTING_HACKDOLLARS)
     state.hackdox_credits  = raw.get("hackdox_credits", config.STARTING_HACKDOX_CREDITS)
     state.upgrades         = set(raw.get("upgrades", []))
+    # Progressive unlock (#31). A pre-#31 save has no "unlocked_tools" key;
+    # backfill it from the schedule for the save's current day so a
+    # mid-campaign player keeps the tools they've already earned instead of
+    # loading in fully locked.
+    state.unlocked_tools = (set(raw["unlocked_tools"]) if "unlocked_tools" in raw
+                            else config.tools_unlocked_by(state.current_day))
     state.current_slot_index = raw.get("current_slot_index", 0)
     return state

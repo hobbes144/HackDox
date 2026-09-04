@@ -38,6 +38,7 @@ from .models import (
     Candidate,
     CandidateResult,
     DiscrepancyKind,
+    RuleEvaluation,
     Verdict,
 )
 
@@ -48,7 +49,23 @@ class ScoreDelta:
     site_health: float = 0.0
     hackdollars: int = 0        # total HD$ (verdict payout + board bonus)
     alignment: int = 0
-    correct: bool = False
+    correct: bool = False       # MORAL track — matched GroundTruth
+    # ── Literal-ruleset track (issue #38) ────────────────────────────────
+    # What the day's ACTIVE RULEBOOK said to do, recorded separately from
+    # what the candidate morally deserved. None when no RuleEvaluation was
+    # supplied — an honest "not measured" rather than quietly mirroring the
+    # moral track and claiming the two agreed.
+    rules_verdict: Verdict | None = None
+    rules_correct: bool | None = None
+
+    @property
+    def tracks_diverge(self) -> bool:
+        """True when going by the book and going by conscience disagreed.
+
+        The corruption arc's core tension in one boolean: a player can be
+        correct by the rules and still have done the wrong thing.
+        """
+        return self.rules_correct is not None and self.rules_correct != self.correct
 
 
 def board_accuracy_bonus(
@@ -62,15 +79,43 @@ def board_accuracy_bonus(
     Uses an F1-style metric: perfect match = full bonus, partial = scaled.
     False positives (flagging violations that aren't there) reduce the
     bonus; correctly flagging nothing on a clean candidate pays in full.
+
+    One deliberate exception: a BREACH_HIT flag is credited against a
+    CROSS_BREACH_REUSE violation instead of scored as a false positive.
+    tools_bridge.breach_dbs_for_candidate() already shows a CROSS_BREACH_REUSE
+    carrier's email as a match in Ghostscan's breach panel — labeled
+    BREACH_HIT — even though the two stay distinct kinds in ground truth
+    (#61d). The player is reading real evidence when they flag it, so it
+    should never cost them the bonus.
     """
     actual = {d.kind for d in candidate.truth.discrepancies}
     if not actual and not player_flags:
         # Clean candidate, player correctly flagged nothing.
         return config.BOARD_ACCURACY_MAX_BONUS
 
-    true_pos  = len(player_flags & actual)
-    false_pos = len(player_flags - actual)
-    false_neg = len(actual - player_flags)
+    # Batch-3 content pass, revisiting #61(d): CROSS_BREACH_REUSE (Hashcrack)
+    # and BREACH_HIT (Ghostscan) deliberately stay separate, distinct kinds in
+    # ground truth (#61d's own words: "the two violations stay distinct").
+    # But breach_dbs_for_candidate() (tools_bridge.py) already makes a
+    # CROSS_BREACH_REUSE carrier's email genuinely show up — labeled
+    # "BREACH_HIT" — in Ghostscan's breach panel, so a player flagging
+    # BREACH_HIT there is reading real, on-screen evidence, not guessing.
+    # Credit that flag as a match against the CROSS_BREACH_REUSE violation
+    # instead of scoring it a false positive. Only ever helps: it folds a
+    # BREACH_HIT flag into the CROSS_BREACH_REUSE slot rather than adding a
+    # second required flag, so it can't create a new miss, and flagging both
+    # BREACH_HIT and CROSS_BREACH_REUSE nets to the same single true positive
+    # (not a false positive for the "redundant" one).
+    credited_flags = set(player_flags)
+    if (DiscrepancyKind.BREACH_HIT not in actual
+            and DiscrepancyKind.CROSS_BREACH_REUSE in actual
+            and DiscrepancyKind.BREACH_HIT in credited_flags):
+        credited_flags.discard(DiscrepancyKind.BREACH_HIT)
+        credited_flags.add(DiscrepancyKind.CROSS_BREACH_REUSE)
+
+    true_pos  = len(credited_flags & actual)
+    false_pos = len(credited_flags - actual)
+    false_neg = len(actual - credited_flags)
     denom = true_pos + false_pos + false_neg
     if denom == 0:
         return config.BOARD_ACCURACY_MAX_BONUS
@@ -82,11 +127,25 @@ def score(
     candidate: Candidate,
     player_verdict: Verdict,
     player_flags: set[DiscrepancyKind],
+    day_number: int = 1,
+    evaluation: RuleEvaluation | None = None,
 ) -> ScoreDelta:
+    """Grade one verdict.
+
+    `day_number` drives #4's reward decay: the HD$ paid for a correct verdict
+    shrinks as the campaign runs. It is an explicit parameter rather than
+    something reached off GameState so this stays a pure function of its
+    arguments — `apply()` passes `state.current_day`. It defaults to 1 (the
+    undecayed day-1 rate) so existing callers keep their old numbers.
+
+    `evaluation` is the day's RuleEvaluation for this candidate (issue #38).
+    Supplying it records the LITERAL-RULESET track alongside the moral one.
+    It changes no payout: the economy is keyed off the moral `correct` exactly
+    as before, and this is a parallel tracked value, not a scoring override.
+    """
     correct = candidate.truth.correct_verdict == player_verdict
     moral   = candidate.truth.moral_modifier
 
-    correct_admit = (candidate.truth.correct_verdict == Verdict.ADMIT)
     player_admit  = (player_verdict == Verdict.ADMIT)
 
     # Evidence-board bonus (HD$) — only for correct verdicts (issue #27:
@@ -103,11 +162,11 @@ def score(
         site_health = 0.0
 
     # HackDollar$ — persistent currency earned on correct verdicts (issue
-    # #21). The board-accuracy bonus lands here too (issue #27).
-    if correct and player_admit:
-        hackdollars = config.HACKDOLLAR_PER_CORRECT_ADMIT + bonus
-    elif correct:
-        hackdollars = config.HACKDOLLAR_PER_CORRECT_DENY + bonus
+    # #21). The board-accuracy bonus lands here too (issue #27), undecayed:
+    # it is already accuracy-scored, so decaying it on top of the base rate
+    # would penalise the same shift twice (issue #4).
+    if correct:
+        hackdollars = config.DAY_REWARD_PAYOUT(day_number, player_admit) + bonus
     else:
         hackdollars = 0
 
@@ -117,12 +176,35 @@ def score(
     else:
         alignment = 0
 
+    # ── Literal-ruleset track (issue #38) ────────────────────────────────
+    # The rulebook's own answer: DENY if any disqualifying rule fired, ADMIT
+    # otherwise. Weighted rules are advisory by definition — they inform the
+    # player, they don't decide.
+    #
+    # Today this usually agrees with the moral track, because the Dark Web
+    # archetype is generated rules-clean (no discrepancies, so no rule fires)
+    # and admitting it is both by-the-book and a drift toward the Dark Web.
+    # That agreement is a property of the current CONTENT, not of the engine.
+    # The moment #37's Dark Web directives write a rule that permits what the
+    # ground truth condemns, one boolean can no longer express the
+    # disagreement — so the two are recorded separately now, before anything
+    # depends on them coinciding.
+    if evaluation is not None:
+        rules_verdict = (Verdict.DENY if evaluation.triggered_disqualifying
+                         else Verdict.ADMIT)
+        rules_correct = (rules_verdict == player_verdict)
+    else:
+        rules_verdict = None
+        rules_correct = None
+
     return ScoreDelta(
         board_bonus=bonus,
         site_health=site_health,
         hackdollars=hackdollars,
         alignment=alignment,
         correct=correct,
+        rules_verdict=rules_verdict,
+        rules_correct=rules_correct,
     )
 
 
@@ -131,6 +213,7 @@ def apply(
     player_verdict: Verdict,
     state,
     player_flags: set[DiscrepancyKind] | None = None,
+    evaluation: RuleEvaluation | None = None,
 ) -> CandidateResult:
     """Apply scoring to mutable GameState and return the structured result.
 
@@ -140,7 +223,11 @@ def apply(
     the Evidence Board. Pass None (or empty set) if the board was not used.
     """
     flags = player_flags or set()
-    delta = score(candidate, player_verdict, flags)
+    # #4: the day number drives reward decay. Read off the state here so every
+    # existing call site picks the curve up without a signature change.
+    delta = score(candidate, player_verdict, flags,
+                  day_number=getattr(state, "current_day", 1),
+                  evaluation=evaluation)
 
     # Issue #27: verdicts never touch state.compute_hours — ⏱ is a
     # spend-only daily budget consumed exclusively by tools.
@@ -161,6 +248,8 @@ def apply(
         alignment_delta=delta.alignment,
         site_health_delta=delta.site_health,
         hackdollar_delta=delta.hackdollars,
+        rules_verdict=delta.rules_verdict,
+        rules_correct=delta.rules_correct,
     )
     state.pending_results.append(result)
     return result

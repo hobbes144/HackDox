@@ -131,7 +131,7 @@ HackDoxApp
 
 ### EvidenceBoard
 - Player-controlled checklist of 13 flaggable items across 5 groups
-- Groups: OSINT (G) · FORENSICS (L) · CREDENTIAL (H) · STEGO (S) · GENERAL
+- Groups (board order, matches tool page order): DOSSIER · OSINT (G) · CREDENTIAL (H) · FORENSICS (L) · STEGO (S)
 - `↑/↓` move cursor · `Space` toggle flag · cursor renders in green inverse
 - Nothing auto-populates — player flags manually
 - Board accuracy bonus: up to +10⏱ on correct verdict

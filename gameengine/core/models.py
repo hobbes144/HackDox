@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
+from .. import config
 
 # ─── Enums ──────────────────────────────────────────────────────────────────
 
@@ -61,13 +62,23 @@ class DiscrepancyKind(str, Enum):
     # Dossier-level (no tool needed)
     MISSING_PUBLIC_PROFILE = "missing_public_profile"
     HOSTILE_CHAT           = "hostile_chat"
-    AFFILIATION_UNVERIFIED = "affiliation_unverified"
+    # #56: renamed from AFFILIATION_UNVERIFIED. "Unverified" said nothing about
+    # WHERE the evidence is, and the old catch hint even described ghostscan
+    # evidence while the kind was dossier-tier. This one means exactly one thing:
+    # the affiliation field is not stated on the dossier. Nothing to verify
+    # because nothing was claimed.
+    AFFILIATION_NOT_STATED = "affiliation_not_stated"
 
     # Ghostscan-revealed
     EMAIL_GITHUB_MISMATCH  = "email_github_mismatch"
     BREACH_HIT             = "breach_hit"
     SOCK_PUPPET_ACCOUNTS   = "sock_puppet_accounts"
-    AFFILIATION_MISMATCH   = "affiliation_mismatch"   # claimed elite org doesn't match ghostscan
+    # #56: the dossier's org and the org on their platform profiles disagree.
+    # The sweep shows a DIFFERENT org - that difference is the whole violation,
+    # and it is what separates this from AFFILIATION_UNLISTED below.
+    AFFILIATION_MISMATCH   = "affiliation_mismatch"
+    # #56: profiles exist, none of them carry any org tag at all.
+    AFFILIATION_UNLISTED   = "affiliation_unlisted"
 
     # Dossier-level (disposable email — no tool needed)
     DISPOSABLE_EMAIL       = "disposable_email"        # email domain is a known throwaway service
@@ -99,8 +110,14 @@ class DiscrepancyKind(str, Enum):
     UNSALTED_STORAGE       = "unsalted_storage"       # unsalted / plaintext-equivalent storage
     # Stegotool-revealed
     ENCRYPTED_PAYLOAD      = "encrypted_payload"      # XOR/encrypted hidden payload
-    # Dossier-level (prompts Logwatch/Stego)
+    # Logwatch-revealed (2026-08-16: moved off Dossier — the dossier only shows
+    # the *claimed* IP; confirming a mismatch requires comparing it against the
+    # login IPs in the Logwatch log, so that's the tool that actually reveals it)
     CLAIMED_IP_MISMATCH    = "claimed_ip_mismatch"    # claimed IP != IP in submitted logs
+    # Dossier-level (no tool needed — the password's hash shape/strength chip
+    # is shown on every dossier for free; this flags the algorithm itself,
+    # independent of whether the underlying password turns out to be strong)
+    WEAK_ENCRYPTION         = "weak_encryption"        # password stored with a weak (MD5) algorithm
 
 
 class Performance(str, Enum):
@@ -114,6 +131,21 @@ class Performance(str, Enum):
 
 Severity = Literal["minor", "major", "critical"]
 RuleSeverity = Literal["disqualifying", "weighted"]
+
+# Issue #35 - how a rule is allowed to change across the campaign. This is the
+# data layer of #5's rule-mutation engine: it marks WHICH rules may flip, it
+# does not itself flip anything.
+#   fixed             - never changes. The default, so every pre-#35 day file
+#                       and all of Day 1's rules load with zero behaviour change.
+#   overseer_variable - may flip between "disqualifying" and "weighted" from one
+#                       shift to the next; the Overseer announces the change
+#                       casually in the morning briefing (#36).
+#   dark_web          - mutated by a Dark Web directive (#37). Reserved so the
+#                       three-state field exists once and only once; nothing
+#                       plants one yet.
+RuleMutability = Literal["fixed", "overseer_variable", "dark_web"]
+RULE_MUTABILITIES: frozenset[str] = frozenset(
+    {"fixed", "overseer_variable", "dark_web"})
 
 
 # ─── Chat ───────────────────────────────────────────────────────────────────
@@ -167,10 +199,30 @@ class Dossier:
     commit_email:          str | None = None   # actual GitHub commit author email
     claimed_ip:            str | None = None   # IP the candidate claims to connect from
     # Issue #29 — the plaintext behind submitted_hash. ENGINE-ONLY ground
-    # truth: never rendered until Hashcrack cracks it (and never for bcrypt).
+    # truth: not rendered until Hashcrack cracks it (and never for bcrypt) —
+    # UNLESS `credential_unsalted` is set (below), in which case the dossier
+    # shows it immediately, no crack required.
     # Encryption strength is derived from the hash shape:
     #   $2b$… bcrypt = STRONG (uncrackable) · 64-hex SHA256 = MEDIUM · 32-hex MD5 = WEAK
     password_plain:        str | None = None
+    # 2026-08-16: UNSALTED_STORAGE moved to the Dossier tier — an unsalted /
+    # plaintext-equivalent credential is visible in the clear without running
+    # Hashcrack at all, which is the whole point of the violation. `submitted_hash`
+    # stays a real MD5 hash underneath (so Hashcrack's own log/crack display is
+    # unaffected if the player runs it anyway); this flag just tells the dossier
+    # to show `password_plain` up front instead of gating it behind a crack.
+    credential_unsalted:   bool = False
+    # Issue #53 - which listed professional affiliation this candidate's handle
+    # is a lookalike of, when TYPOSQUAT_HANDLE is planted. ENGINE-ONLY ground
+    # truth, same stance as password_plain above: never rendered on the dossier,
+    # only named by Ghostscan's filter. None when no squat was planted.
+    handle_squats:         str | None = None
+    # Issue #56 - the org the ghostscan sweep actually shows for this candidate,
+    # when it differs from the claimed one (AFFILIATION_MISMATCH). ENGINE-ONLY
+    # ground truth, same stance as password_plain and handle_squats: never
+    # rendered on the dossier, only in the sweep and the filter. None when there
+    # is no mismatch.
+    actual_affiliation:    str | None = None
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────
@@ -224,6 +276,10 @@ class Rule:
     text: str
     predicate: str
     severity: RuleSeverity = "disqualifying"
+    # Issue #35. Defaults to "fixed" so adding this field changed nothing about
+    # existing content - a day file that never mentions mutability produces the
+    # exact same ruleset it did before.
+    mutability: RuleMutability = "fixed"
 
 
 @dataclass(frozen=True)
@@ -254,6 +310,36 @@ class Quotas:
 
 
 @dataclass(frozen=True)
+class RuleSheet:
+    """The day's plain-language admit/deny sheet (#16 / #49).
+
+    A Papers-Please rule sheet: what TODAY allows, stated so the player can
+    apply it without guesswork. Deliberately separate from `Day.rules`, which
+    are machine predicates the engine evaluates — these are the human-readable
+    lists the Reference panel prints, and the two answer different questions
+    ("would this candidate trip a rule" vs "what am I supposed to be checking").
+
+    Every field is optional so a day may author only the parts that changed;
+    anything left empty falls back to the engine-wide word banks the reference
+    panel used before #49. `summary` is the one-line framing the Overseer's
+    briefing echoes; `notes` are free-form lines for Overseer-Variable changes
+    the day wants spelled out.
+    """
+
+    approved_domains:      tuple[str, ...] = ()
+    denied_domains:        tuple[str, ...] = ()
+    approved_affiliations: tuple[str, ...] = ()
+    denied_affiliations:   tuple[str, ...] = ()
+    summary:               str = ""
+    notes:                 tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        return not (self.approved_domains or self.denied_domains
+                    or self.approved_affiliations or self.denied_affiliations
+                    or self.summary or self.notes)
+
+
+@dataclass(frozen=True)
 class Day:
     number: int
     title: str
@@ -263,6 +349,36 @@ class Day:
     quotas: Quotas
     overseer_intro_key: str
     overseer_outro_keys: dict[Performance, str]
+    # ── Per-day candidate spec (#32) ─────────────────────────────────────
+    # The Day IS the spec object the generator consumes. These three fields
+    # are optional and default to "no extra constraints", so every pre-#32
+    # day_NN.json loads unchanged.
+    #   allowed_violations — whitelist of discrepancy kinds this day may plant.
+    #     Empty = no whitelist (only #31's evidence-tier gate applies). When
+    #     set, the generator plants only kinds that are BOTH in this set AND
+    #     already taught by the current day.
+    #   difficulty_band — coarse day-difficulty label ("easy"/"medium"/"hard")
+    #     that day content and volume scaling can key off. Stored/available; no
+    #     hard-coded generator effect yet (a deliberate tuning hook).
+    #   forced_includes — pin a specific archetype into a specific slot index
+    #     (e.g. the scripted White Hat on its day). Maps slot index -> Archetype.
+    #   forced_violations — pin specific violation KINDS into a slot (#15).
+    #     forced_includes above picks the archetype; this picks what that
+    #     candidate actually carries. A tutorial day teaching brute-force needs
+    #     a candidate demonstrably carrying BRUTE_FORCE_IN_LOG, and pinning the
+    #     archetype alone does not give you that — a Bad Actor rolls from a
+    #     pool of eight kinds. Maps slot index -> tuple of kinds, each of which
+    #     still has to clear the tier gate and the day's whitelist.
+    #   rule_sheet — the day's plain-language approved/denied copy (#49), which
+    #     the Rules overlay renders verbatim. None means "no authored sheet";
+    #     the reference panel then falls back to the engine-wide word banks, as
+    #     it did before #49.
+    allowed_violations: tuple[DiscrepancyKind, ...] = ()
+    difficulty_band: str = "easy"
+    forced_includes: dict[int, Archetype] = field(default_factory=dict)
+    forced_violations: dict[int, tuple[DiscrepancyKind, ...]] = field(
+        default_factory=dict)
+    rule_sheet: RuleSheet | None = None
 
 
 # ─── Day results & game state ───────────────────────────────────────────────
@@ -273,11 +389,23 @@ class CandidateResult:
     candidate_id: str
     archetype: Archetype
     player_verdict: Verdict
-    correct: bool
+    correct: bool             # MORAL track - matched the candidate's GroundTruth
     board_bonus: int          # HD$ earned from evidence-board accuracy (issue #27)
     alignment_delta: int
     site_health_delta: float  # % change to Site Health (admits apply archetype weight)
     hackdollar_delta: int     # HD$ earned on this verdict (incl. board bonus)
+    # Literal-ruleset track (issue #38) - what the day's ACTIVE RULEBOOK said,
+    # recorded separately from what the candidate morally deserved. None means
+    # "not measured" (no RuleEvaluation was supplied), which is deliberately
+    # distinct from "the two tracks agreed".
+    rules_verdict: Verdict | None = None
+    rules_correct: bool | None = None
+
+    @property
+    def tracks_diverge(self) -> bool:
+        """True when the rulebook and the ground truth disagreed about this
+        verdict - the corruption arc's whole premise, as a boolean."""
+        return self.rules_correct is not None and self.rules_correct != self.correct
 
 
 @dataclass(frozen=True)
@@ -303,13 +431,28 @@ class GameState:
 
     seed: int
     current_day: int = 1
-    compute_hours: int = 60       # ⏱ — finite daily tool budget (issue #27)
-    compute_capacity: int = 60    # ⏱ base of the daily-budget formula (upgradable)
-    alignment: int = 0
-    site_health: float = 100.0    # persistent % loss condition (issues #18/#20)
-    hackdollars: int = 0          # persistent between-day currency (issue #21)
-    hackdox_credits: int = 1      # ground-truth reveal consumable (issue #25)
+    # Every default below is read straight from config's STARTING_*/..._START
+    # constants rather than a hand-typed number — a fresh GameState() (a test
+    # fixture, the lab CLI, anything that doesn't go through the real
+    # new-game path in app.py, which already passes these explicitly) should
+    # never silently start from a value that disagrees with the campaign's
+    # actual starting balance. Two of these WERE separately hardcoded copies
+    # that drifted the moment the config values were tuned.
+    compute_hours: int = config.STARTING_COMPUTE     # ⏱ — finite daily tool budget (issue #27)
+    compute_capacity: int = config.STARTING_COMPUTE  # ⏱ base of the daily-budget formula (upgradable)
+    alignment: int = config.STARTING_ALIGNMENT
+    site_health: float = config.SITE_HEALTH_START     # persistent % loss condition (issues #18/#20)
+    hackdollars: int = config.STARTING_HACKDOLLARS    # persistent between-day currency (issue #21)
+    hackdox_credits: int = config.STARTING_HACKDOX_CREDITS  # ground-truth reveal consumable (issue #25)
     upgrades: set[UpgradeId] = field(default_factory=set)
+    # Progressive unlock (#31): which tool pages the player has been granted.
+    # Stores ToolName.value strings (JSON-friendly, like `upgrades`). The
+    # Dossier is never listed here — it's page 0, always available. A fresh
+    # game starts empty; the Overseer's briefing beat (#34) adds a tool to
+    # this set the moment its unlock line plays. The UI (#33) greys any tool
+    # page not in here. Legacy saves without the field are backfilled from
+    # config.TOOL_UNLOCK_DAY on load, so a mid-campaign player isn't locked out.
+    unlocked_tools: set[str] = field(default_factory=set)
     completed_days: list[DayResult] = field(default_factory=list)
     # In-progress-day fields -- populated only mid-day:
     current_slot_index: int = 0
