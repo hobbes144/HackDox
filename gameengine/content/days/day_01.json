@@ -12,9 +12,9 @@
   "rules": [
     {
       "id": "rule_breach",
-      "text": "Deny any candidate whose email appears in a known breach corpus.",
+      "text": "Flag (do not auto-deny) an email found in a breach corpus — exposure alone is not misconduct; corroborate with Hashcrack before denying.",
       "predicate": "has_discrepancy:breach_hit",
-      "severity": "disqualifying"
+      "severity": "weighted"
     },
     {
       "id": "rule_github_mismatch",
@@ -62,6 +62,18 @@
       "id": "rule_leaked_password",
       "text": "Deny any candidate whose submitted credential cracks to a password found in a known breach corpus.",
       "predicate": "has_discrepancy:leaked_password",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_cross_breach_reuse",
+      "text": "Deny any candidate still submitting a credential whose plaintext recurs across multiple breach corpora.",
+      "predicate": "has_discrepancy:cross_breach_reuse",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_unsalted_storage",
+      "text": "Deny any candidate submitting an unsalted / plaintext-equivalent credential — it cracks on the first attempt.",
+      "predicate": "has_discrepancy:unsalted_storage",
       "severity": "disqualifying"
     },
     {

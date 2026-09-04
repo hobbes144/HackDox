@@ -251,30 +251,31 @@ assert set(_BREACH_DB_BY_NAME) == set(config.BREACH_DB_UNLOCK_DAY), (
 _BREACH_DB_SEED = 0xD8EAD808
 
 
-def _breach_db_for_candidate(candidate_id: str,
-                             day_number: int) -> tuple[int, str]:
-    """Return (db_index, canonical_name) for this candidate's breach database.
+_BREACH_DB_SEED = 0xD8EAD808
 
-    `db_index` indexes _BREACH_DATABASES (the full, stable table), NOT the
-    unlocked subset — callers render against the full table and filter for
-    display, so an index into a day-varying list would mean different things
-    on different days.
 
-    Deterministic per candidate, and day-aware as of #61: the pick is drawn
-    only from the corpora unlocked by `day_number`, so a candidate can never be
-    attached to a database the player has no way to open. Used by BOTH
-    get_breach_lists() and the Hashcrack BREACH_MATCH entries — that shared
-    call is the entire mechanism by which Ghostscan and Hashcrack name the same
-    corpus, so all call sites must pass the same day.
+def _breach_dbs_for_candidate(candidate_id: str, count: int = 1) -> list[tuple[int, str]]:
+    """Return `count` distinct (db_index, canonical_name) pairs for this candidate.
 
-    Only meaningful for candidates carrying BREACH_HIT, LEAKED_PASSWORD or
-    CROSS_BREACH_REUSE; call sites are responsible for checking that guard.
+    The single source of truth for "which breach databases is this candidate in".
+    Any surface that names a breach database must flow through here.
     """
-    unlocked = config.breach_dbs_unlocked_by(day_number)
+    rng = _random.Random(int(candidate_id, 16) ^ _BREACH_DB_SEED)
+    order = list(range(len(_BREACH_DATABASES)))
+    rng.shuffle(order)
+    picked = order[:max(1, min(count, len(order)))]
+    return [(i, _BREACH_DATABASES[i][0]) for i in picked]
+
+
+def _breach_db_for_candidate(candidate_id: str, day_number: int | None = None) -> tuple[int, str]:
+    """Primary breach database for this candidate.
+
+    The day-aware variant is used when the candidate must only be seeded into
+    corpora the player can actually unlock on the current day. The stable
+    selector above remains for callers that only need the canonical list.
+    """
+    unlocked = config.breach_dbs_unlocked_by(day_number) if day_number is not None else list(_BREACH_DATABASES)
     if not unlocked:
-        # Below day 1 nothing is unlocked. Fall back to the first corpus rather
-        # than dividing by zero; no candidate can carry a breach kind there
-        # anyway (the evidence-tier gate puts BREACH_HIT at Ghostscan's day).
         return 0, _BREACH_DATABASES[0][0]
     rng = _random.Random(int(candidate_id, 16) ^ _BREACH_DB_SEED)
     name = unlocked[rng.randint(0, len(unlocked) - 1)]
@@ -283,41 +284,16 @@ def _breach_db_for_candidate(candidate_id: str,
 
 def _second_breach_db_for_candidate(candidate_id: str, day_number: int,
                                     first: str) -> str:
-    """The OTHER corpus a cross-breach-reuse password shows up in (#61).
-
-    Was `_HC_BREACH_NAMES[(int(id,16) >> 8) % len(...)]` with a decrement to
-    dodge a collision — which could name a locked database, and was unknown to
-    the Ghostscan side entirely. Drawn from the unlocked set now, and exposed
-    as a function so the breach panel can seed the same two corpora the
-    Hashcrack log names.
-    """
-    unlocked = [n for n in config.breach_dbs_unlocked_by(day_number)
-                if n != first]
+    """The other corpus a cross-breach password shows up in."""
+    unlocked = [n for n in config.breach_dbs_unlocked_by(day_number) if n != first]
     if not unlocked:
         return first
     rng = _random.Random(int(candidate_id, 16) ^ (_BREACH_DB_SEED + 1))
     return unlocked[rng.randint(0, len(unlocked) - 1)]
 
 
-def breach_dbs_for_candidate(candidate: Candidate,
-                             day_number: int) -> list[str]:
-    """Every corpus this candidate's email should appear in, on this day.
-
-    One place that answers "where is this person leaked", so the Ghostscan
-    panel and the Hashcrack log cannot give different answers — which is
-    precisely what #61 was filed about.
-
-    #61(d): CROSS_BREACH_REUSE was missing from the Ghostscan seeding entirely.
-    Hashcrack printed two BREACH_MATCH rows naming two corpora while the
-    player's email was in none of the breach lists — measured at 98 of 119
-    carriers (82%). Nick's read was right ("reuse implies they're on a breach
-    list") but the fix is to make the lists true, not to force a BREACH_HIT
-    alongside it: BREACH_HIT is critical, and Clumsy Cutie — the archetype
-    CROSS_BREACH_REUSE was written for — has no critical budget slot, so
-    forcing co-occurrence would have removed the violation from that archetype
-    altogether. The two violations stay distinct: BREACH_HIT is about the
-    EMAIL being leaked, CROSS_BREACH_REUSE about the PASSWORD recurring.
-    """
+def breach_dbs_for_candidate(candidate: Candidate, day_number: int) -> list[str]:
+    """Every corpus this candidate's email should appear in on this day."""
     kinds = {d.kind for d in candidate.truth.discrepancies}
     if not (kinds & {DiscrepancyKind.BREACH_HIT,
                      DiscrepancyKind.LEAKED_PASSWORD,
@@ -328,6 +304,15 @@ def breach_dbs_for_candidate(candidate: Candidate,
         return [first]
     second = _second_breach_db_for_candidate(candidate.id, day_number, first)
     return [first] if second == first else [first, second]
+
+
+def breach_db_count(candidate) -> int:
+    """How many corpora this candidate's email should appear in."""
+    kinds = {d.kind for d in candidate.truth.discrepancies}
+    if DiscrepancyKind.CROSS_BREACH_REUSE in kinds:
+        return 2
+    return 1
+
 
 
 # Noise email pools for breach list generation
@@ -696,10 +681,22 @@ def _ghostscan_sweep_lines(
     # automated"). Defaults to show_forums when not given, so every existing
     # caller keeps the old show_forums-gated behavior.
     _show_breach = show_forums if show_breach is None else show_breach
-    if has_breach and _show_breach:
-        _, breach_db = _breach_db_for_candidate(candidate.id, day_number)
-        lines.append(f"[#ff8c42]  {breach_db:<24}  {claimed_email}[/]")
-        lines.append("  [#ff8c42]▲ email in breach corpus[/]")
+    if has_breach:
+        _dbs = breach_dbs_for_candidate(candidate, day_number)
+        if not _dbs:
+            _dbs = [_breach_db_for_candidate(candidate.id, day_number)[1]]
+        for breach_db in _dbs:
+            if _show_breach:
+                lines.append(f"[#ff8c42]  {breach_db:<24}  {claimed_email}[/]")
+            else:
+                lines.append(f"[#2e3d4f]  {breach_db:<24}  {claimed_email}[/]")
+        if _show_breach:
+            if len(_dbs) > 1:
+                lines.append(f"  [#ff8c42]▲ email in {len(_dbs)} breach corpora — "
+                             f"check Hashcrack for password reuse[/]")
+            else:
+                lines.append(f"  [#ff8c42]▲ email in breach corpus[/]")
+
 
     return lines
 
@@ -904,16 +901,29 @@ def get_breach_lists(candidate: Candidate, game_seed: int,
     target_email = candidate.email
     seeded = set(breach_dbs_for_candidate(candidate, day_number))
     unlocked = set(config.breach_dbs_unlocked_by(day_number))
+    rng = _random.Random(int(candidate.id, 16) ^ 0xB8EA4DB5)
 
     result: list[tuple[str, str, str, list[tuple[str, bool]]]] = []
-    for db_name, year, count_label in _GS_BREACH_META:
+    for db_idx, (db_name, year, count_label) in enumerate(_GS_BREACH_META):
         if db_name not in unlocked:
             continue
-        entries = [(addr, False)
-                   for addr in _breach_list_noise(game_seed, db_name)]
+        entries: list[tuple[str, bool]] = []
+        num_entries = rng.randint(18, 26)
+        insert_pos = rng.randint(3, num_entries - 2) if db_name in seeded else -1
+
+        for i in range(num_entries):
+            if i == insert_pos:
+                entries.append((target_email, True))
+            user = rng.choice(_GS_BREACH_EMAIL_USERS)
+            domain = rng.choice(_GS_BREACH_EMAIL_DOMAINS)
+            suffix = rng.choice(["", str(rng.randint(1, 99)), "_" + rng.choice(["x", "z", "2", "old"])])
+            entries.append((f"{user}{suffix}@{domain}", False))
+
         if db_name in seeded:
-            entries.append((target_email, True))
             entries.sort(key=lambda e: e[0])
+        result.append((db_name, year, count_label, entries))
+    return result
+
         result.append((db_name, year, count_label, entries))
     return result
 
@@ -1007,7 +1017,8 @@ class _HCLogEntry:
     detail:         str          # hash snippet for HASH_SUBMIT, breach name for BREACH_MATCH
     owner_id:       str | None
     is_suspicious:  bool
-    violation_kind: str | None   # "stuffing" | "weak" | "leaked" | None
+    violation_kind: str | None   # "stuffing" | "brute" | "weak" | "leaked"
+                                 # | "reuse" | "unsalted" | None
 
 
 def _hc_ts_str(secs: int) -> str:
@@ -1024,16 +1035,15 @@ def _hc_algo(h: str | None) -> str:
     return _HC_ALGO_LABEL_MAP.get(len(h), "?")
 
 
-def _hc_candidate_entries(candidate, rng: _random.Random,
-                          day_number: int) -> list[_HCLogEntry]:
+def _hc_candidate_entries(candidate, rng: _random.Random, day_number: int) -> list[_HCLogEntry]:
     from .. import config as _cfg
 
-    # day_number added by #61: the BREACH_MATCH rows below name corpora, and
-    # they must name the same ones the Ghostscan panel is showing today.
-    has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
-    has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
-    has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)  # v2
-    has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)  # v2
+    _kinds = {d.kind for d in candidate.truth.discrepancies}
+    has_leaked = DiscrepancyKind.LEAKED_PASSWORD in _kinds
+    has_weak = DiscrepancyKind.WEAK_CREDENTIAL in _kinds
+    has_reuse = DiscrepancyKind.CROSS_BREACH_REUSE in _kinds
+    has_unsalt = DiscrepancyKind.UNSALTED_STORAGE in _kinds
+
     has_hashbad = has_leaked or has_weak or has_reuse or has_unsalt
     # #62: the burst below used to fire on `has_cred`, so EVERY weak- or
     # leaked-credential candidate got an AUTH_FAIL storm annotated "credential
@@ -1048,6 +1058,17 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
     has_stuffing = any(d.kind == DiscrepancyKind.CREDENTIAL_STUFFING
                        for d in candidate.truth.discrepancies)
 
+    # The login burst is gated on the LOG kinds, never on the credential kinds.
+    # A weak or leaked password says nothing about how the account was logged
+    # into — planting a burst for it invented evidence the ground truth did not
+    # contain, and labelled a single-account attack as "credential stuffing".
+    #
+    #   BRUTE_FORCE_IN_LOG   one account, many tries   -> "brute"
+    #   CREDENTIAL_STUFFING  one IP, many accounts,
+    #                        1-2 tries each            -> "stuffing"
+    has_brute    = DiscrepancyKind.BRUTE_FORCE_IN_LOG  in _kinds
+    has_stuffing = DiscrepancyKind.CREDENTIAL_STUFFING in _kinds
+
     account    = candidate.email
     claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
     ext_ip     = f"185.{rng.randint(100,220)}.{rng.randint(1,254)}.{rng.randint(1,254)}"
@@ -1056,21 +1077,47 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
     entries: list[_HCLogEntry] = []
 
     if has_stuffing:
-        # Credential-stuffing burst from external IP. Gated on the violation
-        # itself (#62) — a bad password is not an attack pattern, and rendering
-        # one as the other taught the player a tell that meant nothing.
+    if has_stuffing:
+        # Credential stuffing: ONE source IP sprayed across MANY accounts with
+        # only a try or two each. The candidate's own account is just one name
+        # in the sweep — the tell is the shared IP down the left column, not a
+        # pile of failures on this one row.
         burst = rng.randint(*_cfg.HC_STUFFING_BURST_SIZE)
+        victims = [f"{u}@{rng.choice(_HC_NOISE_DOMAINS)}"
+                   for u in rng.sample(_HC_NOISE_USERS, min(6, len(_HC_NOISE_USERS)))]
+        sweep = victims[:min(burst, len(victims))]
+        sweep.insert(rng.randint(1, len(sweep)), account)
+        for acct in sweep:
+            for _ in range(rng.randint(1, 2)):
+                entries.append(_HCLogEntry(
+                    ts_secs=t, ts_str=_hc_ts_str(t),
+                    event="AUTH_FAIL", ip=ext_ip, account=acct, detail="",
+                    owner_id=candidate.id if acct == account else None,
+                    is_suspicious=True, violation_kind="stuffing",
+                ))
+                t += rng.randint(1, 4)
+            t += rng.randint(2, 6)
+        entries.append(_HCLogEntry(
+            ts_secs=t, ts_str=_hc_ts_str(t),
+            event="AUTH_OK", ip=ext_ip, account=account, detail="",
+            owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
+        ))
+        t += rng.randint(10, 60)
+    elif has_brute:
+        # Brute force: many tries against the SINGLE target account.
+        burst = rng.randint(5, 9)
+
         for i in range(burst):
             entries.append(_HCLogEntry(
                 ts_secs=t+i, ts_str=_hc_ts_str(t+i),
                 event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
-                owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
+                owner_id=candidate.id, is_suspicious=True, violation_kind="brute",
             ))
         t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
             event="AUTH_OK", ip=ext_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
+            owner_id=candidate.id, is_suspicious=True, violation_kind="brute",
         ))
         t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
     else:
@@ -1091,11 +1138,8 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
                    else "reuse" if has_reuse else "unsalted" if has_unsalt else None)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
-            # #62: follows the burst, not the credential kind. A candidate who
-            # never had a burst has no external IP anywhere else in their log,
-            # so submitting the hash from one would leave an orphan signal
-            # pointing at an attack that isn't in the data.
-            event="HASH_SUBMIT", ip=ext_ip if has_stuffing else claimed_ip,
+            event="HASH_SUBMIT", ip=ext_ip if (has_stuffing or has_brute) else claimed_ip,
+
             account=account, detail=f"{algo}:{snippet}",
             owner_id=candidate.id, is_suspicious=has_hashbad,
             violation_kind=vk,
@@ -1110,19 +1154,21 @@ def _hc_candidate_entries(candidate, rng: _random.Random,
     # to dodge collisions, which knew nothing about the Ghostscan side and
     # could name a corpus that isn't unlocked yet.
     if has_leaked or has_reuse:
-        corpora = breach_dbs_for_candidate(candidate, day_number)
-        for i, corpus in enumerate(corpora):
-            if i:
-                t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
-            entries.append(_HCLogEntry(
-                ts_secs=t, ts_str=_hc_ts_str(t),
-                event="BREACH_MATCH", ip="--", account=account, detail=corpus,
-                # Only the FIRST row can be the leaked-password match; a second
-                # row exists only because the password recurs, which is what
-                # "reuse" means.
-                owner_id=candidate.id, is_suspicious=True,
-                violation_kind=("leaked" if has_leaked and not i else "reuse"),
+        if has_leaked or has_reuse:
+            corpora = breach_dbs_for_candidate(candidate, day_number)
+            for i, corpus in enumerate(corpora):
+                if i:
+                    t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
+                entries.append(_HCLogEntry(
+                    ts_secs=t, ts_str=_hc_ts_str(t),
+                    event="BREACH_MATCH", ip="--", account=account, detail=corpus,
+                    owner_id=candidate.id, is_suspicious=True,
+                    violation_kind=("leaked" if has_leaked and not i else "reuse"),
+                ))
+                t += rng.randint(5, 20)
+
             ))
+            t += rng.randint(5, 20)
 
     return entries
 
@@ -1239,6 +1285,7 @@ def _render_hc_log(
 
     prev_vk: str | None = None
     emitted_crack = False
+    breach_seen   = 0        # how many BREACH_MATCH rows we've annotated
 
     for e in entries:
         is_mine = (e.owner_id == target_id)
@@ -1254,7 +1301,11 @@ def _render_hc_log(
             # explicit_tags (filter) has its own block below.
             if upgrade_highlight and not explicit_tags:
                 if e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                    lines.append("  [#ff8c42]▲ rapid failure burst — credential stuffing pattern[/]")
+                    lines.append("  [#ff8c42]▲ this IP is failing against several "
+                                 "other accounts too[/]")
+                elif e.violation_kind == "brute" and prev_vk != "brute":
+                    lines.append("  [#ff8c42]▲ repeated failures against this one "
+                                 "account from a single IP[/]")
                 elif e.violation_kind in ("weak", "leaked") and e.event == "HASH_SUBMIT" and not emitted_crack:
                     if crack_plaintext:
                         attempts = "1" if e.violation_kind == "weak" else "found in corpus"
@@ -1268,11 +1319,20 @@ def _render_hc_log(
                         lines.append(f"  [#ff8c42]▲ crack result  ->  [b]{crack_plaintext}[/]  ({_note})[/]")
                         emitted_crack = True
                 elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    lines.append("  [#ff8c42]▲ same password seen in another breach corpus[/]")
+                    breach_seen += 1
+                    if breach_seen == 1:
+                        lines.append("  [#ff8c42]▲ email found in this breach corpus[/]")
+                    else:
+                        lines.append("  [#ff8c42]▲ the SAME password appears here too — reused across corpora[/]")
+
 
             if explicit_tags:
                 if e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                    lines.append("  [#ff5470]▲ credential stuffing pattern[/]")
+                    lines.append("  [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]  "
+                                 "— one source IP, many accounts, few tries each")
+                elif e.violation_kind == "brute" and prev_vk != "brute":
+                    lines.append("  [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]  "
+                                 "— one account, sustained failures")
                 elif e.violation_kind == "weak" and e.event == "HASH_SUBMIT" and not emitted_crack:
                     if crack_plaintext:
                         lines.append(f"  [#ff5470]▲ crack result  →  [b]{crack_plaintext}[/][/]")
@@ -1284,7 +1344,12 @@ def _render_hc_log(
                         lines.append(f"  [#ff5470]▲ crack result  ->  [b]{crack_plaintext}[/][/]")
                         emitted_crack = True
                 elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    lines.append(f"  [#ff5470]▲ cross-breach reuse: {e.detail}[/]")
+                    breach_seen += 1
+                    if breach_seen == 1:
+                        lines.append(f"  [#ff5470][b]▲ BREACH_HIT[/][/]  — {e.detail}")
+                    else:
+                        lines.append(f"  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
+                                     f"— same plaintext also in {e.detail}")
 
             prev_vk = e.violation_kind
 

@@ -255,7 +255,9 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.AFTER_HOURS_ACCESS,   # v2: benign minor noise
             DiscrepancyKind.CLAIMED_IP_MISMATCH,  # v2: benign minor noise
             DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
+            DiscrepancyKind.AFTER_HOURS_ACCESS,   # v2: benign minor noise
             DiscrepancyKind.WEAK_ENCRYPTION,      # dossier-tier: weak algo, not weak pw
+
         ),
         handle_style="casual",
         affiliation_pool="legit",
@@ -288,6 +290,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             # v2: competence / hygiene failures, not malice
             DiscrepancyKind.UNSALTED_STORAGE,
             DiscrepancyKind.CROSS_BREACH_REUSE,
+            DiscrepancyKind.BREACH_HIT,
             DiscrepancyKind.AFTER_HOURS_ACCESS,
             DiscrepancyKind.CLAIMED_IP_MISMATCH,
             DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
@@ -306,7 +309,10 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         budget=DiscrepancyBudget(major=2, critical=1),
         eligible_kinds=(
             DiscrepancyKind.HOSTILE_CHAT,
-            DiscrepancyKind.BREACH_HIT,
+            # BREACH_HIT is deliberately absent: it is a *minor* kind and this
+            # budget has no minor slot. Bad Actors get it for free anyway, via
+            # _IMPLIED_KINDS, whenever they roll LEAKED_PASSWORD or
+            # CROSS_BREACH_REUSE — which is the only story where it matters.
             DiscrepancyKind.BRUTE_FORCE_IN_LOG,
             DiscrepancyKind.IMPOSSIBLE_TRAVEL,
             DiscrepancyKind.LEAKED_PASSWORD,
@@ -437,7 +443,10 @@ _SEVERITY_REVEAL = {
     DiscrepancyKind.AFFILIATION_UNLISTED:   (ToolName.GHOSTSCAN,  "minor"),
     DiscrepancyKind.DISPOSABLE_EMAIL:       (ToolName.DOSSIER,    "major"),
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  (ToolName.GHOSTSCAN,  "major"),
-    DiscrepancyKind.BREACH_HIT:             (ToolName.GHOSTSCAN,  "critical"),
+    # Rebalanced: appearing in a public dump is something done TO the
+    # candidate — a breadcrumb worth chasing, not proof of wrongdoing.
+    # The *act* of still using that credential is CROSS_BREACH_REUSE (major).
+    DiscrepancyKind.BREACH_HIT:             (ToolName.GHOSTSCAN,  "minor"),
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   (ToolName.GHOSTSCAN,  "major"),
     DiscrepancyKind.AFFILIATION_MISMATCH:   (ToolName.GHOSTSCAN,  "major"),
     DiscrepancyKind.BRUTE_FORCE_IN_LOG:     (ToolName.LOGWATCH,   "critical"),
@@ -583,7 +592,7 @@ _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.AFFILIATION_NOT_STATED: "No affiliation stated on the dossier.",
     DiscrepancyKind.DISPOSABLE_EMAIL:       "Email domain is a known disposable / throwaway service.",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "GitHub commit email does not match the claimed email.",
-    DiscrepancyKind.BREACH_HIT:             "Email appears in a known breach corpus.",
+    DiscrepancyKind.BREACH_HIT:             "Email appears in a known breach corpus — exposed, not necessarily misused.",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "Identical handle pattern found across suspicious platforms.",
     DiscrepancyKind.AFFILIATION_MISMATCH:   "Dossier affiliation does not match the org on their platform profiles.",
     DiscrepancyKind.AFFILIATION_UNLISTED:   "Platform profiles exist but list no organisation at all.",
@@ -790,6 +799,15 @@ def _make_email(
     return f"{first.lower()}{last.lower()}{rng.randint(1, 99)}@{rng.choice(pool)}"
 
 
+# Kind -> kind it logically entails. The implied kind is planted for free
+# (no budget cost) whenever the trigger is rolled. Keep this small: only
+# entailments that would otherwise let two tools contradict each other.
+_IMPLIED_KINDS: dict[DiscrepancyKind, DiscrepancyKind] = {
+    DiscrepancyKind.CROSS_BREACH_REUSE: DiscrepancyKind.BREACH_HIT,
+    DiscrepancyKind.LEAKED_PASSWORD:    DiscrepancyKind.BREACH_HIT,
+}
+
+
 def _roll_discrepancies(
     rng: random.Random,
     spec: ArchetypeSpec,
@@ -884,20 +902,6 @@ def _roll_discrepancies(
                             used.update(group)
                     break
 
-    # ── Scripted violations (#15/#43-47) ──────────────────────────────────
-    # A tutorial day has to be able to say "slot 3 demonstrates brute force",
-    # not merely "slot 3 is a Bad Actor" — an archetype rolls from a pool of
-    # eight-ish kinds, so the day that TEACHES a mechanic could not reliably
-    # contain an example of it. Forced kinds are planted before the random
-    # roll and consume their severity slot, so the archetype's budget is still
-    # respected and the candidate does not end up carrying more than its
-    # design allows.
-    #
-    # Filtered through `eligible`, deliberately: a script may not smuggle in a
-    # violation the day's tier gate, expressibility rule or allowed_violations
-    # whitelist forbids. Silently, because the caller has already validated
-    # this (content_loader) and raised a useful error naming the day file — a
-    # second raise here would only fire on hand-built Day objects in tests.
     forced_taken = {"critical": 0, "major": 0, "minor": 0}
     for kind in forced_kinds:
         if kind in used or kind not in eligible:
@@ -914,9 +918,6 @@ def _roll_discrepancies(
         ))
         used.add(kind)
         forced_taken[kind_sev] += 1
-        # Same single-artifact exclusivity the random roll obeys: forcing a
-        # stego kind must still lock the other two out, or a scripted day is
-        # the one place the guarantee breaks.
         for group in _EXCLUSIVE_ARTIFACT_GROUPS:
             if kind in group:
                 used.update(group)
@@ -924,6 +925,26 @@ def _roll_discrepancies(
     take("critical", spec.budget.critical - forced_taken["critical"])
     take("major",    spec.budget.major    - forced_taken["major"])
     take("minor",    spec.budget.minor    - forced_taken["minor"])
+
+    # ── Implied discrepancies ────────────────────────────────────────────
+    # Some kinds are logically entailed by others: a password cannot recur
+    # ACROSS breach corpora unless the account is IN those corpora. Planting
+    # the entailed kind keeps the two surfaces that render it (the Ghostscan
+    # breach panel and the Hashcrack audit log) telling the same story.
+    #
+    # Implied kinds do NOT consume a budget slot — they are derived facts,
+    # not extra evidence the archetype was allotted.
+    for trigger, implied in _IMPLIED_KINDS.items():
+        if trigger in used and implied not in used:
+            revealed_by, severity = _SEVERITY_REVEAL[implied]
+            chosen.append(Discrepancy(
+                kind=implied,
+                severity=severity,  # type: ignore[arg-type]
+                revealed_by=revealed_by,
+                description=_DISCREPANCY_DESCRIPTIONS[implied],
+            ))
+            used.add(implied)
+
     return chosen
 
 

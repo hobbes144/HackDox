@@ -247,7 +247,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.WEAK_ENCRYPTION:        "free — the raw hash is on the dossier (32 hex = MD5, auto-labeled with Cipher ID HUD); a crack (if attempted) reveals a fine password — the algorithm is the problem, not the value",
     DiscrepancyKind.UNSALTED_STORAGE:       "free — the ⚠ UNSALTED marker on the dossier shows the stored password in the clear; no crack needed at all",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "base recon shows commit email · filter highlights the mismatch",
-    DiscrepancyKind.BREACH_HIT:             "base recon highlights breach panel · filter confirms ▲ BREACH_HIT",
+    DiscrepancyKind.BREACH_HIT:             "email in a breach panel corpus — exposure, not misconduct; chase it with Hashcrack",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "handle on a CRITICAL forum — blended in base run, filter labels it",
     DiscrepancyKind.AFFILIATION_MISMATCH:   "GHOSTSCAN — sweep shows a DIFFERENT org than the dossier claims",
     DiscrepancyKind.AFFILIATION_UNLISTED:   "GHOSTSCAN — profiles exist but carry no org tag at all",
@@ -263,8 +263,10 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free tier highlights AUTH_OK rows that diverge from the dossier's claimed IP — corroborate before denying",
     DiscrepancyKind.LEAKED_PASSWORD:        "crack reveals plaintext + BREACH_MATCH names the corpus",
     DiscrepancyKind.WEAK_CREDENTIAL:        "weak encryption (MD5) cracks to a weak plaintext — minor hygiene flag",
-    DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND breach-corpus match — cross-check the breach panel",
-    DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp for AMBER cells in a dense block; ≥60% coverage resolves ▲",
+    DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND corpus naming the same plaintext — the breach panel lists both",
+    DiscrepancyKind.UNSALTED_STORAGE:       "hash shape is free info; crack is instant — storage hygiene failure",
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
+
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "CRIMSON mid-density cells — filter (F) names the payload type",
 }
@@ -870,9 +872,10 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [#ff8c42]2. highlighted[/]  after base recon — candidate email marked ►",
         "  [#ff5470]3. confirmed[/]    after filter — red ▲ BREACH_HIT label",
         "",
-        "  [dim]The named database always matches the BREACH_MATCH entry in the",
-        "  Hashcrack audit log — cross-reference the two for a LEAKED_PASSWORD",
-        "  or CROSS_BREACH_REUSE case.[/]",
+        "  [dim]The named databases always match the BREACH_MATCH entries in the",
+        "  Hashcrack audit log. A single corpus is a BREACH_HIT (minor — they",
+        "  were exposed). TWO corpora naming the same cracked plaintext is",
+        "  CROSS_BREACH_REUSE (major — they never changed it).[/]",
     ]
     return "\n".join(lines)
 
