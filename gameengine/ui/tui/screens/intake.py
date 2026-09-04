@@ -125,6 +125,11 @@ class IntakeScreen(Screen):
         # disagree about what happens or drift into two implementations.
         self.btn_admit = Button("ADMIT", id="btn-admit", variant="success")
         self.btn_deny  = Button("DENY",  id="btn-deny",  variant="error")
+        # NEXT (batch-3 follow-up, Nick): a tall, skinny button off to the
+        # right of ADMIT/DENY, enabled only once a verdict has actually been
+        # delivered — mirrors the "next" text command 1:1 (see
+        # _advance_to_next_candidate()) rather than a second implementation.
+        self.btn_next  = Button("NEXT ▶", id="btn-next", disabled=True)
         self.overseer = OverseerPanel(overseer_intro)
         self.ref_main = ReferencePanel("candidate", "reference-side")
 
@@ -193,9 +198,11 @@ class IntakeScreen(Screen):
                 with Horizontal(id="candidate-mid"):
                     yield self.board
                     yield self.board_c0
-                    with Vertical(id="verdict-panel"):
-                        yield self.btn_admit
-                        yield self.btn_deny
+                    with Horizontal(id="verdict-panel"):
+                        with Vertical(id="verdict-buttons"):
+                            yield self.btn_admit
+                            yield self.btn_deny
+                        yield self.btn_next
                 with Horizontal(id="candidate-bot"):
                     yield self.overseer
                     yield self.ref_main
@@ -382,6 +389,7 @@ class IntakeScreen(Screen):
         self._verdict_locked = False
         self.btn_admit.disabled = False
         self.btn_deny.disabled  = False
+        self.btn_next.disabled  = True
         self._spent.clear()
         self._compute_before = self._state.compute_hours
 
@@ -454,15 +462,32 @@ class IntakeScreen(Screen):
             return _PAGE_TAB[self._page_index]
         return "tab-rules"
 
+    def _advance_to_next_candidate(self) -> None:
+        """Move to the next candidate slot — shared by the "next" text
+        command and the NEXT button (batch-3 follow-up) so the two entry
+        points can't drift apart. Callers are responsible for checking
+        _verdict_locked first (both do)."""
+        self._state.current_slot_index += 1
+        self._goto_page(0)
+        self._load_current_candidate()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """ADMIT/DENY buttons (batch-3 follow-up) — routes straight through
-        _commit_verdict(), identically to the "admit"/"deny" text commands."""
+        """ADMIT/DENY/NEXT buttons (batch-3 follow-up) — routes straight
+        through _commit_verdict()/_advance_to_next_candidate(), identically
+        to the "admit"/"deny"/"next" text commands."""
         if event.button.id == "btn-admit":
             event.stop()
             self._commit_verdict(Verdict.ADMIT)
         elif event.button.id == "btn-deny":
             event.stop()
             self._commit_verdict(Verdict.DENY)
+        elif event.button.id == "btn-next":
+            event.stop()
+            # Guard mirrors the "next" text command's own check — the button
+            # is disabled until a verdict lands, but a test (or a stray
+            # .press()) shouldn't be able to skip a candidate for free.
+            if self._verdict_locked:
+                self._advance_to_next_candidate()
 
     def _commit_verdict(self, verdict: Verdict) -> None:
         if self._verdict_locked or self._candidate is None:
@@ -470,6 +495,7 @@ class IntakeScreen(Screen):
         self._verdict_locked = True
         self.btn_admit.disabled = True
         self.btn_deny.disabled  = True
+        self.btn_next.disabled  = False
         compute_before = self._state.compute_hours
         # #38: hand scoring the day's rule evaluation so the LITERAL-RULESET
         # track is recorded alongside the moral one. Payouts are unaffected -
@@ -800,9 +826,9 @@ class IntakeScreen(Screen):
                 and not self.command_bar.get_buffer()):
             self._enter_stamp_mode(); event.stop(); return
 
-        # ── Verdict buttons — let Enter reach their own binding instead of
-        # the command bar, when one of them is focused (batch-3 follow-up).
-        if k == "enter" and self.focused in (self.btn_admit, self.btn_deny):
+        # ── Verdict/Next buttons — let Enter reach their own binding instead
+        # of the command bar, when one of them is focused (batch-3 follow-up).
+        if k == "enter" and self.focused in (self.btn_admit, self.btn_deny, self.btn_next):
             return
 
         # ── Command bar input ─────────────────────────────────────────────────
@@ -878,9 +904,7 @@ class IntakeScreen(Screen):
                     "ERROR — commit a verdict first  (type: admit  or  deny)", error=True
                 )
             else:
-                self._state.current_slot_index += 1
-                self._goto_page(0)
-                self._load_current_candidate()
+                self._advance_to_next_candidate()
 
         elif kind == "rules":
             self.app.push_screen(RulesScreen(self._day, self.evidence_state,

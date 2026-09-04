@@ -89,19 +89,40 @@ ContentSwitcher {
 /* Verdict buttons (batch-3 follow-up, Nick): fill the other half of the mid
  * row alongside whichever evidence board (#evidence-board / #evidence-c0) is
  * currently showing, so the pair is always reachable by arrow-key focus
- * navigation without stealing space from the board. */
+ * navigation without stealing space from the board. Horizontal now — the
+ * ADMIT/DENY column on the left, NEXT (a second follow-up) as a tall, skinny
+ * strip on the right, both filling the panel's full height so NEXT reads as
+ * tall as ADMIT+DENY combined without hand-computing a matching size. */
 #verdict-panel {
     width: 50%;
+    height: 100%;
+}
+
+#verdict-buttons {
+    width: 1fr;
     height: 100%;
     align: center middle;
 }
 
-#verdict-panel Button {
+#verdict-buttons Button {
     width: 90%;
     height: 1fr;
     margin: 1 2;
     content-align: center middle;
     text-style: bold;
+}
+
+#btn-next {
+    width: 20%;
+    min-width: 8;
+    height: 100%;
+    margin: 1 1;
+    content-align: center middle;
+    text-style: bold;
+}
+
+#btn-next:disabled {
+    text-style: bold dim;
 }
 
 /* Toggleable evidence board on the tool pages (2-5). Hidden until the player

@@ -924,9 +924,6 @@ def get_breach_lists(candidate: Candidate, game_seed: int,
         result.append((db_name, year, count_label, entries))
     return result
 
-        result.append((db_name, year, count_label, entries))
-    return result
-
 
 def get_breach_lists_for_day(
     game_seed: int, day: Day
@@ -1077,7 +1074,6 @@ def _hc_candidate_entries(candidate, rng: _random.Random, day_number: int) -> li
     entries: list[_HCLogEntry] = []
 
     if has_stuffing:
-    if has_stuffing:
         # Credential stuffing: ONE source IP sprayed across MANY accounts with
         # only a try or two each. The candidate's own account is just one name
         # in the sweep — the tell is the shared IP down the left column, not a
@@ -1154,19 +1150,15 @@ def _hc_candidate_entries(candidate, rng: _random.Random, day_number: int) -> li
     # to dodge collisions, which knew nothing about the Ghostscan side and
     # could name a corpus that isn't unlocked yet.
     if has_leaked or has_reuse:
-        if has_leaked or has_reuse:
-            corpora = breach_dbs_for_candidate(candidate, day_number)
-            for i, corpus in enumerate(corpora):
-                if i:
-                    t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
-                entries.append(_HCLogEntry(
-                    ts_secs=t, ts_str=_hc_ts_str(t),
-                    event="BREACH_MATCH", ip="--", account=account, detail=corpus,
-                    owner_id=candidate.id, is_suspicious=True,
-                    violation_kind=("leaked" if has_leaked and not i else "reuse"),
-                ))
-                t += rng.randint(5, 20)
-
+        corpora = breach_dbs_for_candidate(candidate, day_number)
+        for i, corpus in enumerate(corpora):
+            if i:
+                t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
+            entries.append(_HCLogEntry(
+                ts_secs=t, ts_str=_hc_ts_str(t),
+                event="BREACH_MATCH", ip="--", account=account, detail=corpus,
+                owner_id=candidate.id, is_suspicious=True,
+                violation_kind=("leaked" if has_leaked and not i else "reuse"),
             ))
             t += rng.randint(5, 20)
 

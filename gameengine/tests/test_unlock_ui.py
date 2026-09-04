@@ -615,3 +615,130 @@ def test_keyboard_arrows_space_and_esc_still_work_alongside_mouse():
             await pilot.pause(0.1)
             assert not panel._stamp_mode, "Esc no longer exits stamp mode"
     asyncio.run(go())
+
+
+# ─── NEXT button (batch-3 follow-up #2) ──────────────────────────────────────
+#
+# Nick: a tall, skinny NEXT button off to the right of ADMIT/DENY, enabled
+# only once a verdict has been delivered. It routes through the exact same
+# _advance_to_next_candidate() the "next" text command already uses, so the
+# two entry points can't drift apart (same pattern as ADMIT/DENY -> _commit_verdict).
+
+
+def test_next_button_starts_disabled_and_enables_only_after_a_verdict():
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            assert scr.btn_next.disabled, "NEXT must start disabled — no verdict yet"
+
+            await pilot.click(scr.btn_admit)
+            await pilot.pause(0.1)
+            assert not scr.btn_next.disabled, "NEXT must enable once a verdict lands"
+    asyncio.run(go())
+
+
+def test_clicking_next_button_advances_the_same_way_as_the_next_command():
+    """The NEXT button routes through _advance_to_next_candidate(), the exact
+    helper the typed "next" command uses — same slot increment, same page
+    reset, same fresh-candidate load."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            slot_before = state.current_slot_index
+
+            await pilot.click(scr.btn_deny)
+            await pilot.pause(0.1)
+            await pilot.click(scr.btn_next)
+            await pilot.pause(0.1)
+
+            assert state.current_slot_index == slot_before + 1
+            assert scr._page_index == 0
+            assert not scr._verdict_locked, "the new candidate must start unlocked"
+            assert scr.btn_admit.disabled is False and scr.btn_deny.disabled is False
+            assert scr.btn_next.disabled is True, "NEXT must reset to disabled on the new candidate"
+    asyncio.run(go())
+
+
+def test_next_button_is_a_no_op_before_a_verdict_is_delivered():
+    """Disabled means disabled: even a direct .press() (bypassing the click-
+    through-disabled guard Textual itself provides) must not skip a
+    candidate for free — mirrors the guard already proven for a second
+    ADMIT/DENY press."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            slot_before = state.current_slot_index
+
+            scr.btn_next.press()
+            await pilot.pause(0.1)
+
+            assert state.current_slot_index == slot_before, "NEXT fired before any verdict was committed"
+    asyncio.run(go())
+
+
+def test_enter_on_a_focused_next_button_presses_it_not_the_command_bar():
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+
+            await pilot.click(scr.btn_admit)
+            await pilot.pause(0.1)
+            slot_before = state.current_slot_index
+
+            scr.btn_next.focus()
+            await pilot.pause(0.05)
+            assert scr.focused is scr.btn_next
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+
+            assert state.current_slot_index == slot_before + 1
+    asyncio.run(go())
+
+
+def test_next_button_reachable_by_arrow_key_focus_navigation():
+    """Only meaningful once NEXT is actually enabled — a disabled Button is
+    correctly skipped by Textual's own focus chain, same as any other
+    disabled widget, so a verdict has to land first."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+
+            await pilot.click(scr.btn_admit)
+            await pilot.pause(0.1)
+
+            scr.dossier.focus()
+            await pilot.pause(0.05)
+            reached = False
+            for _ in range(20):
+                await pilot.press("down")
+                await pilot.pause(0.02)
+                if scr.focused is scr.btn_next:
+                    reached = True
+                    break
+            assert reached, "arrow-key focus cycling never reached the NEXT button"
+    asyncio.run(go())
