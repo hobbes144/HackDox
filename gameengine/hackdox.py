@@ -213,7 +213,7 @@ def _lab_tool_output(candidate, tool: ToolName, day, seed: int) -> list[str]:
 
 @app.command("lab")
 def lab(
-    # noqa: B008 -- typer.Option(...) in the default position is the required
+
     # Typer idiom: Typer inspects these call objects at import time to build
     # the CLI's flags/help text, so moving the call into the function body
     # (bugbear's usual fix) would break `hackdox lab --help` entirely.
