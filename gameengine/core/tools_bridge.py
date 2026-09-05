@@ -901,26 +901,19 @@ def get_breach_lists(candidate: Candidate, game_seed: int,
     target_email = candidate.email
     seeded = set(breach_dbs_for_candidate(candidate, day_number))
     unlocked = set(config.breach_dbs_unlocked_by(day_number))
-    rng = _random.Random(int(candidate.id, 16) ^ 0xB8EA4DB5)
 
     result: list[tuple[str, str, str, list[tuple[str, bool]]]] = []
-    for db_idx, (db_name, year, count_label) in enumerate(_GS_BREACH_META):
+    for db_name, year, count_label in _GS_BREACH_META:
         if db_name not in unlocked:
             continue
-        entries: list[tuple[str, bool]] = []
-        num_entries = rng.randint(18, 26)
-        insert_pos = rng.randint(3, num_entries - 2) if db_name in seeded else -1
-
-        for i in range(num_entries):
-            if i == insert_pos:
-                entries.append((target_email, True))
-            user = rng.choice(_GS_BREACH_EMAIL_USERS)
-            domain = rng.choice(_GS_BREACH_EMAIL_DOMAINS)
-            suffix = rng.choice(["", str(rng.randint(1, 99)), "_" + rng.choice(["x", "z", "2", "old"])])
-            entries.append((f"{user}{suffix}@{domain}", False))
-
+        noise = _breach_list_noise(game_seed, db_name)
         if db_name in seeded:
+            entries = [(addr, addr == target_email) for addr in noise]
+            if target_email not in noise:
+                entries.append((target_email, True))
             entries.sort(key=lambda e: e[0])
+        else:
+            entries = [(addr, False) for addr in noise]
         result.append((db_name, year, count_label, entries))
     return result
 
@@ -1074,31 +1067,35 @@ def _hc_candidate_entries(candidate, rng: _random.Random, day_number: int) -> li
     entries: list[_HCLogEntry] = []
 
     if has_stuffing:
-        # Credential stuffing: ONE source IP sprayed across MANY accounts with
-        # only a try or two each. The candidate's own account is just one name
-        # in the sweep — the tell is the shared IP down the left column, not a
-        # pile of failures on this one row.
+        # Credential-stuffing burst from external IP. Gated on the violation
+        # itself (#62) — a bad password is not an attack pattern, and rendering
+        # one as the other taught the player a tell that meant nothing.
+        #
+        # Batch-3/merge note: this used to build a victims[] sweep across up to
+        # 6 OTHER accounts (rng.sample(_HC_NOISE_USERS, min(6, ...))) with 1-2
+        # tries each — leftover pre-batch-3 code that a merge resolution
+        # brought back over this branch's own simplification. That hard 6-cap
+        # silently ignored HC_STUFFING_BURST_SIZE above 6 (config extracted the
+        # literal but the surrounding shape never actually read it past that
+        # cap), which is what test_hashcrack_stuffing_burst_size_is_configurable
+        # caught. Restored to the batch-3 version: burst straight-line AUTH_FAILs
+        # against the candidate's own account, same shape as the brute-force
+        # branch below and as Logwatch's LW_BRUTE_BURST_SIZE — burst actually
+        # drives the count now, at any size.
         burst = rng.randint(*_cfg.HC_STUFFING_BURST_SIZE)
-        victims = [f"{u}@{rng.choice(_HC_NOISE_DOMAINS)}"
-                   for u in rng.sample(_HC_NOISE_USERS, min(6, len(_HC_NOISE_USERS)))]
-        sweep = victims[:min(burst, len(victims))]
-        sweep.insert(rng.randint(1, len(sweep)), account)
-        for acct in sweep:
-            for _ in range(rng.randint(1, 2)):
-                entries.append(_HCLogEntry(
-                    ts_secs=t, ts_str=_hc_ts_str(t),
-                    event="AUTH_FAIL", ip=ext_ip, account=acct, detail="",
-                    owner_id=candidate.id if acct == account else None,
-                    is_suspicious=True, violation_kind="stuffing",
-                ))
-                t += rng.randint(1, 4)
-            t += rng.randint(2, 6)
+        for i in range(burst):
+            entries.append(_HCLogEntry(
+                ts_secs=t+i, ts_str=_hc_ts_str(t+i),
+                event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
+                owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
+            ))
+        t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
         entries.append(_HCLogEntry(
             ts_secs=t, ts_str=_hc_ts_str(t),
             event="AUTH_OK", ip=ext_ip, account=account, detail="",
             owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
         ))
-        t += rng.randint(10, 60)
+        t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
     elif has_brute:
         # Brute force: many tries against the SINGLE target account.
         burst = rng.randint(5, 9)

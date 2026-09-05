@@ -306,13 +306,21 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         archetype=Archetype.BAD_ACTOR,
         correct_verdict=Verdict.DENY,
         moral_modifier=0,
-        budget=DiscrepancyBudget(major=2, critical=1),
+        # minor=1 added so day_02.json's scripted Ghostscan/breach-corpus
+        # lesson (forced_violations slot 3, "3 the breach corpus" per that
+        # day's own _comment_script) has a slot to land in — same fix as
+        # #53's minor slot for Sneaky Bugger below, for the same reason: a
+        # forced_kinds pick still has to clear the archetype's own budget,
+        # so a scripted minor kind needs a minor slot to exist at all.
+        # BREACH_HIT usually still arrives for free instead, via
+        # _IMPLIED_KINDS (LEAKED_PASSWORD) or scoring.board_accuracy_bonus's
+        # CROSS_BREACH_REUSE credit — this slot only matters on a day like
+        # Day 2 where neither of those routes is reachable yet (Hashcrack
+        # isn't taught until Day 3) but Ghostscan already is.
+        budget=DiscrepancyBudget(minor=1, major=2, critical=1),
         eligible_kinds=(
             DiscrepancyKind.HOSTILE_CHAT,
-            # BREACH_HIT is deliberately absent: it is a *minor* kind and this
-            # budget has no minor slot. Bad Actors get it for free anyway, via
-            # _IMPLIED_KINDS, whenever they roll LEAKED_PASSWORD or
-            # CROSS_BREACH_REUSE — which is the only story where it matters.
+            DiscrepancyKind.BREACH_HIT,
             DiscrepancyKind.BRUTE_FORCE_IN_LOG,
             DiscrepancyKind.IMPOSSIBLE_TRAVEL,
             DiscrepancyKind.LEAKED_PASSWORD,
@@ -802,9 +810,18 @@ def _make_email(
 # Kind -> kind it logically entails. The implied kind is planted for free
 # (no budget cost) whenever the trigger is rolled. Keep this small: only
 # entailments that would otherwise let two tools contradict each other.
+#
+# CROSS_BREACH_REUSE used to be in here too, but #61(d) / the "Post Beach"
+# batch-3 content pass moved that one case to scoring.board_accuracy_bonus
+# instead: breach_dbs_for_candidate() already makes a CROSS_BREACH_REUSE
+# carrier's email show up labeled BREACH_HIT in Ghostscan's breach panel, so
+# the player-visible evidence is handled there, and scoring credits a
+# BREACH_HIT flag against the CROSS_BREACH_REUSE violation directly rather
+# than ground truth carrying both. Planting BREACH_HIT here as well fought
+# that design — CROSS_BREACH_REUSE and BREACH_HIT are meant to stay distinct
+# kinds in ground truth (see test_breach_hit_flag_credited_against_cross_breach_reuse).
 _IMPLIED_KINDS: dict[DiscrepancyKind, DiscrepancyKind] = {
-    DiscrepancyKind.CROSS_BREACH_REUSE: DiscrepancyKind.BREACH_HIT,
-    DiscrepancyKind.LEAKED_PASSWORD:    DiscrepancyKind.BREACH_HIT,
+    DiscrepancyKind.LEAKED_PASSWORD: DiscrepancyKind.BREACH_HIT,
 }
 
 
@@ -934,8 +951,19 @@ def _roll_discrepancies(
     #
     # Implied kinds do NOT consume a budget slot — they are derived facts,
     # not extra evidence the archetype was allotted.
+    # `used` also picks up kinds that were never actually rolled — an
+    # exclusive-artifact group (above) blanket-adds its whole group to `used`
+    # once any one member is chosen, purely to stop a second member from also
+    # being picked. Triggering on membership in `used` therefore fires an
+    # implication off a kind that was merely blocked, not chosen: e.g.
+    # UNSALTED_STORAGE gets picked, its credential-artifact group blanket-adds
+    # CROSS_BREACH_REUSE to `used` even though it was never rolled, and that
+    # alone used to be enough to plant BREACH_HIT for free — a Ghostscan-tier
+    # (day 2) violation with no trigger actually present, sometimes as early
+    # as Day 1. The trigger check has to be against what was really chosen.
+    chosen_kinds = {d.kind for d in chosen}
     for trigger, implied in _IMPLIED_KINDS.items():
-        if trigger in used and implied not in used:
+        if trigger in chosen_kinds and implied not in used:
             revealed_by, severity = _SEVERITY_REVEAL[implied]
             chosen.append(Discrepancy(
                 kind=implied,
@@ -944,6 +972,7 @@ def _roll_discrepancies(
                 description=_DISCREPANCY_DESCRIPTIONS[implied],
             ))
             used.add(implied)
+            chosen_kinds.add(implied)
 
     return chosen
 
