@@ -128,6 +128,9 @@ HackDoxApp
 - One-way chat from candidate and Overseer
 - Colour-coded by tone: warm (#c8d4e1) · hostile (#ff5470) · flippant (#c084fc) · earnest (#7dd3c0)
 - Timestamps shown in dim grey
+- `post_reaction()` appends the candidate's closing line during the verdict
+  reveal window (content in `reactions.py`). Always full colour — the Sentiment
+  Scanner gate applies pre-verdict only
 
 ### EvidenceBoard
 - Player-controlled checklist of 13 flaggable items across 5 groups
@@ -135,6 +138,9 @@ HackDoxApp
 - `↑/↓` move cursor · `Space` toggle flag · cursor renders in green inverse
 - Nothing auto-populates — player flags manually
 - Board accuracy bonus: up to +10⏱ on correct verdict
+- **After a verdict** each *touched* row gains a ✓/✗ and a footer reports how
+  many violations went unrecorded. Rows left at "unknown" stay blank — the
+  answer key never appears
 
 ### OverseerPanel
 - Overseer monologue and stat summary for current candidate
@@ -162,6 +168,29 @@ HackDoxApp
 - Two lines: response/feedback · `hackdox@terminal:~$` prompt with live buffer
 - Player types commands; Enter submits; Backspace edits; Esc clears
 - Uses `self.update(markup)` for Rich markup rendering
+
+---
+
+## Verdict Reveal Window
+
+Fires on every verdict; ~3s, fully skippable (NEXT is enabled before the window
+opens). Three channels, each answering a different question:
+
+| Channel | Question | Where |
+|---|---|---|
+| Chat reaction | "how did that land on the person?" | `reactions.py` → `ChatPanel.post_reaction` |
+| Border pulse | "was I right?" | `IntakeScreen._begin_verdict_reveal` + the `vf-*` classes at the end of `app.tcss` |
+| Board grading | "were my individual calls right?" | `EvidenceState.reveal` |
+
+Pulse targets all nine panels that can be on screen (dossier, chat, both
+Candidate-page boards, the verdict panel, and all four tool-page boards) —
+A/D work from any page, so a verdict delivered while reading a log still reads.
+
+Only the pulse is time-boxed. The chat reaction and the graded board persist
+until the next candidate loads: a grade that erases itself after three seconds
+is a grade nobody gets to use.
+
+Knobs: `config.VERDICT_REVEAL_ENABLED` / `_DURATION` / `_PULSE_INTERVAL`.
 
 ---
 

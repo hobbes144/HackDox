@@ -363,6 +363,29 @@ STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflo
 CINEMATIC_CHAT             = False
 CHAT_LINE_DELAY            = 0.04
 
+# ─── Verdict reveal window ───────────────────────────────────────────────────
+#
+# A short beat between "the player delivered a verdict" and "the player moves
+# on", in which three feedback channels fire at once:
+#
+#   1. the candidate reacts in the chat panel, in the voice they have been
+#      using all along, to what the player just did to them;
+#   2. the Candidate-page panels pulse green (verdict matched ground truth) or
+#      red (it did not);
+#   3. the evidence board grades the calls the player actually made.
+#
+# The window is deliberately SKIPPABLE (see IntakeScreen._begin_verdict_reveal):
+# NEXT unlocks the instant the verdict lands, so a player who already knows the
+# answer never waits on an animation. The pulse is what gets interrupted; the
+# chat reaction and the graded board persist until the next candidate loads,
+# because those are things a player reads rather than watches.
+#
+# Set VERDICT_REVEAL_ENABLED = False to switch the whole beat off — verdicts
+# then behave exactly as they did before this feature.
+VERDICT_REVEAL_ENABLED        = True
+VERDICT_REVEAL_DURATION       = 3.0    # seconds the border pulse runs
+VERDICT_REVEAL_PULSE_INTERVAL = 0.22   # seconds between bright/dim swaps
+
 # ─── Campaign shape (#17) ────────────────────────────────────────────────────
 #
 # CAMPAIGN_LAST_DAY is the ceiling for procedurally-synthesized days: past it,

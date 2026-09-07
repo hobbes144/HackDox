@@ -9,7 +9,8 @@ from textual.message import Message
 from textual.widgets import Static
 
 from gameengine import config
-from gameengine.core.models import Candidate
+from gameengine.core.models import Candidate, Verdict
+from gameengine.ui.tui import reactions
 
 
 class _TWMessage:
@@ -280,3 +281,27 @@ class ChatPanel(TypewriterLog):
             # verbatim prefix, the plain line text is what types out (wrapped in
             # the tag colour). Messages auto-chain, so the script streams in.
             self.post("", line.text, color=col, style=sty, prefix=prefix)
+
+    def post_reaction(self, candidate: Candidate, verdict: Verdict) -> None:
+        """Play the candidate's closing reaction to a verdict (reveal window).
+
+        Appended to the existing script rather than replacing it, so the last
+        thing said reads as the end of the same conversation — the player can
+        scroll back over what the candidate claimed and see how it aged.
+
+        Two deliberate departures from `set_candidate`'s styling:
+
+        * The Sentiment Scanner gate (`UPGRADE_CHAT_HOSTILE`) does NOT apply
+          here. That upgrade exists to make hostility legible BEFORE a verdict,
+          when reading tone is the thing the player is paying for. After the
+          verdict there is nothing left to buy an edge on, so the reaction is
+          always shown in full colour.
+        * A multi-line reaction is posted as ONE message, so Space steps
+          through it line by line (the TypewriterLog contract) instead of
+          dumping three lines at once. Only Dark Web and White Hat use that.
+        """
+        reaction = reactions.pick(candidate, verdict)
+        first = candidate.display_name.split()[0]
+        prefix = f"[#6b7785]  ·  [/]  [b]{first}:[/]  "
+        self.post("", list(reaction.lines), color=reaction.color,
+                  style=reaction.style, prefix=prefix)

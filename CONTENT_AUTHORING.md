@@ -2,7 +2,7 @@
 
 Everything the player reads, and which file to open to change it. Written 2026-08-18, verified against `batch-3-UserFeedback-ContentGeneration` @ `9806dd4`.
 
-**The one-line version:** Overseer dialogue is in `overseer.json`. What a day contains is in `day_NN.json`. The rules-overlay reference pages are Python in `rules_content.py`. Everything else is a word bank in `candidate_gen.py` or `tools_bridge.py`.
+**The one-line version:** Overseer dialogue is in `overseer.json`. What a day contains is in `day_NN.json`. The rules-overlay reference pages are Python in `rules_content.py`. Post-verdict candidate reactions are in `reactions.py`. Everything else is a word bank in `candidate_gen.py` or `tools_bridge.py`.
 
 ---
 
@@ -138,7 +138,38 @@ Adding a breach database means editing **two** places, and an import-time assert
 
 ---
 
-## 5. Campaign shape — `gameengine/config.py`
+## 5. Verdict reactions — `gameengine/ui/tui/reactions.py`
+
+The candidate's last word, played in the chat panel during the post-verdict
+reveal window. Keyed `REACTIONS[Archetype][Verdict]` → a list of interchangeable
+variants; one is picked deterministically from the candidate id, so a replayed
+day plays back identically.
+
+| | |
+|---|---|
+| **Key** | Archetype, not tone. Sneaky Bugger and Clumsy Cutie both play "warm" — the whole point of the beat is that one of those masks comes off. |
+| **Verdict** | Each archetype has exactly one correct verdict, so ADMIT/DENY already implies right-call/wrong-call. There is no third axis. |
+| **`valence`** | The **candidate's** register, not the player's score. An admitted Bad Actor is `"positive"` — good for him, disastrous for the player. The border pulse carries the grade; the chat carries the character. Don't make them say the same thing twice. |
+| **Line count** | One line for the seven everyday archetypes — the window is 2–4s. Dark Web and White Hat get multi-line runs; they are the two whose verdict moves alignment, so their reaction is where the moral arc actually speaks. A test enforces this split. |
+| **Text** | Plain, no markup. Lines are typed out a character at a time, so brackets would tear mid-reveal. A test enforces this too. |
+
+**Ground truth stays hidden.** A reaction may admit in character that *something*
+was there ("...huh. you actually read it."). It must never name which
+discrepancy, which tool would have found it, or what the player missed — that
+job belongs to the evidence board's grading, which is scoped to the calls the
+player actually made.
+
+Adding an archetype to the enum without an entry here degrades to a bland
+fallback rather than crashing a shift, so nothing else in the suite would catch
+the gap — `test_verdict_reveal.py::test_every_archetype_has_reactions_for_both_verdicts`
+is what does.
+
+Window timing lives in `config.py`: `VERDICT_REVEAL_ENABLED`,
+`VERDICT_REVEAL_DURATION`, `VERDICT_REVEAL_PULSE_INTERVAL`.
+
+---
+
+## 6. Campaign shape — `gameengine/config.py`
 
 | Knob | Does |
 |---|---|

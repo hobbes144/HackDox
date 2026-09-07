@@ -96,6 +96,12 @@ ContentSwitcher {
 #verdict-panel {
     width: 50%;
     height: 100%;
+    /* Invisible border in the page background colour. The panel has no border
+     * of its own by design, but the verdict-reveal pulse (end of this file)
+     * paints one — reserving the two cells here means the flash only changes a
+     * colour, instead of growing a border and shoving ADMIT/DENY sideways
+     * every time a verdict lands. */
+    border: tall #0b0e10;
 }
 
 #verdict-buttons {
@@ -524,4 +530,73 @@ CreditRevealScreen {
     padding: 2 3;
     background: #0b0714;
     border: double #c084fc;
+}
+
+/* ── Verdict reveal window ────────────────────────────────────────────────
+ *
+ * The border pulse that fires for 2-4s after a verdict (see
+ * IntakeScreen._begin_verdict_reveal). Green = the verdict matched ground
+ * truth, red = it did not.
+ *
+ * THIS BLOCK MUST STAY LAST IN THE FILE. The pulse has to beat the focus
+ * rules it competes with — `.panel:focus-within` (class + pseudo) and
+ * `#evidence-board:focus` (id + pseudo) — and each selector below is written
+ * with matching specificity so the cascade's document-order tie-break is what
+ * decides it. Move these rules up and a focused panel will refuse to flash.
+ *
+ * -bright and -dim are the two halves of the pulse; IntakeScreen alternates
+ * the class on a timer rather than animating, because Textual has no border
+ * transition and a two-state swap reads as a deliberate strobe anyway.
+ */
+
+#dossier.vf-ok-bright,
+#chat.vf-ok-bright,
+#evidence-board.vf-ok-bright,
+#evidence-c0.vf-ok-bright,
+#verdict-panel.vf-ok-bright,
+#evidence-gs.vf-ok-bright,
+#evidence-hc.vf-ok-bright,
+#evidence-lw.vf-ok-bright,
+#evidence-st.vf-ok-bright {
+    border: tall #00ff9f;
+    border-title-color: #00ff9f;
+}
+
+#dossier.vf-ok-dim,
+#chat.vf-ok-dim,
+#evidence-board.vf-ok-dim,
+#evidence-c0.vf-ok-dim,
+#verdict-panel.vf-ok-dim,
+#evidence-gs.vf-ok-dim,
+#evidence-hc.vf-ok-dim,
+#evidence-lw.vf-ok-dim,
+#evidence-st.vf-ok-dim {
+    border: tall #14503a;
+    border-title-color: #14503a;
+}
+
+#dossier.vf-bad-bright,
+#chat.vf-bad-bright,
+#evidence-board.vf-bad-bright,
+#evidence-c0.vf-bad-bright,
+#verdict-panel.vf-bad-bright,
+#evidence-gs.vf-bad-bright,
+#evidence-hc.vf-bad-bright,
+#evidence-lw.vf-bad-bright,
+#evidence-st.vf-bad-bright {
+    border: tall #ff5470;
+    border-title-color: #ff5470;
+}
+
+#dossier.vf-bad-dim,
+#chat.vf-bad-dim,
+#evidence-board.vf-bad-dim,
+#evidence-c0.vf-bad-dim,
+#verdict-panel.vf-bad-dim,
+#evidence-gs.vf-bad-dim,
+#evidence-hc.vf-bad-dim,
+#evidence-lw.vf-bad-dim,
+#evidence-st.vf-bad-dim {
+    border: tall #5c1f2b;
+    border-title-color: #5c1f2b;
 }

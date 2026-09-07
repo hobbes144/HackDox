@@ -68,6 +68,32 @@ class ScoreDelta:
         return self.rules_correct is not None and self.rules_correct != self.correct
 
 
+def credited_flags(
+    player_flags: set[DiscrepancyKind],
+    actual: set[DiscrepancyKind],
+) -> set[DiscrepancyKind]:
+    """The player's flags, with the BREACH_HIT credit rule applied.
+
+    Extracted from `board_accuracy_bonus` so the evidence board's post-verdict
+    grading (`EvidenceState.reveal`) marks exactly the flags this function
+    pays for. Two implementations of "was this flag right?" would eventually
+    disagree, and the player would see a green tick next to a flag that earned
+    nothing — or worse, the reverse.
+
+    See the long note in `board_accuracy_bonus` for why the credit exists: a
+    CROSS_BREACH_REUSE carrier's email really does appear in Ghostscan's breach
+    panel labeled BREACH_HIT, so flagging it is reading the screen correctly,
+    not guessing.
+    """
+    credited = set(player_flags)
+    if (DiscrepancyKind.BREACH_HIT not in actual
+            and DiscrepancyKind.CROSS_BREACH_REUSE in actual
+            and DiscrepancyKind.BREACH_HIT in credited):
+        credited.discard(DiscrepancyKind.BREACH_HIT)
+        credited.add(DiscrepancyKind.CROSS_BREACH_REUSE)
+    return credited
+
+
 def board_accuracy_bonus(
     player_flags: set[DiscrepancyKind],
     candidate: Candidate,
@@ -106,16 +132,11 @@ def board_accuracy_bonus(
     # second required flag, so it can't create a new miss, and flagging both
     # BREACH_HIT and CROSS_BREACH_REUSE nets to the same single true positive
     # (not a false positive for the "redundant" one).
-    credited_flags = set(player_flags)
-    if (DiscrepancyKind.BREACH_HIT not in actual
-            and DiscrepancyKind.CROSS_BREACH_REUSE in actual
-            and DiscrepancyKind.BREACH_HIT in credited_flags):
-        credited_flags.discard(DiscrepancyKind.BREACH_HIT)
-        credited_flags.add(DiscrepancyKind.CROSS_BREACH_REUSE)
+    credited = credited_flags(player_flags, actual)
 
-    true_pos  = len(credited_flags & actual)
-    false_pos = len(credited_flags - actual)
-    false_neg = len(actual - credited_flags)
+    true_pos  = len(credited & actual)
+    false_pos = len(credited - actual)
+    false_neg = len(actual - credited)
     denom = true_pos + false_pos + false_neg
     if denom == 0:
         return config.BOARD_ACCURACY_MAX_BONUS

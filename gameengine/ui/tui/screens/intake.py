@@ -15,6 +15,7 @@ from textual.widgets import Button, ContentSwitcher, Static
 from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
 from gameengine.core.models import Candidate, Day, GameState, ToolName, Verdict
+from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
 from gameengine.ui.tui.screens.rules import RulesScreen
 from gameengine.ui.tui.shared import (
@@ -98,6 +99,14 @@ class IntakeScreen(Screen):
         self._stego_resolved = False   # ▲ signature block printed once
         self._stego_filter   = False   # payload type classified (filter paid)
         self._credit_revealed = False  # HackDox Credit spent on this candidate (issue #25)
+
+        # ── Verdict reveal window ─────────────────────────────────────
+        # Timers, not a coroutine: the window has to be cancellable from
+        # anywhere (NEXT is live immediately, and the player may also be mid
+        # tool-page when they press it), and a handle we can .stop() is a lot
+        # harder to leak than a task we have to remember to await.
+        self._reveal_timers: list = []
+        self._reveal_classes: tuple[str, str] = ("", "")
 
         # ── Widgets ───────────────────────────────────────────────────
         self.status   = StatusHeader(state, day, state.current_slot_index)
@@ -380,6 +389,13 @@ class IntakeScreen(Screen):
         self._refresh_footer()
 
     def _load_current_candidate(self) -> None:
+        # Tear the reveal down BEFORE anything else. A pending pulse timer
+        # firing after the next candidate is on screen would paint the new
+        # dossier red for someone else's mistake, and NEXT is deliberately
+        # live from the first frame of the window — so this path is reached
+        # mid-pulse routinely, not exceptionally.
+        self._end_verdict_reveal()
+
         slot = self._state.current_slot_index
         if slot >= self._day.candidate_count:
             self.app.finish_day()
@@ -532,9 +548,120 @@ class IntakeScreen(Screen):
                                    self._page_index)
         self._refresh_footer()
 
+        # The reveal window fires last, after the economy has already been
+        # settled above. It is presentation only: nothing inside it touches
+        # GameState, so switching it off (config.VERDICT_REVEAL_ENABLED) can
+        # never change what a shift is worth.
+        self._begin_verdict_reveal(verdict, result.correct)
+
         # Site Health deltas are only recorded here — they apply in one
         # batch at end of day (finish_day), so the loss condition can only
         # trip at shift end (#20 rework).
+
+    # ── Verdict reveal window ─────────────────────────────────────────
+
+    # Every panel the pulse paints. The tool-page boards are in the list on
+    # purpose: A/D work from any page, so a player who delivers a verdict while
+    # reading a log should still get the flash rather than a silent page they
+    # have to navigate away from to learn anything.
+    _FLASH_IDS: ClassVar[tuple[str, ...]] = (
+        "dossier", "chat", "evidence-board", "evidence-c0", "verdict-panel",
+        "evidence-gs", "evidence-hc", "evidence-lw", "evidence-st",
+    )
+
+    def _flash_targets(self):
+        """The mounted widgets the pulse applies to, skipping any that aren't
+        on this screen. Queried fresh each time rather than cached: the
+        Candidate-page board swaps between #evidence-board and #evidence-c0 on
+        Tab, so a cached handle would eventually paint a hidden widget."""
+        found = []
+        for wid in self._FLASH_IDS:
+            try:
+                found.append(self.query_one(f"#{wid}"))
+            except Exception:  # noqa: BLE001, S110 -- a panel that isn't mounted is
+                # nothing to flash, not an error.
+                pass
+        return found
+
+    def _begin_verdict_reveal(self, verdict: Verdict, correct: bool) -> None:
+        """Play the post-verdict feedback beat.
+
+        Three channels fire together, each answering a different question:
+
+          chat    — "how did that land on the person?"  (see reactions.py)
+          borders — "was I right?"                      (green/red pulse)
+          board   — "were my individual calls right?"   (EvidenceState.reveal)
+
+        Only the border pulse is time-boxed. The chat reaction and the graded
+        board persist until the next candidate loads, because those are things
+        a player reads at their own pace — a grade that erases itself after
+        three seconds is a grade nobody gets to use.
+
+        Nothing here blocks: NEXT was enabled by the caller before this ran, so
+        the beat is always skippable and the pulse is simply cut short.
+        """
+        if not config.VERDICT_REVEAL_ENABLED or self._candidate is None:
+            return
+        self._end_verdict_reveal()   # never stack two windows
+
+        # ── Channel 1: the candidate answers back ─────────────────────
+        self.chat.post_reaction(self._candidate, verdict)
+
+        # ── Channel 2: grade the board ────────────────────────────────
+        # Scoped to what this player can actually see. A violation behind a
+        # tool they have not unlocked yet is excluded from both the grade and
+        # the unrecorded count — the game never marks someone down for missing
+        # evidence it refused to show them (#33's progressive unlock).
+        actual  = {d.kind for d in self._candidate.truth.discrepancies}
+        visible = {k for _g, k, _l in
+                   rules_content.visible_catalog(self._state.unlocked_tools)}
+        self.evidence_state.reveal(actual, visible)
+        for b in (self.board, self.board_c0, *self._tool_boards):
+            b.repaint()
+
+        # ── Channel 3: pulse the borders ──────────────────────────────
+        bright = "vf-ok-bright" if correct else "vf-bad-bright"
+        dim    = "vf-ok-dim"    if correct else "vf-bad-dim"
+        self._reveal_classes = (bright, dim)
+        targets = self._flash_targets()
+        for w in targets:
+            w.add_class(bright)
+
+        state = {"on": True}
+
+        def _toggle() -> None:
+            state["on"] = not state["on"]
+            add, remove = (bright, dim) if state["on"] else (dim, bright)
+            for widget in self._flash_targets():
+                widget.remove_class(remove)
+                widget.add_class(add)
+
+        self._reveal_timers = [
+            self.set_interval(config.VERDICT_REVEAL_PULSE_INTERVAL, _toggle),
+            self.set_timer(config.VERDICT_REVEAL_DURATION, self._end_verdict_reveal),
+        ]
+
+    def _end_verdict_reveal(self) -> None:
+        """Stop the pulse and strip its classes. Idempotent — it is called on
+        the duration timer, on every candidate load, and on unmount, and any
+        of those can be the one that actually lands first."""
+        for timer in self._reveal_timers:
+            try:
+                timer.stop()
+            except Exception:  # noqa: BLE001, S110 -- an already-expired timer is
+                # exactly the state we want; stopping it again is a no-op.
+                pass
+        self._reveal_timers = []
+        if not any(self._reveal_classes):
+            return
+        for widget in self._flash_targets():
+            widget.remove_class(*self._reveal_classes)
+        self._reveal_classes = ("", "")
+
+    def on_unmount(self) -> None:
+        """The day can end (or the app can quit) mid-pulse — leave no timer
+        holding a reference to a screen that is on its way out."""
+        self._end_verdict_reveal()
 
     def _run_tool(self, tool: ToolName, *, filtered: bool = False) -> None:
         # Progressive unlock (#33): a locked tool is fully inert — the shortcut

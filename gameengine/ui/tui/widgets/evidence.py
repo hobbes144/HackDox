@@ -7,6 +7,7 @@ from textual.containers import VerticalScroll
 from textual.events import Key
 from textual.widgets import Static
 
+from gameengine.core import scoring
 from gameengine.core.models import DiscrepancyKind
 from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.shared import (
@@ -30,6 +31,20 @@ class EvidenceState:
     Only "marked" kinds feed scoring, so the contract is unchanged:
     `get_flags()` still returns the `set[DiscrepancyKind]` the player asserts
     are present.
+
+    ── Post-verdict grading ──────────────────────────────────────────────
+    After a verdict, `reveal()` grades the record against ground truth and the
+    boards repaint with a ✓/✗ beside every call the player actually made.
+    What it deliberately does NOT do is fill in the answer key: a violation the
+    player never touched stays blank, so the board can be read as "how did I
+    do" without ever becoming "here is what was there". The one concession is
+    `unrecorded_count` — a bare number of real violations left untouched, which
+    tells the player they missed something without telling them what.
+
+    Grading is scoped to a `visible` set supplied by the caller: violations
+    from tools the player has not unlocked yet are excluded from both the
+    grade and the count, because a player cannot miss what the game has not
+    shown them (see IntakeScreen._begin_verdict_reveal).
     """
 
     STATES = ("unknown", "marked", "absent")
@@ -37,9 +52,15 @@ class EvidenceState:
     def __init__(self) -> None:
         # kind → "marked" | "absent"; unknown kinds are simply absent from dict.
         self._states: dict[DiscrepancyKind, str] = {}
+        # Grading state — populated by reveal(), wiped by clear()/clear_reveal().
+        self._revealed = False
+        self._actual: set[DiscrepancyKind] = set()
+        self._correct_marks: set[DiscrepancyKind] = set()
+        self._unrecorded = 0
 
     def clear(self) -> None:
         self._states.clear()
+        self.clear_reveal()
 
     def cycle(self, kind: DiscrepancyKind) -> None:
         """Advance a violation through unknown → marked → absent → unknown."""
@@ -60,6 +81,102 @@ class EvidenceState:
     def get_flags(self) -> set[DiscrepancyKind]:
         # Scoring contract: only "marked" kinds count as player-asserted.
         return {k for k, v in self._states.items() if v == "marked"}
+
+    # ── Post-verdict grading ──────────────────────────────────────────
+
+    def reveal(self, actual: set[DiscrepancyKind],
+               visible: set[DiscrepancyKind]) -> None:
+        """Grade this record against ground truth.
+
+        `actual` is the candidate's real discrepancy kinds; `visible` is the
+        catalog the player can currently see (unlocked tools only). Both are
+        intersected, so a locked-tool violation can neither be graded against
+        nor counted as unrecorded.
+
+        Flags are run through `scoring.credited_flags` first — the same
+        transform the HD$ board bonus uses — so a tick on screen and a coin in
+        the pocket always agree.
+        """
+        self._actual = set(actual) & set(visible)
+        marks = self.get_flags()
+        credited = scoring.credited_flags(marks, self._actual)
+        # A mark is a true positive if the violation is really there, OR if the
+        # credit rule swapped it out for one that is: `marks - credited` is
+        # exactly the set of flags that got substituted, and by the rule's own
+        # precondition each substitution lands on a violation in `actual`.
+        self._correct_marks = (marks & self._actual) | (marks - credited)
+        # "Unrecorded" means the player left it at unknown — never touched it.
+        # A violation they explicitly ruled out is already on screen wearing a
+        # ✗, so counting it here would report the same mistake twice.
+        self._unrecorded = len(self._actual - set(self._states))
+        self._revealed = True
+
+    def clear_reveal(self) -> None:
+        """Drop grading and go back to an ungraded board."""
+        self._revealed = False
+        self._actual = set()
+        self._correct_marks = set()
+        self._unrecorded = 0
+
+    @property
+    def revealed(self) -> bool:
+        return self._revealed
+
+    @property
+    def unrecorded_count(self) -> int:
+        """Real violations the player never touched. 0 before reveal()."""
+        return self._unrecorded
+
+    def grade_of(self, kind: DiscrepancyKind) -> str | None:
+        """"correct" | "wrong" for a call the player made; None otherwise.
+
+        None covers both "not graded yet" and "player left this unknown" — in
+        either case the board draws nothing, which is what keeps the answer key
+        off the screen.
+        """
+        if not self._revealed:
+            return None
+        state = self._states.get(kind)
+        if state is None:
+            return None
+        if state == "marked":
+            return "correct" if kind in self._correct_marks else "wrong"
+        # "absent" — the player ruled it out, so they are right iff it is absent.
+        return "wrong" if kind in self._actual else "correct"
+
+
+# ─── Post-verdict grade rendering ────────────────────────────────────────────
+#
+# Shared by both board views so a call reads the same on the Candidate page and
+# on a tool page. Kept module-level (not methods) because they are pure
+# formatting of an already-computed grade — no widget state involved.
+
+GRADE_CORRECT_COLOR = "#00ff9f"
+GRADE_WRONG_COLOR   = "#ff5470"
+
+
+def _grade_badge(grade: str | None) -> str:
+    """Trailing ✓/✗ for one row. Empty string when the row isn't graded."""
+    if grade == "correct":
+        return f"  [{GRADE_CORRECT_COLOR}][b]✓[/][/]"
+    if grade == "wrong":
+        return f"  [{GRADE_WRONG_COLOR}][b]✗[/][/]"
+    return ""
+
+
+def _grade_footer(state: EvidenceState) -> list[str]:
+    """The summary line under a graded board.
+
+    Reports a bare COUNT of violations the player never touched — deliberately
+    not their names, their groups, or their severities. Knowing "there were two
+    more" is feedback; knowing which two is the answer key, and the player is
+    meant to carry that uncertainty into the next shift.
+    """
+    n = state.unrecorded_count
+    if n == 0:
+        return [f"  [{GRADE_CORRECT_COLOR}]Nothing went unrecorded.[/]"]
+    plural = "violation" if n == 1 else "violations"
+    return [f"  [{GRADE_WRONG_COLOR}][b]{n}[/] {plural} went unrecorded.[/]"]
 
 
 class EvidenceBoard(VerticalScroll):
@@ -203,6 +320,10 @@ class EvidenceBoard(VerticalScroll):
             state     = self._state.state_of(kind)
             at_cursor = idx == self._cursor and self._focused
             sev       = _sev_color(kind)
+            # Post-verdict grade badge (reveal window). Empty until reveal(),
+            # and empty forever on rows the player left at "unknown" — a blank
+            # row is how the answer key stays off the board.
+            badge     = _grade_badge(self._state.grade_of(kind))
 
             # 4-column gutter carries the state indicator:
             #   marked  → bold severity bar  (present)
@@ -217,15 +338,18 @@ class EvidenceBoard(VerticalScroll):
 
             if at_cursor:
                 self._cursor_line = len(lines)
-                lines.append(f"{gutter}{INDENT}[reverse] {label} [/]")
+                lines.append(f"{gutter}{INDENT}[reverse] {label} [/]{badge}")
             elif state == "marked":
-                lines.append(f"{gutter}{INDENT}[{sev}][b]{label}[/][/]")
+                lines.append(f"{gutter}{INDENT}[{sev}][b]{label}[/][/]{badge}")
             elif state == "absent":
-                lines.append(f"{gutter}{INDENT}[#6b7785][strike]{label}[/][/]")
+                lines.append(f"{gutter}{INDENT}[#6b7785][strike]{label}[/][/]{badge}")
             else:
                 lines.append(f"{gutter}{INDENT}[{sev}]{label}[/]")
 
-        if not self._focused:
+        if self._state.revealed:
+            lines.append("")
+            lines.extend(_grade_footer(self._state))
+        elif not self._focused:
             lines.append("")
             lines.append("  [dim]Tab to focus · ↑↓ move · Space cycles unknown/marked/absent[/]")
         return "\n".join(lines)
@@ -258,7 +382,12 @@ class EvidenceBoard(VerticalScroll):
         if not recorded:
             lines.append("[dim]No evidence recorded for this candidate.[/]")
             lines.append("")
-            lines.append("[dim]Open a tool page and press [b]Tab[/] to record evidence.[/]")
+            if self._state.revealed:
+                # Nothing to tick, but the count still lands — a player who
+                # flagged nothing on a dirty candidate should feel that.
+                lines.extend(_grade_footer(self._state))
+            else:
+                lines.append("[dim]Open a tool page and press [b]Tab[/] to record evidence.[/]")
             return "\n".join(lines)
 
         current_group = ""
@@ -267,13 +396,16 @@ class EvidenceBoard(VerticalScroll):
                 gcolor, _hk = _GROUP_META.get(group, ("#7dd3c0", ""))
                 lines.append(f"[{gcolor}][b]▎ {group}[/][/]")
                 current_group = group
+            badge = _grade_badge(self._state.grade_of(kind))
             if self._state.state_of(kind) == "marked":
                 sev = _sev_color(kind)
-                lines.append(f"    [{sev}][b]▲ {label}[/][/]")
+                lines.append(f"    [{sev}][b]▲ {label}[/][/]{badge}")
             else:  # absent — ruled out
-                lines.append(f"    [#6b7785]✗ [strike]{label}[/][/]")
+                lines.append(f"    [#6b7785]✗ [strike]{label}[/][/]{badge}")
         n_m = len(marked)
         n_a = len(recorded) - n_m
         lines.append("")
         lines.append(f"[dim]{n_m} marked · {n_a} ruled out[/]")
+        if self._state.revealed:
+            lines.extend(_grade_footer(self._state))
         return "\n".join(lines)
