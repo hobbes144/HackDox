@@ -8,6 +8,7 @@ from textual.events import Key
 from textual.widgets import Static
 
 from gameengine.core import scoring
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import DiscrepancyKind
 from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.shared import (
@@ -290,6 +291,8 @@ class EvidenceBoard(VerticalScroll):
             kind = self._items[self._cursor][1]
             # Cycle: unknown → marked → absent → unknown.
             self._state.cycle(kind)
+            if self._state.state_of(kind) == "marked":
+                sound_manager.play("evidence_flag")
             event.stop()
             self.repaint()  # immediate repaint for this board
             # Repaint other board views so shared state stays in sync.

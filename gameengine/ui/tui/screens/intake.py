@@ -14,6 +14,7 @@ from textual.widgets import Button, ContentSwitcher, Static
 
 from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import Candidate, Day, GameState, ToolName, Verdict
 from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
@@ -347,6 +348,7 @@ class IntakeScreen(Screen):
         on every tool page (replaces the sidebar).
         """
         self._evidence_open = not self._evidence_open
+        sound_manager.play("evidence_open" if self._evidence_open else "evidence_close")
         self._apply_evidence_visibility()
         self._refresh_footer()
         if self._evidence_open:
@@ -363,6 +365,7 @@ class IntakeScreen(Screen):
         # switch, no ⏱, just an Overseer-flavoured note. Candidate page (0) and
         # any already-unlocked tool pass straight through.
         tool = _PAGE_TOOL[index]
+        _page_changed = index != self._page_index
         if tool is not None and tool not in self._state.unlocked_tools:
             self.command_bar.set_response(
                 f"{_PAGE_NAMES[index]} is locked — the Overseer grants it in a "
@@ -374,6 +377,8 @@ class IntakeScreen(Screen):
         if self._stamp_mode and index != 4:
             self._exit_stamp_mode(quiet=True)
         self._page_index = index
+        if _page_changed:
+            sound_manager.play("page_switch")
         self.query_one(ContentSwitcher).current = _PAGE_IDS[index]
         self.status.refresh_status(self._state, self._state.current_slot_index,
                                    self._page_index)
@@ -522,6 +527,12 @@ class IntakeScreen(Screen):
             evaluation=rules_engine.evaluate(self._candidate, self._day),
         )
         compute_after = self._state.compute_hours
+        sound_manager.play({
+            (True,  Verdict.ADMIT): "verdict_correct_accept",
+            (True,  Verdict.DENY):  "verdict_correct_deny",
+            (False, Verdict.ADMIT): "verdict_incorrect_accept",
+            (False, Verdict.DENY):  "verdict_incorrect_deny",
+        }[(result.correct, verdict)])
         self.overseer.record_result(result, compute_before, compute_after)
 
         v_str   = "ADMITTED" if verdict == Verdict.ADMIT else "DENIED"
@@ -620,6 +631,7 @@ class IntakeScreen(Screen):
             b.repaint()
 
         # ── Channel 3: pulse the borders ──────────────────────────────
+        sound_manager.play("pulse_celebration" if correct else "pulse_error")
         bright = "vf-ok-bright" if correct else "vf-bad-bright"
         dim    = "vf-ok-dim"    if correct else "vf-bad-dim"
         self._reveal_classes = (bright, dim)
@@ -702,6 +714,14 @@ class IntakeScreen(Screen):
             self.command_bar.set_response(str(e), error=True)
             return
 
+        sound_manager.play({
+            ToolName.GHOSTSCAN: "tool_run_ghostscan",
+            ToolName.HASHCRACK: "tool_run_hashcrack",
+            ToolName.LOGWATCH:  "tool_run_logwatch",
+        }[tool])
+        if filtered:
+            sound_manager.play("filter_apply")
+
         # Get the right terminal and display the result.
         # Logwatch/Hashcrack replace the terminal content in-place (annotate
         # the shared log). Ghostscan also replaces (issue #28): the filtered
@@ -765,6 +785,7 @@ class IntakeScreen(Screen):
             return
         self._stamp_mode = True
         self.image_st.enter_stamp_mode()
+        sound_manager.play("tool_run_stegotool")
         self.command_bar.set_response(
             f"STAMP MODE — arrows move · Space stamp "
             f"(−{config.STEGO_STAMP_COST} ⏱) · Esc exit")
@@ -788,6 +809,7 @@ class IntakeScreen(Screen):
         res = self.image_st.do_stamp()
         if res is None:
             return
+        sound_manager.play("stego_stamp")
         x, y, _w, _h = self.image_st.stamp_rect
         img   = self.image_st.image
         lines = tools_bridge.stamp_log_lines(img, res, self.image_st.stamps_used, x, y,
@@ -820,6 +842,7 @@ class IntakeScreen(Screen):
             return
         self._state.compute_hours -= cost
         self._stego_filter = True
+        sound_manager.play("filter_apply")
         img = self.image_st.image
         lines = [
             "",
@@ -858,6 +881,7 @@ class IntakeScreen(Screen):
             return
         self._state.hackdox_credits -= 1
         self._credit_revealed = True
+        sound_manager.play("credit_use")
         self.status.refresh_status(self._state, self._state.current_slot_index,
                                    self._page_index)
         self.command_bar.set_response(
@@ -887,10 +911,21 @@ class IntakeScreen(Screen):
     # ── Within-page focus navigation (arrow keys) ─────────────────────────────
     # EvidenceBoard consumes up/down when focused; letters still bubble to bar.
 
-    def action_focus_prev(self)  -> None: self.focus_previous()
-    def action_focus_next(self)  -> None: self.focus_next()
-    def action_focus_left(self)  -> None: self.focus_previous()
-    def action_focus_right(self) -> None: self.focus_next()
+    def action_focus_prev(self)  -> None:
+        sound_manager.play("focus_switch")
+        self.focus_previous()
+
+    def action_focus_next(self)  -> None:
+        sound_manager.play("focus_switch")
+        self.focus_next()
+
+    def action_focus_left(self)  -> None:
+        sound_manager.play("focus_switch")
+        self.focus_previous()
+
+    def action_focus_right(self) -> None:
+        sound_manager.play("focus_switch")
+        self.focus_next()
 
     # ── Debug toggle (immediate binding, dev-only) ────────────────────────────
 

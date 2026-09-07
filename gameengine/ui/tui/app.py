@@ -24,6 +24,7 @@ from textual.app import App
 
 from gameengine import config
 from gameengine.core import persistence, scoring
+from gameengine.core.audio import sound_manager
 from gameengine.core.content_loader import (
     generic_outro_key,
     load_day,
@@ -225,6 +226,7 @@ class HackDoxApp(App):
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
+        sound_manager.play("day_start")
         self._day_start_health = self._state.site_health
         intro = resolve_narrative(
             self._narratives, self._day.overseer_intro_key, "generic_intro")
@@ -233,6 +235,7 @@ class HackDoxApp(App):
 
     def finish_day(self) -> None:
         assert self._state is not None and self._day is not None
+        sound_manager.play("day_end")
         # #20 rework: the day's accumulated Site Health deltas land HERE, in
         # one batch — health never moves mid-shift, so the loss condition is
         # only evaluated from this point on.

@@ -812,3 +812,24 @@ KEY_BINDINGS: dict[str, str] = {
     "help":             "question_mark",
     "quit":             "q",
 }
+
+# ─── Audio ────────────────────────────────────────────────────────────────────
+#
+# Textual has no built-in sound — SFX and (future) background music are
+# played independently through pygame.mixer (see gameengine/core/audio.py).
+# Missing pygame, or no audio device on the host (CI, headless), both
+# degrade to silence automatically; none of this is required to run or
+# test the game. Volumes are 0.0-1.0 and multiply together (an SFX plays at
+# master_volume * sfx_volume).
+
+AUDIO_DIR           = CONTENT_DIR / "audio"
+AUDIO_SFX_DIR       = AUDIO_DIR / "sfx"
+AUDIO_MUSIC_DIR     = AUDIO_DIR / "music"
+# Deliberately NOT part of a campaign save (core/persistence.py) — a volume
+# preference should survive starting a new game or switching save slots.
+AUDIO_SETTINGS_PATH = SAVES_DIR / "audio_settings.json"
+
+SOUND_ENABLED_DEFAULT = True
+DEFAULT_MASTER_VOLUME = 1.0   # overall multiplier on both channels below
+DEFAULT_MUSIC_VOLUME  = 0.6   # background/ambient tracks (no trigger uses this yet)
+DEFAULT_SFX_VOLUME    = 0.8   # one-shot cues — verdicts, tool runs, UI ticks, etc.

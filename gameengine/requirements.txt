@@ -3,6 +3,9 @@ textual>=0.60.0
 rich>=13.7.0
 typer>=0.12.0
 
+# Audio (SFX + future background music; degrades to silence if unavailable)
+pygame>=2.5.0
+
 # Shared deps with the existing tools (gameengine venv is the superset)
 httpx>=0.27.0
 bcrypt>=4.1.0

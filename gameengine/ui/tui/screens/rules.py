@@ -10,6 +10,7 @@ from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, TabbedContent, TabPane
 
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import Day
 from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.shared import (
@@ -109,6 +110,7 @@ class RulesScreen(ModalScreen):
     def on_mount(self) -> None:
         """#50: open on the tab matching the page the player came from, and
         restore that tab's last scroll position."""
+        sound_manager.play("rules_open")
         if self._initial_tab:
             try:
                 self.query_one("#rules-tabs", TabbedContent).active = self._initial_tab
@@ -149,5 +151,6 @@ class RulesScreen(ModalScreen):
         self._restore_scroll()
 
     def action_dismiss_rules(self) -> None:
+        sound_manager.play("rules_close")
         self._remember_scroll()
         self.dismiss()

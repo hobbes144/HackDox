@@ -9,6 +9,7 @@ from textual.message import Message
 from textual.widgets import Static
 
 from gameengine import config
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import Candidate, Verdict
 from gameengine.ui.tui import reactions
 
@@ -175,6 +176,7 @@ class TypewriterLog(Static):
 
     def _on_line_revealed(self) -> None:
         """The current line is fully shown (typed out or fast-completed)."""
+        sound_manager.play("overseer_tick")
         self._stop_timer()
         self._shown = len(self._cur_full)
         if self._is_last_line:

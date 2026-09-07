@@ -131,6 +131,28 @@ ContentSwitcher {
     text-style: bold dim;
 }
 
+/* Arrow-key focus feedback for the verdict row (batch-3 follow-up bugfix,
+ * Nick): ADMIT/DENY/NEXT already sit in the same up/down focus chain as the
+ * panels (see IntakeScreen.action_focus_next/prev), but before this they had
+ * no focus styling of their own — Button's built-in :focus only tweaks
+ * text-style, which the bold set two rules up already forces to the same
+ * value. Landing on a button while arrow-navigating looked identical to
+ * landing on nothing, which read as extra, dead "clicks" between the Chat
+ * and Reference panels. A bright outline (doesn't disturb layout the way a
+ * border swap would against ADMIT/DENY's own success/error borders) plus a
+ * reversed text style matches the #00ff9f focus treatment every other panel
+ * already uses. */
+#verdict-buttons Button:focus,
+#btn-next:focus {
+    outline: heavy #00ff9f;
+    text-style: bold reverse;
+}
+
+#btn-next:disabled:focus {
+    outline: none;
+    text-style: bold dim;
+}
+
 /* Toggleable evidence board on the tool pages (2-5). Hidden until the player
  * presses Tab, then it occupies the left column in place of the condensed
  * dossier/reference sidebar so the tool data on the right stays visible.
