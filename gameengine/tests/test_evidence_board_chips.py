@@ -1067,6 +1067,62 @@ def test_the_verdict_panel_yields_width_while_the_board_is_open():
     asyncio.run(run())
 
 
+def test_the_stego_page_gives_up_its_terminal_and_keeps_the_image():
+    """Stegotool is the one page where the board does not simply stand in for
+    the condensed-dossier sidebar.
+
+    The image viewer is the stamp minigame's canvas and it carries the payload
+    signal directly — the stamp's COLOUR is the tell, which is why the stego
+    reference tells the player to read it themselves. Hiding it to make room for
+    the board would stop them sweeping the image and recording findings at the
+    same time, which is the entire reason the board opens over a tool page. So
+    the findings terminal yields instead.
+
+    Both halves are asserted: the image survives AND the terminal actually goes.
+    Checking only the image would pass with nothing hidden at all and the board
+    squeezed into whatever was left."""
+    async def run():
+        app = _Host()
+        async with app.run_test(size=(120, 32)) as pilot:
+            scr, board = await _open_board(pilot, app, 4)
+            assert scr.image_st.display, "the stamp canvas was hidden"
+            assert scr.image_st.size.width > 0
+            assert not scr.term_st.display, "the findings terminal did not yield"
+            assert not scr.query_one("#st-left").display
+            assert board.size.width > 0 and board._hit, "board has no grid"
+
+            # The canvas still works: stamp mode is reachable and has an image.
+            scr._enter_stamp_mode()
+            await pilot.pause(0.15)
+            assert scr._stamp_mode
+            assert scr.image_st._img is not None
+
+            scr._exit_stamp_mode(quiet=True)
+            scr._toggle_evidence()
+            await pilot.pause(0.3)
+            assert scr.term_st.display, "the terminal never came back"
+            assert scr.query_one("#st-left").display
+            assert scr.image_st.display
+    asyncio.run(run())
+
+
+def test_the_other_tool_pages_keep_their_terminals():
+    """The stego exception is scoped to stego. Ghostscan, Hashcrack and Logwatch
+    are report panels — their terminal IS the evidence, so the board stands in
+    for the sidebar there and nothing else moves."""
+    async def run():
+        for page, term_id in ((1, "terminal-gs"), (2, "terminal-hc"),
+                              (3, "terminal-lw")):
+            app = _Host()
+            async with app.run_test(size=(120, 32)) as pilot:
+                scr, _board = await _open_board(pilot, app, page)
+                term = scr.query_one(f"#{term_id}")
+                assert term.display, (
+                    f"page {page}: {term_id} was hidden — only Stegotool trades "
+                    f"its terminal away")
+    asyncio.run(run())
+
+
 def test_resizing_the_terminal_repacks_the_grid():
     """`on_resize` is guarded on the measured width so a scrollbar appearing
     cannot start an oscillation — the guard has to still let a real resize
