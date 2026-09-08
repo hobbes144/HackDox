@@ -157,12 +157,21 @@ class IntakeScreen(Screen):
                                       home_group=_BOARD_HOME_GROUP["evidence-st"],
                                       unlocked_tools=_unlocked)
         self._tool_boards = (self.board_gs, self.board_hc, self.board_lw, self.board_st)
-        # Each tool board is paired with the sidebar it replaces when shown.
-        self._evidence_pairs = [
-            (self.board_gs, "gs-left"),
-            (self.board_hc, "hc-left"),
-            (self.board_lw, "lw-left"),
-            (self.board_st, "st-left"),
+        # What each tool board hides when it is shown. Usually just the
+        # condensed-dossier sidebar it stands in for.
+        #
+        # Stegotool is the exception: it gives up its findings TERMINAL as well
+        # and keeps the image viewer. The image is the stamp minigame's canvas
+        # and carries the payload signal directly (the stamp's colour is the
+        # tell — see the stego reference), so hiding it to make room would stop
+        # the player sweeping the image and recording what they find at the same
+        # time, which is the whole reason the board opens over a tool page.
+        # Board 60% + image 40% fills the row, so no width override is needed.
+        self._evidence_pairs: list[tuple[EvidenceBoard, tuple[str, ...]]] = [
+            (self.board_gs, ("gs-left",)),
+            (self.board_hc, ("hc-left",)),
+            (self.board_lw, ("lw-left",)),
+            (self.board_st, ("st-left", "terminal-st")),
         ]
         self._evidence_open = False   # shared visibility across tool pages
 
@@ -320,14 +329,25 @@ class IntakeScreen(Screen):
         # Candidate page: editable board replaces the read-only summary.
         self.board_c0.display = self._evidence_open
         self.board.display    = not self._evidence_open
-        for board, side_id in self._evidence_pairs:
+        # The editable board is a 72%-wide button grid; the verdict panel gives
+        # up the difference while it is open (see #verdict-panel.narrow).
+        try:
+            self.query_one("#verdict-panel").set_class(self._evidence_open,
+                                                       "narrow")
+        except Exception:  # noqa: BLE001, S110 -- called from on_mount before the
+            # page is composed on some paths; the class is applied on the next
+            # toggle, and the 50/50 default is the correct starting state.
+            pass
+        for board, hidden_ids in self._evidence_pairs:
             board.display = self._evidence_open
-            try:
-                self.query_one(f"#{side_id}").display = not self._evidence_open
-            except Exception:  # noqa: BLE001, S110 -- side panel may not be mounted on
-                # every page (only tool pages have one); skipping the toggle is the
-                # correct no-op, not an error.
-                pass
+            for widget_id in hidden_ids:
+                try:
+                    self.query_one(f"#{widget_id}").display = (
+                        not self._evidence_open)
+                except Exception:  # noqa: BLE001, S110 -- the panel may not be mounted
+                    # on every page (only tool pages have one); skipping the
+                    # toggle is the correct no-op, not an error.
+                    pass
 
     def _current_tool_board(self) -> EvidenceBoard | None:
         if 1 <= self._page_index <= 4:

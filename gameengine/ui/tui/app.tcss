@@ -104,6 +104,13 @@ ContentSwitcher {
     border: tall #0b0e10;
 }
 
+/* Applied by IntakeScreen._apply_evidence_visibility while the editable board
+ * is showing. A width swap rather than two panels, so ADMIT/DENY/NEXT keep the
+ * same identity and the same focus order either way. */
+#verdict-panel.narrow {
+    width: 28%;
+}
+
 #verdict-buttons {
     width: 1fr;
     height: 100%;
@@ -153,14 +160,22 @@ ContentSwitcher {
     border-title-color: #00ff9f;
 }
 
-/* Wider than the sidebars they replace so the 25-item board has room to
- * breathe — it is the player's primary point of contact with the game. */
-#evidence-gs { width: 34%; }
-#evidence-hc, #evidence-lw { width: 36%; }
-#evidence-st { width: 32%; }
-/* Candidate/Dossier-page editable board shares the mid row 50/50 with the
- * verdict buttons (batch-3 follow-up) rather than filling it. */
-#evidence-c0 { width: 50%; }
+/* The board is the player's primary point of contact with the game, and since
+ * it became a grid of clickable buttons it needs real width: three buttons side
+ * by side under a category name, with the violation names legible. At the old
+ * sidebar widths (32-36%, i.e. 27-40 cells on a 100-120 column terminal) three
+ * buttons could not fit at all, and the layout collapsed each category into a
+ * vertical stack — which destroyed the grouping the row exists to show.
+ *
+ * These widths only apply WHILE THE BOARD IS OPEN. Tab swaps it in for the
+ * condensed-dossier sidebar, so the tool's own output is narrower only during
+ * triage; the moment the board is closed the tool gets its full width back. */
+#evidence-gs, #evidence-hc, #evidence-lw, #evidence-st { width: 60%; }
+/* Candidate/Dossier page: the editable board takes most of the mid row while
+ * open. The verdict panel narrows to match (#verdict-panel.narrow below) —
+ * ADMIT/DENY/NEXT stay comfortably legible at 28%, and the read-only summary
+ * board still shares the row 50/50 when the editable one is closed. */
+#evidence-c0 { width: 72%; }
 
 /* Evidence board embedded in the Rules overlay tab — always visible in-tab. */
 .rules-evidence {
@@ -181,6 +196,30 @@ ContentSwitcher {
 .rules-evidence:focus {
     border: tall #00ff9f;
     border-title-color: #00ff9f;
+}
+
+/* ── Evidence board chip grid ────────────────────────────────────────── */
+/* The board packs its violation chips into as many columns as the measured
+ * content width allows (EvidenceBoard.chip_columns), so the two properties
+ * below are load-bearing rather than cosmetic.
+ *
+ * width: 100% — the inner Static must span the panel, or a chip's painted
+ * background stops short of the cell the click hit-test maps to.
+ *
+ * scrollbar-gutter: stable — reserve the scrollbar's cells whether or not it
+ * is showing. Without it the board has two content widths: one while it fits
+ * and one once it overflows. Since the column count is computed FROM that
+ * width, a repaint that pushes the content past the fold would narrow the
+ * panel, re-pack the grid, possibly shorten it back under the fold, and
+ * oscillate. EvidenceBoard.on_resize also guards on the measured width, but
+ * this removes the cause instead of damping it. */
+.evidence-content {
+    width: 100%;
+    height: auto;
+}
+
+#evidence-board, #evidence-c0, .tool-evidence, .rules-evidence {
+    scrollbar-gutter: stable;
 }
 
 #overseer-side  { width: 40%; }
