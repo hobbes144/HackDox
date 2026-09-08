@@ -167,6 +167,173 @@ def visible_catalog(
     return items
 
 
+# ─── Evidence-board clusters — unnamed groupings INSIDE a group ─────────────
+#
+# The Evidence Board lays its violations out as clickable chips. A flat list of
+# 27 chips under five headers is still a wall, so each group is subdivided into
+# small clusters of violations that tend to travel together, and the board
+# separates them with whitespace alone.
+#
+# The clusters are NAMED, and that reverses an earlier call. They shipped
+# unnamed first, on the reasoning that a caption would add a competing header
+# level to a panel already carrying a group header, a severity colour, a state
+# marker and a post-verdict grade. Playtesting said otherwise: without names,
+# players read the whitespace as decoration and learned nothing about how the
+# violations relate, so they fell back to walking the whole list with the arrow
+# keys — the exact behaviour the grouping existed to replace. A name is a claim,
+# but an unlabelled grouping turned out to be a claim nobody could read.
+#
+# The names are still not a taxonomy the game scores against, and the
+# associations stay generous: THREAT_FORUM_MATCH sits with BREACH_HIT under
+# "Unsafe Account" because both say "this person has already surfaced somewhere
+# they shouldn't have", not because the engine relates them.
+#
+# Ordering contract: clusters are declared in the order they render, and their
+# groups must appear in GROUP_ORDER order and contiguously — the board draws
+# one header per group and would print a group twice otherwise. The guards
+# below enforce that, plus exactly-once coverage of every catalogued kind, in
+# the same spirit as the #56 catalogue guards above.
+
+VIOLATION_CLUSTERS: list[
+    tuple[str, str, str, tuple[DiscrepancyKind, ...]]
+] = [
+    # (group, cluster id, PLAYER-FACING subcategory name, kinds)
+    #
+    # DOSSIER — free evidence, read straight off the intake form and the chat.
+    ("DOSSIER",    "dossier-identity", "Identity Confirmation", (
+        DiscrepancyKind.AFFILIATION_NOT_STATED,
+        DiscrepancyKind.DISPOSABLE_EMAIL)),
+    ("DOSSIER",    "dossier-password", "Password Security", (
+        DiscrepancyKind.WEAK_ENCRYPTION,
+        DiscrepancyKind.UNSALTED_STORAGE)),
+    ("DOSSIER",    "dossier-personal", "Personal", (
+        DiscrepancyKind.HOSTILE_CHAT,)),
+    # OSINT / Ghostscan — the claim, the fabrication, the trace left elsewhere.
+    ("OSINT",      "osint-association", "Association Confirmation", (
+        DiscrepancyKind.MISSING_PUBLIC_PROFILE,
+        DiscrepancyKind.AFFILIATION_UNLISTED,
+        DiscrepancyKind.AFFILIATION_MISMATCH)),
+    ("OSINT",      "osint-false-identity", "False Identity", (
+        DiscrepancyKind.TYPOSQUAT_HANDLE,
+        DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,
+        DiscrepancyKind.BURNER_IDENTITY)),
+    ("OSINT",      "osint-unsafe-account", "Unsafe Account", (
+        DiscrepancyKind.BREACH_HIT,
+        DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
+        DiscrepancyKind.THREAT_FORUM_MATCH)),
+    # CREDENTIAL / Hashcrack.
+    ("CREDENTIAL", "cred-exposure", "Credential Exposure", (
+        DiscrepancyKind.WEAK_CREDENTIAL,
+        DiscrepancyKind.CROSS_BREACH_REUSE,
+        DiscrepancyKind.LEAKED_PASSWORD)),
+    # FORENSICS / Logwatch — when, where from, and the shape of the attack.
+    ("FORENSICS",  "forensics-timing", "Access Timing", (
+        DiscrepancyKind.AFTER_HOURS_ACCESS,
+        DiscrepancyKind.IMPOSSIBLE_TRAVEL)),
+    ("FORENSICS",  "forensics-source", "Source Verification", (
+        DiscrepancyKind.CLAIMED_IP_MISMATCH,
+        DiscrepancyKind.INSIDER_BEHAVIOR)),
+    ("FORENSICS",  "forensics-attack", "Attack Signature", (
+        DiscrepancyKind.BRUTE_FORCE_IN_LOG,
+        DiscrepancyKind.CREDENTIAL_STUFFING,
+        DiscrepancyKind.LOW_AND_SLOW)),
+    # STEGO / Stegotool.
+    ("STEGO",      "stego-payload", "Payload Detection", (
+        DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
+        DiscrepancyKind.COVERT_C2_CHANNEL,
+        DiscrepancyKind.ENCRYPTED_PAYLOAD)),
+]
+
+# ── Cluster integrity guards ────────────────────────────────────────────────
+# Same failure mode the #56 catalogue guards protect against: a kind that is
+# missing here would silently vanish from the board (the board renders clusters,
+# not the flat catalog), and a kind listed twice would give the player two chips
+# that toggle the same evidence. Both are invisible at a glance on a 27-row
+# panel, so they are import-time errors rather than something to notice in play.
+
+_CLUSTER_OF: dict[DiscrepancyKind, str] = {}
+for _grp, _cid, _clabel, _kinds in VIOLATION_CLUSTERS:
+    if not _kinds:
+        raise AssertionError(f"empty evidence cluster: {_cid!r}")
+    for _k in _kinds:
+        if _k in _CLUSTER_OF:
+            raise AssertionError(
+                f"{_k.name} appears in two evidence clusters: "
+                f"{_CLUSTER_OF[_k]!r} and {_cid!r}")
+        _CLUSTER_OF[_k] = _cid
+
+_UNCLUSTERED = sorted(k.name for _g, k, _lbl in VIOLATION_CATALOG
+                      if k not in _CLUSTER_OF)
+if _UNCLUSTERED:
+    raise AssertionError(
+        f"DiscrepancyKinds missing from VIOLATION_CLUSTERS: {_UNCLUSTERED}. "
+        f"A kind absent here never renders on the Evidence Board at all.")
+
+_CLUSTER_IDS = [cid for _g, cid, _l, _k in VIOLATION_CLUSTERS]
+if len(set(_CLUSTER_IDS)) != len(_CLUSTER_IDS):
+    raise AssertionError("duplicate evidence cluster ids")
+
+# A cluster's declared group must match the group its kinds are catalogued
+# under, or the board would draw a chip beneath the wrong header — and, because
+# progressive unlock filters by the kind's revealing tool, under a header that
+# can be locked while the chip is not.
+_GROUP_OF: dict[DiscrepancyKind, str] = {k: g for g, k, _lbl in VIOLATION_CATALOG}
+for _grp, _cid, _clabel, _kinds in VIOLATION_CLUSTERS:
+    if not _clabel.strip():
+        raise AssertionError(f"evidence cluster {_cid!r} has no player-facing name")
+    _wrong = sorted(k.name for k in _kinds if _GROUP_OF[k] != _grp)
+    if _wrong:
+        raise AssertionError(
+            f"cluster {_cid!r} is declared under {_grp} but catalogues "
+            f"{_wrong} elsewhere")
+
+# Groups must appear in GROUP_ORDER order and contiguously — the board emits
+# one header per group as it walks this list and would repeat one otherwise.
+_CLUSTER_GROUP_RUNS = [g for i, (g, _c, _l, _k) in enumerate(VIOLATION_CLUSTERS)
+                       if i == 0 or VIOLATION_CLUSTERS[i - 1][0] != g]
+if _CLUSTER_GROUP_RUNS != [g for g in GROUP_ORDER if g in _CLUSTER_GROUP_RUNS]:
+    raise AssertionError(
+        f"VIOLATION_CLUSTERS group runs {_CLUSTER_GROUP_RUNS} are not "
+        f"GROUP_ORDER {GROUP_ORDER} in order and contiguous")
+
+
+def clustered_catalog(
+    unlocked_tools: set[str] | None,
+) -> list[tuple[str, str, str, list[tuple[str, DiscrepancyKind, str]]]]:
+    """`(group, cluster_id, subcategory name, items)` for the board's layout.
+
+    Same filtering rule as `visible_catalog` — a kind whose revealing tool is
+    still locked is dropped, because a candidate cannot carry it yet.
+
+    Order inside a cluster is AUTHORED, not sorted. These are hand-laid rows
+    that Nick arranged by hand, and re-sorting them would quietly rearrange a
+    layout that was chosen deliberately. The authored rows happen to run
+    calm-to-alarming today, and a test asserts they still do — so a future
+    re-tier (#51 and #53 have both moved a violation's severity before) fails
+    loudly and asks for the row to be re-laid, instead of silently reshuffling
+    the board out from under the player's spatial memory.
+
+    Clusters that filter down to nothing are omitted entirely rather than
+    rendered as a gap, so an early-campaign board has no mystery whitespace
+    where a locked violation used to sit.
+
+    This is a SECOND ordering of the same catalog, not a replacement:
+    `visible_catalog` (group, then severity) still drives the Rules-page tables
+    and the flagged-evidence summary strip. Both derive from VIOLATION_CATALOG
+    and both filter through `_tool_unlocked`, so they can disagree about order
+    but never about membership.
+    """
+    catalog = {k: (g, lbl) for g, k, lbl in VIOLATION_CATALOG}
+    out: list[tuple[str, str, str, list[tuple[str, DiscrepancyKind, str]]]] = []
+    for group, cluster_id, cluster_label, kinds in VIOLATION_CLUSTERS:
+        items = [(group, k, catalog[k][1]) for k in kinds
+                 if _tool_unlocked(_TOOL.get(k), unlocked_tools)]
+        if not items:
+            continue
+        out.append((group, cluster_id, cluster_label, items))
+    return out
+
+
 def _locked_tab_text(tool: ToolName, title: str) -> str:
     """Placeholder shown in place of a tool tab's full reference material
     while that tool is still locked — reuses #33's ⊘ locked-tool language."""
