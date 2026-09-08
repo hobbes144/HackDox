@@ -46,7 +46,10 @@ from gameengine.ui.tui.widgets.evidence import (
     _CAP_LEFT,
     _CHIP_CHROME,
     _CHIP_GAP,
+    _CHIP_HEIGHT,
     _CHIP_MAX_COLS,
+    _EDGE_BOT,
+    _EDGE_TOP,
     CHIP_GLYPHS,
     chip_row,
 )
@@ -302,7 +305,7 @@ def test_no_rendered_line_overflows_the_panel_at_any_size():
                                                 summary=summary, state=st)
                 async with app.run_test(size=(width, height)) as pilot:
                     await pilot.pause(0.2)
-                    room = board.content_size.width
+                    room = board._content.region.width
                     for focused in (True, False):
                         if summary and focused:
                             continue          # can_focus is False there
@@ -335,50 +338,116 @@ def test_no_rendered_line_overflows_the_panel_at_any_size():
 def test_every_hit_span_lands_on_the_chip_it_claims():
     """The heart of it. `on_click` recomputes the layout arithmetic instead of
     measuring the painted text, so map and paint are two implementations of one
-    layout and can drift. This slices the PAINTED line at the span the map
-    reports and demands the label be inside it — an assertion the map cannot
-    satisfy on its own."""
+    layout and can drift. This slices the PAINTED lines at the span the map
+    reports and demands the chip really be there — an assertion the map cannot
+    satisfy on its own.
+
+    A chip is a BLOCK of `_CHIP_HEIGHT` rows now, so the check is per block:
+    contiguous rows, the label on the middle one, half-block edges above and
+    below. Every row of the block is mapped, because the whole point of a
+    taller chip is that all of it is a click target."""
     async def run():
         for width in (80, 120, 200):
             _st, board, app = await _mounted((width, 45))
             async with app.run_test(size=(width, 45)):
                 await asyncio.sleep(0.2)
                 lines = _lines(board)
-                seen = set()
+                rows_of: dict[int, list[int]] = {}
+                spans_of: dict[int, tuple[int, int]] = {}
                 assert board._hit, "no chips were mapped at all"
                 for row, spans in board._hit.items():
                     for start, end, index in spans:
-                        label = board._items[index][2]
-                        painted = lines[row][start:end]
-                        # Anatomy, in cells: cap · marker · space · label …
-                        # Asserted by POSITION, not by substring. "the label is
-                        # somewhere in this slice" is satisfied by a span off by
-                        # a cell or two, because a chip is padded on both sides
-                        # — and off-by-a-cell is the entire bug class this test
-                        # exists for.
-                        #
-                        # The expected text is derived from the span's own width
-                        # so a genuinely narrow panel (which ellipsises the
-                        # longest label) is tolerated, while the POSITION stays
-                        # strict. Only the chrome constant is shared with the
-                        # renderer, and that constant is what is under test.
-                        label_w = (end - start) - _CHIP_CHROME
-                        want = (label if len(label) <= label_w
-                                else label[:label_w - 1] + "…")
-                        assert len(painted) == end - start
-                        assert painted[0] == _CAP_LEFT, (
-                            f"width {width}: span for item {index} does not "
-                            f"start on a chip cap: {painted!r}")
-                        assert painted[1] in "○▲✗", (
-                            f"width {width}: no state marker after the cap of "
-                            f"item {index}: {painted!r}")
-                        assert painted[3:3 + len(want)] == want, (
-                            f"width {width}: map puts item {index} "
-                            f"({label!r}) at row {row} cols {start}-{end}, "
-                            f"but the paint there is {painted!r}")
-                        seen.add(index)
-                assert seen == set(range(len(board._items))), (
+                        rows_of.setdefault(index, []).append(row)
+                        spans_of[index] = (start, end)
+
+                assert set(rows_of) == set(range(len(board._items))), (
                     "some chips are painted but unmapped, or vice versa")
+
+                for index, rows in rows_of.items():
+                    rows.sort()
+                    start, end = spans_of[index]
+                    label = board._items[index][2]
+                    assert len(rows) == _CHIP_HEIGHT, (
+                        f"item {index} is mapped on {len(rows)} rows, "
+                        f"expected {_CHIP_HEIGHT}")
+                    assert rows == list(range(rows[0], rows[0] + len(rows))), (
+                        f"item {index}'s block is not contiguous: {rows}")
+
+                    label_row = rows[(_CHIP_HEIGHT - 1) // 2]
+                    painted = lines[label_row][start:end]
+                    # Anatomy, in cells: cap · marker · space · label …
+                    # Asserted by POSITION, not by substring. "the label is
+                    # somewhere in this slice" is satisfied by a span off by a
+                    # cell or two, because a chip is padded on both sides — and
+                    # off-by-a-cell is the entire bug class this test exists for.
+                    #
+                    # Expected text is derived from the span's own width, so a
+                    # genuinely narrow panel (which ellipsises the longest
+                    # label) is tolerated while the POSITION stays strict.
+                    label_w = (end - start) - _CHIP_CHROME
+                    want = (label if len(label) <= label_w
+                            else label[:label_w - 1] + "…")
+                    assert len(painted) == end - start
+                    assert painted[0] == _CAP_LEFT, (
+                        f"width {width}: span for item {index} does not start "
+                        f"on a chip cap: {painted!r}")
+                    assert painted[1] in "○▲✗", (
+                        f"width {width}: no state marker after the cap of item "
+                        f"{index}: {painted!r}")
+                    assert painted[3:3 + len(want)] == want, (
+                        f"width {width}: map puts item {index} ({label!r}) at "
+                        f"row {label_row} cols {start}-{end}, but the paint "
+                        f"there is {painted!r}")
+
+                    for r in rows:
+                        if r == label_row:
+                            continue
+                        edge = _EDGE_TOP if r < label_row else _EDGE_BOT
+                        body = lines[r][start:end - 1]
+                        assert set(body) == {edge}, (
+                            f"width {width}: item {index} row {r} should be a "
+                            f"{edge!r} edge, painted {lines[r][start:end]!r}")
+    asyncio.run(run())
+
+
+def test_every_row_of_a_chip_block_is_clickable():
+    """A three-row button whose middle row is the only live one would be a
+    worse target than the single row it replaced."""
+    async def run():
+        st, board, app = await _mounted((200, 45))
+        async with app.run_test(size=(200, 45)) as pilot:
+            await pilot.pause(0.2)
+            rows = sorted(r for r, spans in board._hit.items()
+                          if any(i == 0 for _s, _e, i in spans))
+            assert len(rows) == _CHIP_HEIGHT
+            kind = board._items[0][1]
+            for n, row in enumerate(rows):
+                st.clear()
+                start, _end, _i = min(board._hit[row])
+                await _click_content(pilot, board, start + 3, row)
+                assert st.get_flags() == {kind}, (
+                    f"row {n} of the block did not toggle the chip")
+    asyncio.run(run())
+
+
+def test_no_chip_is_laid_out_past_the_edge_of_the_widget_that_paints_it():
+    """The container's `content_size` and the inner Static's own region differ
+    by a cell (the stable scrollbar gutter comes off one and not the other).
+    Sizing the grid from the wrong one put the rightmost chip's last column
+    outside the Static: painted nowhere, still claimed by the hit map, and so a
+    dead strip down the right edge that quietly ate clicks."""
+    async def run():
+        for size in ((80, 30), (120, 40), (200, 45)):
+            _st, board, app = await _mounted(size)
+            async with app.run_test(size=size):
+                await asyncio.sleep(0.25)
+                paint_w = board._content.region.width
+                assert paint_w > 0
+                for row, spans in board._hit.items():
+                    for _start, end, index in spans:
+                        assert end <= paint_w, (
+                            f"{size}: item {index} on row {row} is mapped out "
+                            f"to column {end}, past the {paint_w}-cell Static")
     asyncio.run(run())
 
 
@@ -422,9 +491,25 @@ def test_hit_test_returns_nothing_for_headers_gaps_and_the_left_margin():
 async def _click_content(pilot, board, x: int, y: int) -> None:
     """Click content cell (x, y), translated through the same screen-space
     relationship `_mouse_to_cell` inverts."""
+    await _click_offset(pilot, board, _pointer_at(board, x, y))
+
+
+def _pointer_at(board, x: int, y: int) -> tuple[int, int]:
+    """Board-relative offset for content cell (x, y), resolved ONCE.
+
+    Anything clicking more than once has to hold this fixed. A real pointer
+    does not move between clicks, so if the board scrolls underneath it the
+    second click lands somewhere else — which is precisely the bug
+    `test_a_chip_low_in_a_scrolling_board_cycles_all_the_way_round` exists to
+    catch. Re-deriving the offset from `board._content.region` before every
+    click silently follows the scroll and makes that test unfailable.
+    """
     region = board._content.region
-    await pilot.click(board, offset=(region.x - board.region.x + x,
-                                     region.y - board.region.y + y))
+    return (region.x - board.region.x + x, region.y - board.region.y + y)
+
+
+async def _click_offset(pilot, board, offset: tuple[int, int]) -> None:
+    await pilot.click(board, offset=offset)
     await pilot.pause(0.1)
 
 
@@ -515,7 +600,11 @@ def test_click_and_space_share_one_cycle():
         st, board, app = await _mounted((160, 45))
         async with app.run_test(size=(160, 45)) as pilot:
             await pilot.pause(0.2)
-            row = min(board._hit)
+            region = board._content.region
+            visible = [r for r in sorted(board._hit)
+                       if 0 <= region.y - board.region.y + r
+                       < board.region.height - 1]
+            row = visible[len(visible) // 2]
             start, _end, index = min(board._hit[row])
             kind = board._items[index][1]
             seen = []
@@ -544,6 +633,113 @@ def test_a_click_moves_the_keyboard_cursor_to_what_was_clicked():
             await pilot.pause(0.1)
             assert st.state_of(kind) == "absent", (
                 "Space after a click moved a different chip")
+    asyncio.run(run())
+
+
+def test_clicking_never_scrolls_the_board():
+    """The regression that made this feel broken to play.
+
+    `repaint()` used to scroll the cursor back into view unconditionally, and a
+    click sets the cursor — so clicking a chip two thirds down a scrolling
+    board yanked it to the top, and the player's NEXT click landed on whatever
+    slid under the pointer. The symptom read as "chips can only be marked,
+    never crossed out", which looks like a broken state machine and is really a
+    broken scroll. Scroll-to-cursor now belongs to ↑↓ alone."""
+    async def run():
+        st, board, app = await _mounted((120, 18))
+        async with app.run_test(size=(120, 18)) as pilot:
+            await pilot.pause(0.25)
+            board.focus()
+            await pilot.pause(0.1)
+            board.scroll_to(y=10, animate=False)
+            await pilot.pause(0.3)
+            before = board.scroll_offset.y
+            assert before > 0, "the board did not actually scroll"
+
+            region = board._content.region
+            visible = [r for r in sorted(board._hit)
+                       if 0 <= region.y - board.region.y + r
+                       < board.region.height - 1]
+            assert visible, "no mapped row is on screen"
+            row = visible[-1]                      # deliberately near the bottom
+            start, _end, index = min(board._hit[row])
+            kind = board._items[index][1]
+
+            await _click_content(pilot, board, start + 3, row)
+            assert board.scroll_offset.y == before, (
+                f"clicking scrolled the board {before} -> "
+                f"{board.scroll_offset.y}; the next click would land on a "
+                f"different chip")
+            assert st.state_of(kind) == "marked"
+    asyncio.run(run())
+
+
+def test_arrow_keys_still_pull_the_cursor_back_into_view():
+    """The other half of the same knob: ↑↓ must still follow the cursor, or it
+    walks off the bottom of the panel and the player loses it."""
+    async def run():
+        _st, board, app = await _mounted((120, 18))
+        async with app.run_test(size=(120, 18)) as pilot:
+            await pilot.pause(0.25)
+            board.focus()
+            await pilot.pause(0.1)
+            before = board.scroll_offset.y
+            for _ in range(14):
+                await pilot.press("down")
+            await pilot.pause(0.25)
+            assert board.scroll_offset.y > before, (
+                "walking the cursor down never scrolled the board")
+    asyncio.run(run())
+
+
+def test_a_chip_low_in_a_scrolling_board_cycles_all_the_way_round():
+    """The same bug from the player's seat, in the real screen at a terminal
+    size where the board genuinely has to scroll: click one spot three times
+    and that chip must go marked -> ruled out -> clear. Before the fix the
+    second and third clicks landed on whatever the board had scrolled under the
+    pointer, so it only ever marked things.
+
+    The setup is deliberate rather than incidental. The yank was proportional
+    to how far the clicked chip sat below the top of the viewport, so a chip
+    near the fold moved the board barely at all and the bug hid completely. A
+    first version of this test picked whatever row happened to be last and
+    passed against the broken code — it is pinned to a chip at the BOTTOM of
+    the visible area for that reason.
+    """
+    async def run():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = set(ALL_TOOLS)
+        app = _Host()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.4)
+            scr = app.screen
+            scr._goto_page(1)                     # Ghostscan
+            await pilot.pause(0.2)
+            scr._toggle_evidence()
+            await pilot.pause(0.3)
+            board = scr.board_gs
+            board.scroll_to(y=12, animate=False)
+            await pilot.pause(0.3)
+            top = board.scroll_offset.y
+            assert top > 0, "the board did not actually scroll"
+
+            fold = top + board.content_size.height - 2
+            rows = [r for r in sorted(board._hit) if top <= r <= fold]
+            assert rows, "no mapped row is inside the viewport"
+            row = rows[-1]                        # as low as the fold allows
+            start, _end, index = min(board._hit[row])
+            kind = board._items[index][1]
+
+            seen = []
+            pointer = _pointer_at(board, start + 3, row)   # fixed, see helper
+            for _ in range(3):
+                await _click_offset(pilot, board, pointer)
+                seen.append(scr.evidence_state.state_of(kind))
+            assert seen == ["marked", "absent", "unknown"], (
+                f"{kind.name} went {seen} — a click is landing on the wrong "
+                f"chip (scroll {top} -> {board.scroll_offset.y})")
     asyncio.run(run())
 
 
@@ -643,13 +839,21 @@ def test_grades_reach_the_chips_and_only_the_touched_ones():
             lines = _lines(board)
             hit = board._hit
             def row_of(kind):
+                """The chip's LABEL line — the middle row of its block, which
+                is where the grade badge is drawn."""
                 idx = next(i for i, (_g, k, _l) in enumerate(board._items)
                            if k == kind)
+                rows, span = [], None
                 for row, spans in hit.items():
                     for start, end, index in spans:
                         if index == idx:
-                            return lines[row][start:end]
-                raise AssertionError(f"{kind.name} was not painted")
+                            rows.append(row)
+                            span = (start, end)
+                if span is None:
+                    raise AssertionError(f"{kind.name} was not painted")
+                rows.sort()
+                label_row = rows[(_CHIP_HEIGHT - 1) // 2]
+                return lines[label_row][span[0]:span[1]]
             assert "✓" in row_of(DiscrepancyKind.BREACH_HIT)
             assert "✗" in row_of(DiscrepancyKind.HOSTILE_CHAT)
             untouched = row_of(DiscrepancyKind.LEAKED_PASSWORD)
@@ -685,7 +889,7 @@ def test_every_board_fits_its_page_at_the_sizes_the_game_is_played_at():
                          scr.board_lw, scr.board_st)):
                     scr._goto_page(page)
                     await pilot.pause(0.2)
-                    room = board.content_size.width
+                    room = board._content.region.width
                     assert room > 0, f"{size} page {page}: board never sized"
                     for i, line in enumerate(_lines(board)):
                         assert len(line) <= room, (

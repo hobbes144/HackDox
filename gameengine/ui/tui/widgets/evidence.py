@@ -230,6 +230,7 @@ def _grade_footer(state: EvidenceState, width: int = 80) -> list[str]:
 # and grading code intact, and let the column count fall out of the measured
 # width instead of being guessed at authoring time.
 
+_CHIP_HEIGHT   = 3    # rows one chip occupies; the label sits in the middle
 _CHIP_GAP      = 2    # blank cells between two chips on the same row
 _CHIP_MAX_COLS = 4    # a cluster bigger than this always stacks
 _BOARD_INDENT  = 2    # left margin, matches the group headers' own indent
@@ -280,6 +281,8 @@ CHIP_CURSOR      = "#00ff9f"   # same accent as the focused-panel border
 
 _CAP_LEFT     = "▐"
 _CAP_RIGHT    = "▌"
+_EDGE_TOP     = "▄"   # lower half block: joins downward onto the label row
+_EDGE_BOT     = "▀"   # upper half block: joins upward onto the label row
 _MARK_UNKNOWN = "○"
 _MARK_MARKED  = "▲"
 _MARK_ABSENT  = "✗"
@@ -289,7 +292,7 @@ _MARK_ABSENT  = "✗"
 # than by measuring the painted text. A double-width glyph would shift every
 # chip to its right and the board would toggle the wrong violation, with
 # nothing on screen looking wrong. A test asserts this set.
-CHIP_GLYPHS = (_CAP_LEFT, _CAP_RIGHT,
+CHIP_GLYPHS = (_CAP_LEFT, _CAP_RIGHT, _EDGE_TOP, _EDGE_BOT,
                _MARK_UNKNOWN, _MARK_MARKED, _MARK_ABSENT, "✓", "✗")
 
 
@@ -463,10 +466,24 @@ class EvidenceBoard(VerticalScroll):
 
     # ── State management ──────────────────────────────────────────────
 
-    def repaint(self) -> None:
-        """Rebuild the inner Static and keep the cursor row in view."""
+    def repaint(self, reveal_cursor: bool = False) -> None:
+        """Rebuild the inner Static; optionally scroll the cursor back into view.
+
+        `reveal_cursor` is OFF by default and belongs to the KEYBOARD alone.
+        When ↑↓ walk the cursor off the bottom of the panel the board has to
+        follow it, but every other repaint must leave the scroll position
+        exactly where the player put it.
+
+        This was a real bug, and a nasty one to read from the outside: a click
+        sets the cursor, so an unconditional scroll-to-cursor meant every click
+        yanked the board under the pointer. Mark a chip two thirds down a
+        scrolling board and it jumped up to the top — so the player's second
+        click landed on a DIFFERENT chip and marked that instead. The visible
+        symptom was "chips can only be marked, never crossed out or cleared",
+        which looks like a broken state machine and is really a broken scroll.
+        """
         self._content.update(self._render_text())
-        if not self._summary and self._focused:
+        if reveal_cursor and not self._summary and self._focused:
             try:
                 self.scroll_to(y=max(0, self._cursor_line - 3), animate=False)
             except Exception:  # noqa: BLE001, S110 -- scrolling before the widget is fully
@@ -513,7 +530,7 @@ class EvidenceBoard(VerticalScroll):
                 if group == self._home_group:
                     self._cursor = idx
                     break
-        self.repaint()
+        self.repaint(reveal_cursor=True)
 
     def get_flags(self) -> set[DiscrepancyKind]:
         return self._state.get_flags()
@@ -554,11 +571,11 @@ class EvidenceBoard(VerticalScroll):
         if event.key == "up":
             self._cursor = max(0, self._cursor - 1)
             event.stop()
-            self.repaint()
+            self.repaint(reveal_cursor=True)
         elif event.key == "down":
             self._cursor = min(len(self._items) - 1, self._cursor + 1)
             event.stop()
-            self.repaint()
+            self.repaint(reveal_cursor=True)
         elif event.key == "space":
             # Cycle: unknown → marked → absent → unknown.
             self._toggle(self._cursor)
@@ -620,11 +637,26 @@ class EvidenceBoard(VerticalScroll):
     # ── Rendering ─────────────────────────────────────────────────────
 
     def _content_width(self) -> int:
-        """Usable cell width for chips, or the fallback when unmounted."""
+        """Usable cell width for chips, or the fallback when unmounted.
+
+        Measured from the inner Static's OWN region, not the container's
+        `content_size`. Those disagree by a cell here: with `scrollbar-gutter:
+        stable` the reserved gutter comes off the child's placement but not off
+        `content_size`, so the container reports 96 where the Static is painted
+        95 wide. Laying chips out to that phantom column put the last cell of
+        the rightmost chip outside the Static — clipped, and (because the hit
+        map still claimed it) a dead spot that swallowed clicks on the right
+        edge of every row.
+        """
         try:
-            width = self.content_size.width
-        except Exception:  # noqa: BLE001 -- size is unavailable before layout
+            width = self._content.region.width
+        except Exception:  # noqa: BLE001 -- not mounted / not yet laid out
             width = 0
+        if width <= 0:
+            try:
+                width = self.content_size.width
+            except Exception:  # noqa: BLE001 -- size unavailable before layout
+                width = 0
         return width if width > 0 else _FALLBACK_WIDTH
 
     def _group_header(self, group: str, width: int) -> str:
@@ -643,12 +675,17 @@ class EvidenceBoard(VerticalScroll):
         rule = max(0, width - Text.from_markup(head).cell_len - 2)
         return f"{head}  [#1c2733]{'─' * rule}[/]" if rule else head
 
-    def _chip_markup(self, index: int, label: str, label_w: int) -> str:
-        """One chip, exactly `label_w + _CHIP_CHROME` cells wide.
+    def _chip_block(self, index: int, label: str, label_w: int) -> list[str]:
+        """The chip as `_CHIP_HEIGHT` lines, each `label_w + _CHIP_CHROME` cells.
 
-        Cell for cell, left to right: cursor pointer, left cap, marker, space,
-        label, space, right cap, grade. Nothing here may change width — see the
-        anatomy note by CHIP_GLYPHS.
+        A block rather than a single row so the chips carry the weight of the
+        ADMIT/DENY buttons they sit beside, and so there is a real target to
+        click at rather than one row of text. The label rides the middle line;
+        the others are the same fill, which is what makes it read as one solid
+        key instead of three stacked rules.
+
+        Cell for cell on the label line: cap, marker, space, label, space, cap,
+        grade. Nothing here may change width — see the note by CHIP_GLYPHS.
         """
         kind      = self._items[index][1]
         state     = self._state.state_of(kind)
@@ -659,8 +696,8 @@ class EvidenceBoard(VerticalScroll):
         bold      = "b " if at_cursor else ""
 
         if state == "marked":
-            # Lit: the severity colour becomes the surface, so the chip is
-            # legible as "flagged" from across the panel without reading it.
+            # Lit: the severity colour becomes the surface, so the chip reads
+            # as flagged from across the panel without being read.
             fill, cap = sev, sev
             body = f"[b {CHIP_MARKED_FG} on {sev}]{_MARK_MARKED} {text} [/]"
         elif state == "absent":
@@ -678,13 +715,34 @@ class EvidenceBoard(VerticalScroll):
         # It borrows the severity cap for one chip — the one the player is
         # looking at, whose marker and fill still say everything about its
         # state — and that is cheaper than spending a cell of every label.
+        fill_cap = fill
         if at_cursor:
             cap = fill_cap = CHIP_CURSOR
-        else:
-            fill_cap = fill
         cap_l = f"[{cap} on {PANEL_BG}]{_CAP_LEFT}[/]"
         cap_r = f"[{fill_cap} on {PANEL_BG}]{_CAP_RIGHT}[/]"
-        return f"{cap_l}{body}{cap_r}{grade}"
+
+        label_line = f"{cap_l}{body}{cap_r}{grade}"
+        if _CHIP_HEIGHT == 1:
+            return [label_line]
+        # Half-block edges rather than blank filled rows. A row of ▄ painted
+        # fill-on-panel fills only the BOTTOM half of its cells, so it joins
+        # seamlessly onto the solid label row beneath it; ▀ does the same from
+        # above. The chip therefore carries about two cells of visible mass
+        # across three rows, with a soft top and bottom — a key, rather than
+        # the hollow box you get from padding it out with empty fill.
+        edge_c = CHIP_CURSOR if at_cursor else fill
+        top    = f"[{edge_c} on {PANEL_BG}]{_EDGE_TOP * (label_w + 5)}[/] "
+        bottom = f"[{edge_c} on {PANEL_BG}]{_EDGE_BOT * (label_w + 5)}[/] "
+        label_at = (_CHIP_HEIGHT - 1) // 2
+        rows = []
+        for r in range(_CHIP_HEIGHT):
+            if r == label_at:
+                rows.append(label_line)
+            elif r < label_at:
+                rows.append(top)
+            else:
+                rows.append(bottom)
+        return rows
 
     def _render_text(self) -> str:
         if self._summary:
@@ -716,21 +774,27 @@ class EvidenceBoard(VerticalScroll):
             per_row, cell_w = chip_row(avail, len(items), longest)
             label_w = max(1, cell_w - _CHIP_CHROME)
 
-            for row_start in range(0, len(items), per_row):
+            for n, row_start in enumerate(range(0, len(items), per_row)):
+                if n and _CHIP_HEIGHT > 1:
+                    # Stacked blocks would otherwise merge into one tall slab.
+                    lines.append("")
                 row = items[row_start:row_start + per_row]
-                chips: list[str] = []
+                blocks: list[list[str]] = []
                 spans: list[tuple[int, int, int]] = []
                 x = _BOARD_INDENT
                 for offset, (_g, _kind, label) in enumerate(row):
                     item_index = index + row_start + offset
-                    chips.append(self._chip_markup(item_index, label, label_w))
+                    blocks.append(self._chip_block(item_index, label, label_w))
                     spans.append((x, x + cell_w, item_index))
                     if item_index == self._cursor and self._focused:
                         self._cursor_line = len(lines)
                     x += cell_w + _CHIP_GAP
-                hit[len(lines)] = spans
-                lines.append(" " * _BOARD_INDENT
-                             + (" " * _CHIP_GAP).join(chips))
+                # EVERY line of the block is clickable, not just the label —
+                # the whole point of a taller chip is a bigger target.
+                for r in range(_CHIP_HEIGHT):
+                    hit[len(lines)] = spans
+                    lines.append(" " * _BOARD_INDENT
+                                 + (" " * _CHIP_GAP).join(b[r] for b in blocks))
             index += len(items)
 
         self._hit = hit
