@@ -43,11 +43,39 @@ from gameengine.ui.tui.app import IntakeScreen
 from gameengine.ui.tui.widgets import EvidenceBoard, EvidenceState
 from gameengine.ui.tui.widgets.evidence import (
     _BOARD_INDENT,
+    _CAP_LEFT,
     _CHIP_CHROME,
     _CHIP_GAP,
     _CHIP_MAX_COLS,
-    chip_columns,
+    CHIP_GLYPHS,
+    chip_row,
 )
+
+# Nick's authored layout, exactly as he specified it. Each inner list is one
+# cluster — which is one ROW wherever the panel is wide enough for it.
+AUTHORED_MAP: list[tuple[str, list[list[str]]]] = [
+    ("DOSSIER", [
+        ["Affiliation not stated", "Disposable email domain"],
+        ["Weak password encryption", "Unsalted / plaintext storage"],
+        ["Hostile chat"],
+    ]),
+    ("OSINT", [
+        ["Missing public profile", "Affiliation unlisted", "Affiliation mismatch"],
+        ["Typosquatted handle", "Sock puppet accounts", "Burner identity"],
+        ["Breach hit", "Email / GitHub mismatch", "Threat-forum handle match"],
+    ]),
+    ("CREDENTIAL", [
+        ["Weak credential", "Cross-breach password reuse", "Leaked password"],
+    ]),
+    ("FORENSICS", [
+        ["After-hours access", "Impossible travel"],
+        ["Claimed-IP mismatch", "Insider behavior"],
+        ["Brute force in log", "Credential stuffing", "Low-and-slow intrusion"],
+    ]),
+    ("STEGO", [
+        ["Stego payload", "Covert C2 channel", "Encrypted covert payload"],
+    ]),
+]
 
 SEED = 0xC0FFEE
 ALL_TOOLS = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
@@ -150,65 +178,106 @@ def test_locked_tools_remove_whole_clusters_rather_than_leaving_holes():
         assert group in {"DOSSIER", "OSINT"}, f"{cid} leaked group {group}"
 
 
-def test_nicks_two_examples_actually_sit_together():
-    """The pairings Nick named when specifying this are the reason the map is
-    shaped the way it is, so they are pinned rather than left to a future tidy-
-    up: a breach hit next to a threat-forum handle match, and brute force next
-    to low-and-slow."""
-    cluster_of = {}
-    for _g, cid, items in rules_content.clustered_catalog(None):
-        for _gg, kind, _l in items:
-            cluster_of[kind] = cid
-    assert (cluster_of[DiscrepancyKind.BREACH_HIT]
-            == cluster_of[DiscrepancyKind.THREAT_FORUM_MATCH])
-    assert (cluster_of[DiscrepancyKind.BRUTE_FORCE_IN_LOG]
-            == cluster_of[DiscrepancyKind.LOW_AND_SLOW])
+def test_the_board_matches_the_authored_map_exactly():
+    """This map is CONTENT, not a derived ordering — Nick laid these rows out
+    by hand, down to which violation sits in which position. Order inside a
+    cluster is therefore authored rather than sorted, so nothing but an edit to
+    VIOLATION_CLUSTERS may move a chip. Pinned whole, because a diff that
+    quietly reshuffles one row is exactly what a player's spatial memory of
+    this board would trip over."""
+    actual = []
+    for group, _cid, items in rules_content.clustered_catalog(None):
+        if not actual or actual[-1][0] != group:
+            actual.append((group, []))
+        actual[-1][1].append([lbl for _g, _k, lbl in items])
+    assert actual == AUTHORED_MAP
+
+
+def test_authored_rows_still_read_calm_to_alarming():
+    """Advisory guard, not a layout rule. Order inside a cluster is authored,
+    but every authored row happens to run minor -> major -> critical, which is
+    what makes a row scannable. Severities do move (#51 and #53 each re-tiered
+    a violation), and when one does, this fails and asks for the row to be
+    re-laid by hand — rather than the alternative, which is code silently
+    re-sorting a layout that was chosen deliberately.
+
+    If a re-tier is intentional and the row is fine as it stands, reorder the
+    cluster in VIOLATION_CLUSTERS or delete this test. Do not add a sort."""
+    rank = {"minor": 0, "major": 1, "critical": 2}
+    for _group, cid, items in rules_content.clustered_catalog(None):
+        ranks = [rank[rules_content._SEVERITY[k]] for _g, k, _l in items]
+        assert ranks == sorted(ranks), (
+            f"cluster {cid} no longer runs calm-to-alarming: "
+            f"{[(lbl, rules_content._SEVERITY[k]) for _g, k, lbl in items]}")
 
 
 # ─── Geometry ────────────────────────────────────────────────────────────────
 
 
-def test_a_packed_row_never_exceeds_the_width_it_was_given():
+def test_a_cluster_row_never_exceeds_the_width_it_was_given():
     """Property over the whole plausible range rather than one screenshot
     width. An over-wide row does not error — `overflow-x` is hidden on a
     VerticalScroll — it just loses its right-hand chips silently."""
     for longest in (8, 16, 24, 28, 40):
-        for avail in range(14, 260):
-            cols, cell = chip_columns(avail, longest)
-            assert 1 <= cols <= _CHIP_MAX_COLS
-            row = cols * cell + _CHIP_GAP * (cols - 1)
-            if avail >= longest + _CHIP_CHROME:
-                assert row <= avail, (avail, longest, cols, cell)
+        for count in range(1, 6):
+            for avail in range(14, 260):
+                per_row, cell = chip_row(avail, count, longest)
+                assert 1 <= per_row <= max(1, min(count, _CHIP_MAX_COLS))
+                row = per_row * cell + _CHIP_GAP * (per_row - 1)
+                if avail >= longest + _CHIP_CHROME:
+                    assert row <= avail, (avail, longest, count, per_row, cell)
+
+
+def test_a_cluster_is_a_whole_row_or_a_stack_and_never_ragged():
+    """The layout rule that makes the authored map survive a narrow panel. A
+    generic grid packer turns a row of three into "two, then a lonely one" as
+    soon as the panel is slightly too narrow — which reads as a grouping the
+    player is meant to interpret, and there isn't one. So `per_row` is only
+    ever the cluster's full size or 1."""
+    for longest in (8, 20, 28):
+        for count in (1, 2, 3, 4):
+            for avail in range(14, 260):
+                per_row, _cell = chip_row(avail, count, longest)
+                assert per_row in (1, count), (
+                    f"avail={avail} count={count} wrapped to {per_row} per row")
 
 
 def test_labels_are_never_truncated_once_a_single_chip_fits():
-    """The column count is solved from the NATURAL chip width, so widening the
-    panel can only ever add columns — it can never squeeze the labels. Getting
-    this backwards (pick columns first, divide the width second) is the obvious
+    """A row forms only if that many NATURAL chips fit, so widening the panel
+    can add a row but can never squeeze the labels. Getting this backwards
+    (pick a column count first, divide the width second) is the obvious
     implementation and it silently starts chopping labels at every breakpoint."""
     for longest in (8, 20, 28):
-        for avail in range(longest + _CHIP_CHROME, 260):
-            _cols, cell = chip_columns(avail, longest)
-            assert cell - _CHIP_CHROME >= longest, (avail, longest, cell)
+        for count in (1, 2, 3):
+            for avail in range(longest + _CHIP_CHROME, 260):
+                _per_row, cell = chip_row(avail, count, longest)
+                assert cell - _CHIP_CHROME >= longest, (avail, longest, count, cell)
 
 
-def test_a_wider_panel_packs_more_columns():
-    def go():
-        async def run():
-            _st, board, app = await _mounted((60, 40))
-            async with app.run_test(size=(60, 40)):
-                await asyncio.sleep(0.2)
-                narrow = max(len(v) for v in board._hit.values())
-            _st2, board2, app2 = await _mounted((200, 40))
-            async with app2.run_test(size=(200, 40)):
-                await asyncio.sleep(0.2)
-                wide = max(len(v) for v in board2._hit.values())
-            return narrow, wide
-        return asyncio.run(run())
+def test_every_glyph_the_grid_draws_is_one_cell_wide():
+    """`on_click` maps a mouse column back to a chip by arithmetic over these
+    widths, never by measuring the painted text. A double-width glyph would
+    shift every chip to its right — the board would toggle the wrong violation
+    and nothing on screen would look wrong."""
+    for glyph in CHIP_GLYPHS:
+        assert Text(glyph).cell_len == 1, f"{glyph!r} is not one cell"
 
-    narrow, wide = go()
-    assert narrow == 1, f"a 60-column terminal should be single-column, got {narrow}"
-    assert wide > narrow, f"a 200-column terminal packed only {wide} per row"
+
+def test_a_wider_panel_forms_the_authored_rows():
+    """Narrow: everything stacks full-width, which is what every tool sidebar
+    shows. Wide: the authored clusters become the rows Nick drew."""
+    async def run():
+        widths = {}
+        for term in (70, 200):
+            _st, board, app = await _mounted((term, 45))
+            async with app.run_test(size=(term, 45)):
+                await asyncio.sleep(0.25)
+                widths[term] = max(len(v) for v in board._hit.values())
+        return widths
+
+    w = asyncio.run(run())
+    assert w[70] == 1, f"a 70-column terminal should stack, got {w[70]} per row"
+    assert w[200] == 3, f"a 200-column terminal should form 3-chip rows, got {w[200]}"
 
 
 def test_no_rendered_line_overflows_the_panel_at_any_size():
@@ -281,17 +350,29 @@ def test_every_hit_span_lands_on_the_chip_it_claims():
                     for start, end, index in spans:
                         label = board._items[index][2]
                         painted = lines[row][start:end]
-                        # Anatomy, in cells: frame · marker · space · label …
+                        # Anatomy, in cells: cap · marker · space · label …
                         # Asserted by POSITION, not by substring. "the label is
-                        # somewhere in this slice" is satisfied by a span that
-                        # is off by a cell or two, because a chip is padded on
-                        # both sides — and off-by-a-cell is the entire bug class
-                        # this test exists for.
+                        # somewhere in this slice" is satisfied by a span off by
+                        # a cell or two, because a chip is padded on both sides
+                        # — and off-by-a-cell is the entire bug class this test
+                        # exists for.
+                        #
+                        # The expected text is derived from the span's own width
+                        # so a genuinely narrow panel (which ellipsises the
+                        # longest label) is tolerated, while the POSITION stays
+                        # strict. Only the chrome constant is shared with the
+                        # renderer, and that constant is what is under test.
+                        label_w = (end - start) - _CHIP_CHROME
+                        want = (label if len(label) <= label_w
+                                else label[:label_w - 1] + "…")
                         assert len(painted) == end - start
-                        assert painted[1] in "·▲✗", (
+                        assert painted[0] == _CAP_LEFT, (
                             f"width {width}: span for item {index} does not "
-                            f"start on a chip marker: {painted!r}")
-                        assert painted[3:3 + len(label)] == label, (
+                            f"start on a chip cap: {painted!r}")
+                        assert painted[1] in "○▲✗", (
+                            f"width {width}: no state marker after the cap of "
+                            f"item {index}: {painted!r}")
+                        assert painted[3:3 + len(want)] == want, (
                             f"width {width}: map puts item {index} "
                             f"({label!r}) at row {row} cols {start}-{end}, "
                             f"but the paint there is {painted!r}")

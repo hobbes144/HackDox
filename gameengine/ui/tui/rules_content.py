@@ -200,42 +200,40 @@ VIOLATION_CLUSTERS: list[tuple[str, str, tuple[DiscrepancyKind, ...]]] = [
         DiscrepancyKind.UNSALTED_STORAGE)),
     ("DOSSIER",    "dossier-conduct", (
         DiscrepancyKind.HOSTILE_CHAT,)),
-    # OSINT — "is this person real", "are they who they say", "are they burned".
-    ("OSINT",      "osint-existence", (
+    # OSINT / Ghostscan — the claim, the fabrication, the trace left elsewhere.
+    ("OSINT",      "osint-claimed-identity", (
         DiscrepancyKind.MISSING_PUBLIC_PROFILE,
+        DiscrepancyKind.AFFILIATION_UNLISTED,
+        DiscrepancyKind.AFFILIATION_MISMATCH)),
+    ("OSINT",      "osint-fabricated-identity", (
+        DiscrepancyKind.TYPOSQUAT_HANDLE,
         DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,
         DiscrepancyKind.BURNER_IDENTITY)),
-    ("OSINT",      "osint-claims", (
-        DiscrepancyKind.AFFILIATION_MISMATCH,
-        DiscrepancyKind.AFFILIATION_UNLISTED,
-        DiscrepancyKind.TYPOSQUAT_HANDLE,
-        DiscrepancyKind.EMAIL_GITHUB_MISMATCH)),
-    ("OSINT",      "osint-exposure", (
+    ("OSINT",      "osint-external-traces", (
         DiscrepancyKind.BREACH_HIT,
+        DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
         DiscrepancyKind.THREAT_FORUM_MATCH)),
-    # CREDENTIAL — leak-derived findings, then raw strength.
-    ("CREDENTIAL", "cred-leak", (
-        DiscrepancyKind.LEAKED_PASSWORD,
-        DiscrepancyKind.CROSS_BREACH_REUSE)),
-    ("CREDENTIAL", "cred-strength", (
-        DiscrepancyKind.WEAK_CREDENTIAL,)),
-    # FORENSICS — the shape of the attack, where it came from, and why.
+    # CREDENTIAL / Hashcrack — one block; there are only three of them.
+    ("CREDENTIAL", "cred-password", (
+        DiscrepancyKind.WEAK_CREDENTIAL,
+        DiscrepancyKind.CROSS_BREACH_REUSE,
+        DiscrepancyKind.LEAKED_PASSWORD)),
+    # FORENSICS / Logwatch — when, where from, and the shape of the attack.
+    ("FORENSICS",  "forensics-timing", (
+        DiscrepancyKind.AFTER_HOURS_ACCESS,
+        DiscrepancyKind.IMPOSSIBLE_TRAVEL)),
+    ("FORENSICS",  "forensics-origin", (
+        DiscrepancyKind.CLAIMED_IP_MISMATCH,
+        DiscrepancyKind.INSIDER_BEHAVIOR)),
     ("FORENSICS",  "forensics-cadence", (
         DiscrepancyKind.BRUTE_FORCE_IN_LOG,
-        DiscrepancyKind.LOW_AND_SLOW,
-        DiscrepancyKind.CREDENTIAL_STUFFING)),
-    ("FORENSICS",  "forensics-origin", (
-        DiscrepancyKind.IMPOSSIBLE_TRAVEL,
-        DiscrepancyKind.CLAIMED_IP_MISMATCH,
-        DiscrepancyKind.AFTER_HOURS_ACCESS)),
-    ("FORENSICS",  "forensics-intent", (
-        DiscrepancyKind.INSIDER_BEHAVIOR,)),
-    # STEGO — something hidden in the image, versus something talking out of it.
+        DiscrepancyKind.CREDENTIAL_STUFFING,
+        DiscrepancyKind.LOW_AND_SLOW)),
+    # STEGO / Stegotool — one block; the image either carries something or not.
     ("STEGO",      "stego-payload", (
         DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
+        DiscrepancyKind.COVERT_C2_CHANNEL,
         DiscrepancyKind.ENCRYPTED_PAYLOAD)),
-    ("STEGO",      "stego-channel", (
-        DiscrepancyKind.COVERT_C2_CHANNEL,)),
 ]
 
 # ── Cluster integrity guards ────────────────────────────────────────────────
@@ -295,9 +293,15 @@ def clustered_catalog(
     """`(group, cluster_id, items)` triples for the Evidence Board's layout.
 
     Same filtering rule as `visible_catalog` — a kind whose revealing tool is
-    still locked is dropped, because a candidate cannot carry it yet — and the
-    same within-block severity sort, so each cluster still reads
-    calm-to-alarming (minor -> major -> critical).
+    still locked is dropped, because a candidate cannot carry it yet.
+
+    Order inside a cluster is AUTHORED, not sorted. These are hand-laid rows
+    that Nick arranged by hand, and re-sorting them would quietly rearrange a
+    layout that was chosen deliberately. The authored rows happen to run
+    calm-to-alarming today, and a test asserts they still do — so a future
+    re-tier (#51 and #53 have both moved a violation's severity before) fails
+    loudly and asks for the row to be re-laid, instead of silently reshuffling
+    the board out from under the player's spatial memory.
 
     Clusters that filter down to nothing are omitted entirely rather than
     rendered as a gap, so an early-campaign board has no mystery whitespace
@@ -316,7 +320,6 @@ def clustered_catalog(
                  if _tool_unlocked(_TOOL.get(k), unlocked_tools)]
         if not items:
             continue
-        items.sort(key=lambda it: _SEV_RANK.get(_SEVERITY.get(it[1], "minor"), 0))
         out.append((group, cluster_id, items))
     return out
 

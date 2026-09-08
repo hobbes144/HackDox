@@ -231,9 +231,16 @@ def _grade_footer(state: EvidenceState, width: int = 80) -> list[str]:
 # width instead of being guessed at authoring time.
 
 _CHIP_GAP      = 2    # blank cells between two chips on the same row
-_CHIP_MAX_COLS = 4    # past this, rows get too wide to scan even on a big screen
+_CHIP_MAX_COLS = 4    # a cluster bigger than this always stacks
 _BOARD_INDENT  = 2    # left margin, matches the group headers' own indent
-# frame(1) + marker(1) + space(1) + [label] + space(1) + grade(1) + frame(1)
+# cap(1) + marker(1) + space(1) + [label] + space(1) + cap(1) + grade(1).
+# See the chip-anatomy diagram below.
+#
+# Every cell here is a cell the longest label does not get, and the longest is
+# 28 ("Unsalted / plaintext storage"). A cursor column of its own was tried and
+# reverted for exactly that reason: at a 50%-wide Candidate board on an 80-
+# column terminal it pushed that one label into an ellipsis. Lighting the caps
+# costs nothing and reads at least as well.
 _CHIP_CHROME   = 6
 _CHIP_MIN_W    = _CHIP_CHROME + 6   # below this a chip is unreadable anyway
 
@@ -244,42 +251,79 @@ _CHIP_MIN_W    = _CHIP_CHROME + 6   # below this a chip is unreadable anyway
 # been, while a too-large guess would overflow the panel on the first frame.
 _FALLBACK_WIDTH = 46
 
-# Chip surfaces. The severity colour stays the identity of a violation in every
-# state — that is the whole colour language of this board (yellow minor, orange
-# major, red critical) and it predates this layout. What the state changes is
-# the SURFACE the colour is painted on:
-#   unknown → severity ink on a faint raised tile   (an unpressed button)
-#   marked  → severity as the FILL, near-black ink  (a lit button)
-#   absent  → no severity at all, muted and struck  (a discarded button)
-CHIP_IDLE_BG     = "#141b23"
-CHIP_ABSENT_BG   = "#10151b"
-CHIP_ABSENT_FG   = "#5f6b78"
-CHIP_MARKED_FG   = "#0b0e10"
+# ── Chip anatomy ────────────────────────────────────────────────────────────
+#
+#   ▐○ Breach hit            ▌✓
+#   ││└─ state marker + label on the fill      grade ─┘
+#   │└─── left cap, painted in the SEVERITY colour
+#   └──── (both caps turn accent green when the cursor is here)
+#
+# Two independent readings, deliberately not fighting each other:
+#
+#   the CAPS say what KIND of violation this is — severity, the board's colour
+#   language since long before this layout (yellow minor, orange major, red
+#   critical);
+#   the FILL says what the PLAYER has decided about it — recessed and struck
+#   (ruled out), raised (undecided), or lit in the severity colour (marked).
+#
+# The caps are half-block glyphs painted as fill-colour-on-panel-background,
+# which is the terminal trick for a rounded edge: the cell is half chip and
+# half panel, so the chip reads as a pill rather than a hard rectangle. That is
+# why `PANEL_BG` has to match the board's `background` in app.tcss — if the two
+# drift the caps grow a visible notch. All four board selectors use #0d1117.
+PANEL_BG         = "#0d1117"
+CHIP_IDLE_BG     = "#1a222c"   # raised: undecided
+CHIP_ABSENT_BG   = "#12171d"   # recessed: ruled out
+CHIP_ABSENT_FG   = "#59646f"
+CHIP_MARKED_FG   = "#0b0e10"   # near-black ink on a lit severity fill
 CHIP_CURSOR      = "#00ff9f"   # same accent as the focused-panel border
 
-_MARK_UNKNOWN = "·"
+_CAP_LEFT     = "▐"
+_CAP_RIGHT    = "▌"
+_MARK_UNKNOWN = "○"
 _MARK_MARKED  = "▲"
 _MARK_ABSENT  = "✗"
 
+# Every glyph the grid draws must be exactly one cell wide, because `on_click`
+# maps a mouse column back to a chip by arithmetic over these widths rather
+# than by measuring the painted text. A double-width glyph would shift every
+# chip to its right and the board would toggle the wrong violation, with
+# nothing on screen looking wrong. A test asserts this set.
+CHIP_GLYPHS = (_CAP_LEFT, _CAP_RIGHT,
+               _MARK_UNKNOWN, _MARK_MARKED, _MARK_ABSENT, "✓", "✗")
 
-def chip_columns(avail: int, longest_label: int) -> tuple[int, int]:
-    """(columns, cell_width) for `avail` cells of usable width.
 
-    Column count is the most columns whose NATURAL width still fits; the
-    leftover cells are then handed back to the chips so they fill the row
-    rather than leaving a ragged right edge. At one column that means a chip
-    spans the whole panel, which is what keeps a 32%-wide tool sidebar looking
-    like a stack of buttons instead of a cramped grid.
+def chip_row(avail: int, count: int, longest_label: int) -> tuple[int, int]:
+    """(chips per row, cell width) for ONE cluster of `count` chips.
 
-    The floor division guarantees `cell_width >= longest_label + _CHIP_CHROME`
-    for any `avail` that fits a single natural chip, so labels are never
-    truncated except on a genuinely tiny terminal.
+    The unit of layout is the cluster, not the board. A cluster is drawn either
+    as one whole row or as a full-width stack — never wrapped. That rule is the
+    whole point: the clusters are authored as rows (three OSINT rows of three,
+    two Logwatch rows of two, and so on), and a generic grid packer turns a row
+    of three into "two, then a lonely one" the moment the panel is a little too
+    narrow. Ragged is worse than stacked, because it looks like a grouping the
+    player is supposed to read something into.
+
+    So `count` chips fit on one row only if `count` NATURAL chips fit; the
+    leftover cells are then handed back so the row reaches the panel edge.
+    Otherwise the cluster falls back to one full-width chip per line, which is
+    also what every tool sidebar shows — those are ~34% of the terminal and
+    never have room for a real row.
+
+    `longest_label` is this cluster's own longest, not the board's. Chip widths
+    therefore differ a little between clusters, which is fine (clusters are
+    separated blocks, not columns of one table) and lets a cluster of short
+    labels form its row at a width where the widest cluster still cannot.
+    Either way `cell_width >= longest_label + _CHIP_CHROME` whenever a single
+    natural chip fits at all, so labels are never truncated.
     """
     natural = max(longest_label, 1) + _CHIP_CHROME
-    cols = (avail + _CHIP_GAP) // (natural + _CHIP_GAP)
-    cols = max(1, min(_CHIP_MAX_COLS, cols))
-    cell = (avail - _CHIP_GAP * (cols - 1)) // cols
-    return cols, max(_CHIP_MIN_W, cell)
+    per_row = count
+    if (count > _CHIP_MAX_COLS
+            or count * natural + _CHIP_GAP * (count - 1) > avail):
+        per_row = 1
+    cell = (avail - _CHIP_GAP * (per_row - 1)) // per_row
+    return per_row, max(_CHIP_MIN_W, cell)
 
 
 def _fit(label: str, width: int) -> str:
@@ -583,29 +627,64 @@ class EvidenceBoard(VerticalScroll):
             width = 0
         return width if width > 0 else _FALLBACK_WIDTH
 
+    def _group_header(self, group: str, width: int) -> str:
+        """Section band: accent bar, group name, tool hotkey, then a rule out
+        to the panel edge.
+
+        The rule is what makes a group read as a band rather than as one more
+        line of text — with clusters separated by nothing but whitespace, the
+        header is the only thing left carrying the hierarchy, so it has to be
+        unmistakably heavier than the gaps below it. Its length is measured,
+        not guessed, so it stops at the panel edge on every board width.
+        """
+        gcolor, hotkey = _GROUP_META.get(group, ("#7dd3c0", ""))
+        hint = f"  [dim on #10161d] {hotkey} [/]" if hotkey else ""
+        head = f"  [{gcolor}][b]▎ {group}[/][/]{hint}"
+        rule = max(0, width - Text.from_markup(head).cell_len - 2)
+        return f"{head}  [#1c2733]{'─' * rule}[/]" if rule else head
+
     def _chip_markup(self, index: int, label: str, label_w: int) -> str:
-        """One chip, exactly `label_w + _CHIP_CHROME` cells wide."""
+        """One chip, exactly `label_w + _CHIP_CHROME` cells wide.
+
+        Cell for cell, left to right: cursor pointer, left cap, marker, space,
+        label, space, right cap, grade. Nothing here may change width — see the
+        anatomy note by CHIP_GLYPHS.
+        """
         kind      = self._items[index][1]
         state     = self._state.state_of(kind)
         sev       = _sev_color(kind)
         at_cursor = index == self._cursor and self._focused
         grade     = _grade_cell(self._state.grade_of(kind))
         text      = _fit(label, label_w)
+        bold      = "b " if at_cursor else ""
 
         if state == "marked":
+            # Lit: the severity colour becomes the surface, so the chip is
+            # legible as "flagged" from across the panel without reading it.
+            fill, cap = sev, sev
             body = f"[b {CHIP_MARKED_FG} on {sev}]{_MARK_MARKED} {text} [/]"
         elif state == "absent":
+            # Ruled out. The cap drops its severity too — a violation the
+            # player has dismissed should go quiet, not keep shouting its tier.
+            fill, cap = CHIP_ABSENT_BG, CHIP_ABSENT_FG
             body = (f"[{CHIP_ABSENT_FG} on {CHIP_ABSENT_BG}]{_MARK_ABSENT} "
                     f"[strike]{text}[/] [/]")
         else:
-            body = f"[{sev} on {CHIP_IDLE_BG}]{_MARK_UNKNOWN} {text} [/]"
+            fill, cap = CHIP_IDLE_BG, sev
+            body = (f"[{sev} on {CHIP_IDLE_BG}]{_MARK_UNKNOWN} "
+                    f"[{bold}{sev}]{text}[/] [/]")
 
+        # The cursor lights both caps rather than claiming a column of its own.
+        # It borrows the severity cap for one chip — the one the player is
+        # looking at, whose marker and fill still say everything about its
+        # state — and that is cheaper than spending a cell of every label.
         if at_cursor:
-            left  = f"[{CHIP_CURSOR}][b]▏[/][/]"
-            right = f"[{CHIP_CURSOR}][b]▕[/][/]"
+            cap = fill_cap = CHIP_CURSOR
         else:
-            left = right = " "
-        return f"{left}{body}{grade}{right}"
+            fill_cap = fill
+        cap_l = f"[{cap} on {PANEL_BG}]{_CAP_LEFT}[/]"
+        cap_r = f"[{fill_cap} on {PANEL_BG}]{_CAP_RIGHT}[/]"
+        return f"{cap_l}{body}{cap_r}{grade}"
 
     def _render_text(self) -> str:
         if self._summary:
@@ -613,10 +692,7 @@ class EvidenceBoard(VerticalScroll):
 
         width = self._content_width()
         self._last_width = width
-        avail   = max(_CHIP_MIN_W, width - _BOARD_INDENT)
-        longest = max((len(lbl) for _g, _k, lbl in self._items), default=1)
-        cols, cell_w = chip_columns(avail, longest)
-        label_w = max(1, cell_w - _CHIP_CHROME)
+        avail = max(_CHIP_MIN_W, width - _BOARD_INDENT)
 
         lines: list[str] = []
         hit: dict[int, list[tuple[int, int, int]]] = {}
@@ -625,11 +701,9 @@ class EvidenceBoard(VerticalScroll):
 
         for group, _cluster_id, items in self._clusters:
             if group != current_group:
-                gcolor, hotkey = _GROUP_META.get(group, ("#7dd3c0", ""))
-                hint = f"  [dim on #10161d] {hotkey} [/]" if hotkey else ""
                 if current_group:
                     lines.append("")          # breathing room before a header
-                lines.append(f"  [{gcolor}][b]▎ {group}[/][/]{hint}")
+                lines.append(self._group_header(group, width))
                 current_group = group
             else:
                 # Cluster divider. Whitespace only, by design: these groupings
@@ -637,8 +711,13 @@ class EvidenceBoard(VerticalScroll):
                 # them into a second header level competing with the real one.
                 lines.append("")
 
-            for row_start in range(0, len(items), cols):
-                row = items[row_start:row_start + cols]
+            # Sized per cluster: its own longest label, its own row/stack call.
+            longest = max((len(lbl) for _g, _k, lbl in items), default=1)
+            per_row, cell_w = chip_row(avail, len(items), longest)
+            label_w = max(1, cell_w - _CHIP_CHROME)
+
+            for row_start in range(0, len(items), per_row):
+                row = items[row_start:row_start + per_row]
                 chips: list[str] = []
                 spans: list[tuple[int, int, int]] = []
                 x = _BOARD_INDENT
