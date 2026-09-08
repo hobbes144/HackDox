@@ -320,6 +320,15 @@ class IntakeScreen(Screen):
         # Candidate page: editable board replaces the read-only summary.
         self.board_c0.display = self._evidence_open
         self.board.display    = not self._evidence_open
+        # The editable board is a 72%-wide button grid; the verdict panel gives
+        # up the difference while it is open (see #verdict-panel.narrow).
+        try:
+            self.query_one("#verdict-panel").set_class(self._evidence_open,
+                                                       "narrow")
+        except Exception:  # noqa: BLE001, S110 -- called from on_mount before the
+            # page is composed on some paths; the class is applied on the next
+            # toggle, and the 50/50 default is the correct starting state.
+            pass
         for board, side_id in self._evidence_pairs:
             board.display = self._evidence_open
             try:

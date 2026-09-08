@@ -230,10 +230,12 @@ def _grade_footer(state: EvidenceState, width: int = 80) -> list[str]:
 # and grading code intact, and let the column count fall out of the measured
 # width instead of being guessed at authoring time.
 
-_CHIP_HEIGHT   = 3    # rows one chip occupies; the label sits in the middle
 _CHIP_GAP      = 2    # blank cells between two chips on the same row
-_CHIP_MAX_COLS = 4    # a cluster bigger than this always stacks
 _BOARD_INDENT  = 2    # left margin, matches the group headers' own indent
+# Chips never stretch past this, however wide the panel gets. Without the cap
+# the docs-overlay board (100% width) turns three buttons into three 60-cell
+# bars, which stops reading as a grid.
+_CHIP_MAX_W    = 26
 # cap(1) + marker(1) + space(1) + [label] + space(1) + cap(1) + grade(1).
 # See the chip-anatomy diagram below.
 #
@@ -243,14 +245,14 @@ _BOARD_INDENT  = 2    # left margin, matches the group headers' own indent
 # column terminal it pushed that one label into an ellipsis. Lighting the caps
 # costs nothing and reads at least as well.
 _CHIP_CHROME   = 6
-_CHIP_MIN_W    = _CHIP_CHROME + 6   # below this a chip is unreadable anyway
+_CHIP_MIN_W    = _CHIP_CHROME + 5   # below this a chip is unreadable anyway
 
 # Width used when the widget has not been laid out yet — a direct _render_text()
 # call in a test, or the first repaint from on_mount() before Textual has
 # assigned a size. Deliberately narrow: one column is always a valid layout, so
 # a too-small guess degrades to the single-column list this board has always
 # been, while a too-large guess would overflow the panel on the first frame.
-_FALLBACK_WIDTH = 46
+_FALLBACK_WIDTH = 60
 
 # ── Chip anatomy ────────────────────────────────────────────────────────────
 #
@@ -296,37 +298,57 @@ CHIP_GLYPHS = (_CAP_LEFT, _CAP_RIGHT, _EDGE_TOP, _EDGE_BOT,
                _MARK_UNKNOWN, _MARK_MARKED, _MARK_ABSENT, "✓", "✗")
 
 
-def chip_row(avail: int, count: int, longest_label: int) -> tuple[int, int]:
-    """(chips per row, cell width) for ONE cluster of `count` chips.
+def grid_columns(clusters) -> int:
+    """Column count for the whole board: the size of the largest cluster.
 
-    The unit of layout is the cluster, not the board. A cluster is drawn either
-    as one whole row or as a full-width stack — never wrapped. That rule is the
-    whole point: the clusters are authored as rows (three OSINT rows of three,
-    two Logwatch rows of two, and so on), and a generic grid packer turns a row
-    of three into "two, then a lonely one" the moment the panel is a little too
-    narrow. Ragged is worse than stacked, because it looks like a grouping the
-    player is supposed to read something into.
-
-    So `count` chips fit on one row only if `count` NATURAL chips fit; the
-    leftover cells are then handed back so the row reaches the panel edge.
-    Otherwise the cluster falls back to one full-width chip per line, which is
-    also what every tool sidebar shows — those are ~34% of the terminal and
-    never have room for a real row.
-
-    `longest_label` is this cluster's own longest, not the board's. Chip widths
-    therefore differ a little between clusters, which is fine (clusters are
-    separated blocks, not columns of one table) and lets a cluster of short
-    labels form its row at a width where the widest cluster still cannot.
-    Either way `cell_width >= longest_label + _CHIP_CHROME` whenever a single
-    natural chip fits at all, so labels are never truncated.
+    Uniform across every category, which is what makes this read as a grid —
+    column two of "False Identity" lines up under column two of "Association
+    Confirmation". A category with fewer chips simply ends early and leaves the
+    remaining columns empty; it is never re-flowed to fill them.
     """
-    natural = max(longest_label, 1) + _CHIP_CHROME
-    per_row = count
-    if (count > _CHIP_MAX_COLS
-            or count * natural + _CHIP_GAP * (count - 1) > avail):
-        per_row = 1
-    cell = (avail - _CHIP_GAP * (per_row - 1)) // per_row
-    return per_row, max(_CHIP_MIN_W, cell)
+    return max((len(items) for _g, _c, _l, items in clusters), default=1)
+
+
+def grid_cell(avail: int, cols: int) -> int:
+    """Width of one grid cell. One number for the whole board, by design."""
+    cols = max(1, cols)
+    cell = (avail - _CHIP_GAP * (cols - 1)) // cols
+    return max(_CHIP_MIN_W, min(_CHIP_MAX_W, cell))
+
+
+def wrap_label(label: str, width: int) -> list[str]:
+    """Greedy word wrap onto as many lines as it takes, never truncating.
+
+    This is what lets a category stay horizontal at a width where its names do
+    not fit side by side on one line. The previous layout solved that conflict
+    by breaking the row into a vertical stack, which destroyed the grouping the
+    row existed to show; wrapping downward into the button's own body costs
+    nothing but rows the button already has.
+
+    A single word wider than the cell is hyphen-split rather than cut, because
+    a chip is a control the player has to recognise — "Affili-/ation" is
+    readable and "Affilia…" is a guess.
+    """
+    width = max(1, width)
+    lines: list[str] = []
+    cur = ""
+    for word in label.split():
+        while len(word) > width:
+            head, word = word[:width - 1] + "-", word[width - 1:]
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines.append(head)
+        if not cur:
+            cur = word
+        elif len(cur) + 1 + len(word) <= width:
+            cur = f"{cur} {word}"
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines or [""]
 
 
 def _fit(label: str, width: int) -> str:
@@ -385,11 +407,12 @@ def _wrap_markup(parts: list[str], width: int, sep: str = "  ",
 # Kept as short fragments rather than one sentence so `_wrap_markup` has
 # somewhere to break: the narrowest board this widget is mounted in is about
 # 30 cells of usable width.
+# Mouse first, deliberately: playtesters found walking this list with the
+# arrows irritating, and clicking is now the intended way in.
 _HINT_PARTS = [
-    "[dim]click a chip[/]",
-    "[dim]Tab focus[/]",
-    "[dim]↑↓ move[/]",
-    "[dim]Space cycles[/]",
+    "[dim]click to mark[/]",
+    "[dim]again to rule out[/]",
+    "[dim]arrows + Space[/]",
 ]
 
 
@@ -445,7 +468,7 @@ class EvidenceBoard(VerticalScroll):
         # the painted chips addressing the same violation.
         self._clusters = rules_content.clustered_catalog(unlocked_tools)
         self._items: list[tuple[str, DiscrepancyKind, str]] = [
-            item for _g, _cid, items in self._clusters for item in items
+            item for _g, _cid, _lab, items in self._clusters for item in items
         ]
         self._cursor: int = 0
         self._focused: bool = False
@@ -455,6 +478,14 @@ class EvidenceBoard(VerticalScroll):
         # a click landing in a gutter does nothing rather than toggling
         # whichever chip happens to be nearest.
         self._hit: dict[int, list[tuple[int, int, int]]] = {}
+        # Grid shape, rebuilt on every render: rows of item indices, and the
+        # reverse lookup. `_desired_col` is the classic 2D-cursor trick — the
+        # column the player last CHOSE, remembered across rows that are too
+        # short to honour it, so walking down a 3/2/3 grid and back up returns
+        # to where it started instead of drifting left.
+        self._grid: list[list[int]] = []
+        self._pos: dict[int, tuple[int, int]] = {}
+        self._desired_col: int = 0
         self._last_width: int = -1
         self._content = Static(id=f"{widget_id}-content", classes="evidence-content")
 
@@ -565,22 +596,51 @@ class EvidenceBoard(VerticalScroll):
 
     # ── Key handling ──────────────────────────────────────────────────
 
+    def _move(self, d_row: int, d_col: int) -> bool:
+        """Move the cursor across the grid. False if the move leaves the grid.
+
+        Returning False is load-bearing: `on_key` only consumes ← / → when this
+        says the move landed somewhere, so pressing ← in the first column still
+        bubbles up to IntakeScreen and moves focus out of the board. Swallowing
+        them unconditionally would trap focus in a panel the player then has no
+        arrow key to leave.
+        """
+        if not self._grid:
+            return False
+        row, col = self._pos.get(self._cursor, (0, 0))
+        if d_col:
+            col += d_col
+            if not (0 <= col < len(self._grid[row])):
+                return False
+            self._desired_col = col
+        else:
+            row += d_row
+            if not (0 <= row < len(self._grid)):
+                return False
+            col = min(self._desired_col, len(self._grid[row]) - 1)
+        self._cursor = self._grid[row][col]
+        return True
+
     def on_key(self, event: Key) -> None:
         if self._summary:
             return   # read-only summary — editing happens on tool pages
-        if event.key == "up":
-            self._cursor = max(0, self._cursor - 1)
+        if event.key in ("up", "down"):
+            # Down really means down now — one grid row, same column. The old
+            # board walked the flat list in reading order, which on a grid meant
+            # ↓ stepped sideways; players said navigating it was irritating and
+            # taught them nothing about how the violations group.
+            self._move(1 if event.key == "down" else -1, 0)
             event.stop()
             self.repaint(reveal_cursor=True)
-        elif event.key == "down":
-            self._cursor = min(len(self._items) - 1, self._cursor + 1)
-            event.stop()
-            self.repaint(reveal_cursor=True)
+        elif event.key in ("left", "right"):
+            if self._move(0, 1 if event.key == "right" else -1):
+                event.stop()
+                self.repaint(reveal_cursor=True)
+            # else: not consumed — bubbles to IntakeScreen for focus nav.
         elif event.key == "space":
             # Cycle: unknown → marked → absent → unknown.
             self._toggle(self._cursor)
             event.stop()
-        # ← / → are NOT stopped — they bubble to IntakeScreen for focus nav.
 
     # ── Mouse handling ────────────────────────────────────────────────
 
@@ -626,9 +686,12 @@ class EvidenceBoard(VerticalScroll):
         index = self.hit_test(*cell)
         if index is None:
             return
-        # A click is also a cursor move, so ↑↓ and Space carry on from wherever
-        # the player last pointed instead of from a stale row.
+        # A click is also a cursor move, so the arrows and Space carry on from
+        # wherever the player last pointed instead of from a stale row — and it
+        # sets the remembered column, so a subsequent ↓ stays in the clicked
+        # column rather than snapping back to an older one.
         self._cursor = index
+        self._desired_col = self._pos.get(index, (0, 0))[1]
         if not self.has_focus:
             self.focus()
         self._toggle(index)
@@ -675,41 +738,44 @@ class EvidenceBoard(VerticalScroll):
         rule = max(0, width - Text.from_markup(head).cell_len - 2)
         return f"{head}  [#1c2733]{'─' * rule}[/]" if rule else head
 
-    def _chip_block(self, index: int, label: str, label_w: int) -> list[str]:
-        """The chip as `_CHIP_HEIGHT` lines, each `label_w + _CHIP_CHROME` cells.
+    def _chip_block(self, index: int, label_lines: list[str], label_w: int,
+                    body_rows: int) -> list[str]:
+        """One chip as `body_rows + 2` lines, each `label_w + _CHIP_CHROME` wide.
 
-        A block rather than a single row so the chips carry the weight of the
-        ADMIT/DENY buttons they sit beside, and so there is a real target to
-        click at rather than one row of text. The label rides the middle line;
-        the others are the same fill, which is what makes it read as one solid
-        key instead of three stacked rules.
+        A half-block edge row above and below (`▄` / `▀` painted
+        fill-on-panel fills only half its cells, so it joins onto the solid body
+        beneath or above it), and `body_rows` lines of wrapped label between —
+        so the chip reads as one soft-edged key rather than stacked rules.
 
-        Cell for cell on the label line: cap, marker, space, label, space, cap,
-        grade. Nothing here may change width — see the note by CHIP_GLYPHS.
+        `body_rows` is passed in rather than measured here: every chip in a
+        category must be the same height or the row stops looking like a row,
+        so the caller takes the max across the category and hands it down.
+
+        Cell for cell on the first body line: cap, marker, space, label, space,
+        cap, grade. Continuation lines put two spaces where the marker was, so
+        the wrapped text stays under the first line's text. Nothing here may
+        change width — see the note by CHIP_GLYPHS.
         """
         kind      = self._items[index][1]
         state     = self._state.state_of(kind)
         sev       = _sev_color(kind)
         at_cursor = index == self._cursor and self._focused
         grade     = _grade_cell(self._state.grade_of(kind))
-        text      = _fit(label, label_w)
         bold      = "b " if at_cursor else ""
 
         if state == "marked":
             # Lit: the severity colour becomes the surface, so the chip reads
             # as flagged from across the panel without being read.
-            fill, cap = sev, sev
-            body = f"[b {CHIP_MARKED_FG} on {sev}]{_MARK_MARKED} {text} [/]"
+            fill, cap, ink, extra = sev, sev, CHIP_MARKED_FG, "b "
+            mark = _MARK_MARKED
         elif state == "absent":
             # Ruled out. The cap drops its severity too — a violation the
             # player has dismissed should go quiet, not keep shouting its tier.
-            fill, cap = CHIP_ABSENT_BG, CHIP_ABSENT_FG
-            body = (f"[{CHIP_ABSENT_FG} on {CHIP_ABSENT_BG}]{_MARK_ABSENT} "
-                    f"[strike]{text}[/] [/]")
+            fill, cap, ink, extra = CHIP_ABSENT_BG, CHIP_ABSENT_FG, CHIP_ABSENT_FG, ""
+            mark = _MARK_ABSENT
         else:
-            fill, cap = CHIP_IDLE_BG, sev
-            body = (f"[{sev} on {CHIP_IDLE_BG}]{_MARK_UNKNOWN} "
-                    f"[{bold}{sev}]{text}[/] [/]")
+            fill, cap, ink, extra = CHIP_IDLE_BG, sev, sev, bold
+            mark = _MARK_UNKNOWN
 
         # The cursor lights both caps rather than claiming a column of its own.
         # It borrows the severity cap for one chip — the one the player is
@@ -721,27 +787,15 @@ class EvidenceBoard(VerticalScroll):
         cap_l = f"[{cap} on {PANEL_BG}]{_CAP_LEFT}[/]"
         cap_r = f"[{fill_cap} on {PANEL_BG}]{_CAP_RIGHT}[/]"
 
-        label_line = f"{cap_l}{body}{cap_r}{grade}"
-        if _CHIP_HEIGHT == 1:
-            return [label_line]
-        # Half-block edges rather than blank filled rows. A row of ▄ painted
-        # fill-on-panel fills only the BOTTOM half of its cells, so it joins
-        # seamlessly onto the solid label row beneath it; ▀ does the same from
-        # above. The chip therefore carries about two cells of visible mass
-        # across three rows, with a soft top and bottom — a key, rather than
-        # the hollow box you get from padding it out with empty fill.
-        edge_c = CHIP_CURSOR if at_cursor else fill
-        top    = f"[{edge_c} on {PANEL_BG}]{_EDGE_TOP * (label_w + 5)}[/] "
-        bottom = f"[{edge_c} on {PANEL_BG}]{_EDGE_BOT * (label_w + 5)}[/] "
-        label_at = (_CHIP_HEIGHT - 1) // 2
-        rows = []
-        for r in range(_CHIP_HEIGHT):
-            if r == label_at:
-                rows.append(label_line)
-            elif r < label_at:
-                rows.append(top)
-            else:
-                rows.append(bottom)
+        rows = [f"[{fill} on {PANEL_BG}]{_EDGE_TOP * (label_w + 5)}[/] "]
+        for r in range(body_rows):
+            text = (label_lines[r] if r < len(label_lines) else "").ljust(label_w)
+            lead = f"{mark} " if r == 0 else "  "
+            if state == "absent" and text.strip():
+                text = f"[strike]{text}[/]"
+            body = f"[{ink} on {fill}]{lead}[{extra}{ink}]{text}[/] [/]"
+            rows.append(f"{cap_l}{body}{cap_r}{grade if r == 0 else ' '}")
+        rows.append(f"[{fill} on {PANEL_BG}]{_EDGE_BOT * (label_w + 5)}[/] ")
         return rows
 
     def _render_text(self) -> str:
@@ -751,52 +805,60 @@ class EvidenceBoard(VerticalScroll):
         width = self._content_width()
         self._last_width = width
         avail = max(_CHIP_MIN_W, width - _BOARD_INDENT)
+        cols   = grid_columns(self._clusters)
+        cell_w = grid_cell(avail, cols)
+        label_w = max(1, cell_w - _CHIP_CHROME)
 
         lines: list[str] = []
         hit: dict[int, list[tuple[int, int, int]]] = {}
+        grid: list[list[int]] = []
         index = 0
         current_group = ""
 
-        for group, _cluster_id, items in self._clusters:
+        for group, _cluster_id, cluster_label, items in self._clusters:
             if group != current_group:
                 if current_group:
-                    lines.append("")          # breathing room before a header
+                    lines.append("")
                 lines.append(self._group_header(group, width))
                 current_group = group
             else:
-                # Cluster divider. Whitespace only, by design: these groupings
-                # are unnamed mnemonics, and a rule or a caption would promote
-                # them into a second header level competing with the real one.
                 lines.append("")
 
-            # Sized per cluster: its own longest label, its own row/stack call.
-            longest = max((len(lbl) for _g, _k, lbl in items), default=1)
-            per_row, cell_w = chip_row(avail, len(items), longest)
-            label_w = max(1, cell_w - _CHIP_CHROME)
+            gcolor, _hk = _GROUP_META.get(group, ("#7dd3c0", ""))
+            lines.append(f"   [{gcolor}]{_clip(cluster_label, width - 3)}[/]")
 
-            for n, row_start in enumerate(range(0, len(items), per_row)):
-                if n and _CHIP_HEIGHT > 1:
-                    # Stacked blocks would otherwise merge into one tall slab.
-                    lines.append("")
-                row = items[row_start:row_start + per_row]
-                blocks: list[list[str]] = []
-                spans: list[tuple[int, int, int]] = []
-                x = _BOARD_INDENT
-                for offset, (_g, _kind, label) in enumerate(row):
-                    item_index = index + row_start + offset
-                    blocks.append(self._chip_block(item_index, label, label_w))
-                    spans.append((x, x + cell_w, item_index))
-                    if item_index == self._cursor and self._focused:
-                        self._cursor_line = len(lines)
-                    x += cell_w + _CHIP_GAP
-                # EVERY line of the block is clickable, not just the label —
-                # the whole point of a taller chip is a bigger target.
-                for r in range(_CHIP_HEIGHT):
-                    hit[len(lines)] = spans
-                    lines.append(" " * _BOARD_INDENT
-                                 + (" " * _CHIP_GAP).join(b[r] for b in blocks))
+            # One row, always. A category is a row of buttons; that is the whole
+            # organising idea, so it is structural here rather than conditional
+            # on the panel being wide enough. Names that do not fit side by side
+            # wrap DOWNWARD inside their own button (see wrap_label) instead of
+            # the row breaking into a stack.
+            wrapped   = [wrap_label(lbl, label_w) for _g, _k, lbl in items]
+            body_rows = max(len(w) for w in wrapped)
+            blocks: list[list[str]] = []
+            spans: list[tuple[int, int, int]] = []
+            row_indices: list[int] = []
+            x = _BOARD_INDENT
+            for offset in range(len(items)):
+                item_index = index + offset
+                blocks.append(self._chip_block(item_index, wrapped[offset],
+                                               label_w, body_rows))
+                spans.append((x, x + cell_w, item_index))
+                row_indices.append(item_index)
+                if item_index == self._cursor and self._focused:
+                    self._cursor_line = len(lines)
+                x += cell_w + _CHIP_GAP
+            grid.append(row_indices)
+            # EVERY line of the block is clickable, not just the label — the
+            # point of a taller chip is a bigger target.
+            for r in range(body_rows + 2):
+                hit[len(lines)] = spans
+                lines.append(" " * _BOARD_INDENT
+                             + (" " * _CHIP_GAP).join(b[r] for b in blocks))
             index += len(items)
 
+        self._grid = grid
+        self._pos = {i: (r, c) for r, row in enumerate(grid)
+                     for c, i in enumerate(row)}
         self._hit = hit
 
         if self._state.revealed:

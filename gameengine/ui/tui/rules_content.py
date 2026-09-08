@@ -174,15 +174,19 @@ def visible_catalog(
 # small clusters of violations that tend to travel together, and the board
 # separates them with whitespace alone.
 #
-# The clusters are deliberately UNNAMED. Naming them would add a sixth caption
-# level to a panel that already carries a group header, a severity colour, a
-# state marker and a post-verdict grade — and, worse, a name is a claim. These
-# are mnemonic neighbourhoods ("these two usually show up together"), not a
-# taxonomy the game will ever score against, and the associations are
-# deliberately generous: THREAT_FORUM_MATCH sits next to BREACH_HIT because
-# both say "this person has already surfaced somewhere they shouldn't have",
-# not because the engine relates them. Nothing downstream reads a cluster id;
-# they exist so the player builds a spatial memory of the board.
+# The clusters are NAMED, and that reverses an earlier call. They shipped
+# unnamed first, on the reasoning that a caption would add a competing header
+# level to a panel already carrying a group header, a severity colour, a state
+# marker and a post-verdict grade. Playtesting said otherwise: without names,
+# players read the whitespace as decoration and learned nothing about how the
+# violations relate, so they fell back to walking the whole list with the arrow
+# keys — the exact behaviour the grouping existed to replace. A name is a claim,
+# but an unlabelled grouping turned out to be a claim nobody could read.
+#
+# The names are still not a taxonomy the game scores against, and the
+# associations stay generous: THREAT_FORUM_MATCH sits with BREACH_HIT under
+# "Unsafe Account" because both say "this person has already surfaced somewhere
+# they shouldn't have", not because the engine relates them.
 #
 # Ordering contract: clusters are declared in the order they render, and their
 # groups must appear in GROUP_ORDER order and contiguously — the board draws
@@ -190,47 +194,51 @@ def visible_catalog(
 # below enforce that, plus exactly-once coverage of every catalogued kind, in
 # the same spirit as the #56 catalogue guards above.
 
-VIOLATION_CLUSTERS: list[tuple[str, str, tuple[DiscrepancyKind, ...]]] = [
+VIOLATION_CLUSTERS: list[
+    tuple[str, str, str, tuple[DiscrepancyKind, ...]]
+] = [
+    # (group, cluster id, PLAYER-FACING subcategory name, kinds)
+    #
     # DOSSIER — free evidence, read straight off the intake form and the chat.
-    ("DOSSIER",    "dossier-contact", (
+    ("DOSSIER",    "dossier-identity", "Identity Confirmation", (
         DiscrepancyKind.AFFILIATION_NOT_STATED,
         DiscrepancyKind.DISPOSABLE_EMAIL)),
-    ("DOSSIER",    "dossier-storage", (
+    ("DOSSIER",    "dossier-password", "Password Security", (
         DiscrepancyKind.WEAK_ENCRYPTION,
         DiscrepancyKind.UNSALTED_STORAGE)),
-    ("DOSSIER",    "dossier-conduct", (
+    ("DOSSIER",    "dossier-personal", "Personal", (
         DiscrepancyKind.HOSTILE_CHAT,)),
     # OSINT / Ghostscan — the claim, the fabrication, the trace left elsewhere.
-    ("OSINT",      "osint-claimed-identity", (
+    ("OSINT",      "osint-association", "Association Confirmation", (
         DiscrepancyKind.MISSING_PUBLIC_PROFILE,
         DiscrepancyKind.AFFILIATION_UNLISTED,
         DiscrepancyKind.AFFILIATION_MISMATCH)),
-    ("OSINT",      "osint-fabricated-identity", (
+    ("OSINT",      "osint-false-identity", "False Identity", (
         DiscrepancyKind.TYPOSQUAT_HANDLE,
         DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,
         DiscrepancyKind.BURNER_IDENTITY)),
-    ("OSINT",      "osint-external-traces", (
+    ("OSINT",      "osint-unsafe-account", "Unsafe Account", (
         DiscrepancyKind.BREACH_HIT,
         DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
         DiscrepancyKind.THREAT_FORUM_MATCH)),
-    # CREDENTIAL / Hashcrack — one block; there are only three of them.
-    ("CREDENTIAL", "cred-password", (
+    # CREDENTIAL / Hashcrack.
+    ("CREDENTIAL", "cred-exposure", "Credential Exposure", (
         DiscrepancyKind.WEAK_CREDENTIAL,
         DiscrepancyKind.CROSS_BREACH_REUSE,
         DiscrepancyKind.LEAKED_PASSWORD)),
     # FORENSICS / Logwatch — when, where from, and the shape of the attack.
-    ("FORENSICS",  "forensics-timing", (
+    ("FORENSICS",  "forensics-timing", "Access Timing", (
         DiscrepancyKind.AFTER_HOURS_ACCESS,
         DiscrepancyKind.IMPOSSIBLE_TRAVEL)),
-    ("FORENSICS",  "forensics-origin", (
+    ("FORENSICS",  "forensics-source", "Source Verification", (
         DiscrepancyKind.CLAIMED_IP_MISMATCH,
         DiscrepancyKind.INSIDER_BEHAVIOR)),
-    ("FORENSICS",  "forensics-cadence", (
+    ("FORENSICS",  "forensics-attack", "Attack Signature", (
         DiscrepancyKind.BRUTE_FORCE_IN_LOG,
         DiscrepancyKind.CREDENTIAL_STUFFING,
         DiscrepancyKind.LOW_AND_SLOW)),
-    # STEGO / Stegotool — one block; the image either carries something or not.
-    ("STEGO",      "stego-payload", (
+    # STEGO / Stegotool.
+    ("STEGO",      "stego-payload", "Payload Detection", (
         DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
         DiscrepancyKind.COVERT_C2_CHANNEL,
         DiscrepancyKind.ENCRYPTED_PAYLOAD)),
@@ -244,7 +252,7 @@ VIOLATION_CLUSTERS: list[tuple[str, str, tuple[DiscrepancyKind, ...]]] = [
 # panel, so they are import-time errors rather than something to notice in play.
 
 _CLUSTER_OF: dict[DiscrepancyKind, str] = {}
-for _grp, _cid, _kinds in VIOLATION_CLUSTERS:
+for _grp, _cid, _clabel, _kinds in VIOLATION_CLUSTERS:
     if not _kinds:
         raise AssertionError(f"empty evidence cluster: {_cid!r}")
     for _k in _kinds:
@@ -261,7 +269,7 @@ if _UNCLUSTERED:
         f"DiscrepancyKinds missing from VIOLATION_CLUSTERS: {_UNCLUSTERED}. "
         f"A kind absent here never renders on the Evidence Board at all.")
 
-_CLUSTER_IDS = [cid for _g, cid, _k in VIOLATION_CLUSTERS]
+_CLUSTER_IDS = [cid for _g, cid, _l, _k in VIOLATION_CLUSTERS]
 if len(set(_CLUSTER_IDS)) != len(_CLUSTER_IDS):
     raise AssertionError("duplicate evidence cluster ids")
 
@@ -270,7 +278,9 @@ if len(set(_CLUSTER_IDS)) != len(_CLUSTER_IDS):
 # progressive unlock filters by the kind's revealing tool, under a header that
 # can be locked while the chip is not.
 _GROUP_OF: dict[DiscrepancyKind, str] = {k: g for g, k, _lbl in VIOLATION_CATALOG}
-for _grp, _cid, _kinds in VIOLATION_CLUSTERS:
+for _grp, _cid, _clabel, _kinds in VIOLATION_CLUSTERS:
+    if not _clabel.strip():
+        raise AssertionError(f"evidence cluster {_cid!r} has no player-facing name")
     _wrong = sorted(k.name for k in _kinds if _GROUP_OF[k] != _grp)
     if _wrong:
         raise AssertionError(
@@ -279,7 +289,7 @@ for _grp, _cid, _kinds in VIOLATION_CLUSTERS:
 
 # Groups must appear in GROUP_ORDER order and contiguously — the board emits
 # one header per group as it walks this list and would repeat one otherwise.
-_CLUSTER_GROUP_RUNS = [g for i, (g, _c, _k) in enumerate(VIOLATION_CLUSTERS)
+_CLUSTER_GROUP_RUNS = [g for i, (g, _c, _l, _k) in enumerate(VIOLATION_CLUSTERS)
                        if i == 0 or VIOLATION_CLUSTERS[i - 1][0] != g]
 if _CLUSTER_GROUP_RUNS != [g for g in GROUP_ORDER if g in _CLUSTER_GROUP_RUNS]:
     raise AssertionError(
@@ -289,8 +299,8 @@ if _CLUSTER_GROUP_RUNS != [g for g in GROUP_ORDER if g in _CLUSTER_GROUP_RUNS]:
 
 def clustered_catalog(
     unlocked_tools: set[str] | None,
-) -> list[tuple[str, str, list[tuple[str, DiscrepancyKind, str]]]]:
-    """`(group, cluster_id, items)` triples for the Evidence Board's layout.
+) -> list[tuple[str, str, str, list[tuple[str, DiscrepancyKind, str]]]]:
+    """`(group, cluster_id, subcategory name, items)` for the board's layout.
 
     Same filtering rule as `visible_catalog` — a kind whose revealing tool is
     still locked is dropped, because a candidate cannot carry it yet.
@@ -314,13 +324,13 @@ def clustered_catalog(
     but never about membership.
     """
     catalog = {k: (g, lbl) for g, k, lbl in VIOLATION_CATALOG}
-    out: list[tuple[str, str, list[tuple[str, DiscrepancyKind, str]]]] = []
-    for group, cluster_id, kinds in VIOLATION_CLUSTERS:
+    out: list[tuple[str, str, str, list[tuple[str, DiscrepancyKind, str]]]] = []
+    for group, cluster_id, cluster_label, kinds in VIOLATION_CLUSTERS:
         items = [(group, k, catalog[k][1]) for k in kinds
                  if _tool_unlocked(_TOOL.get(k), unlocked_tools)]
         if not items:
             continue
-        out.append((group, cluster_id, items))
+        out.append((group, cluster_id, cluster_label, items))
     return out
 
 
