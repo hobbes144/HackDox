@@ -183,6 +183,30 @@ ContentSwitcher {
     border-title-color: #00ff9f;
 }
 
+/* ── Evidence board chip grid ────────────────────────────────────────── */
+/* The board packs its violation chips into as many columns as the measured
+ * content width allows (EvidenceBoard.chip_columns), so the two properties
+ * below are load-bearing rather than cosmetic.
+ *
+ * width: 100% — the inner Static must span the panel, or a chip's painted
+ * background stops short of the cell the click hit-test maps to.
+ *
+ * scrollbar-gutter: stable — reserve the scrollbar's cells whether or not it
+ * is showing. Without it the board has two content widths: one while it fits
+ * and one once it overflows. Since the column count is computed FROM that
+ * width, a repaint that pushes the content past the fold would narrow the
+ * panel, re-pack the grid, possibly shorten it back under the fold, and
+ * oscillate. EvidenceBoard.on_resize also guards on the measured width, but
+ * this removes the cause instead of damping it. */
+.evidence-content {
+    width: 100%;
+    height: auto;
+}
+
+#evidence-board, #evidence-c0, .tool-evidence, .rules-evidence {
+    scrollbar-gutter: stable;
+}
+
 #overseer-side  { width: 40%; }
 #reference-side { width: 60%; }
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.events import Key
@@ -25,7 +26,7 @@ class EvidenceState:
     the Candidate page plus the toggleable board on each tool page — and they
     all stay in sync.
 
-    Each violation has one of three states, cycled with Space:
+    Each violation has one of three states, cycled with Space (or a click):
         "unknown" (default, not recorded) → "marked" (present) → "absent"
         (ruled out) → "unknown" …
     Only "marked" kinds feed scoring, so the contract is unchanged:
@@ -156,7 +157,7 @@ GRADE_WRONG_COLOR   = "#ff5470"
 
 
 def _grade_badge(grade: str | None) -> str:
-    """Trailing ✓/✗ for one row. Empty string when the row isn't graded."""
+    """Trailing ✓/✗ for one summary row. Empty when the row isn't graded."""
     if grade == "correct":
         return f"  [{GRADE_CORRECT_COLOR}][b]✓[/][/]"
     if grade == "wrong":
@@ -164,28 +165,203 @@ def _grade_badge(grade: str | None) -> str:
     return ""
 
 
-def _grade_footer(state: EvidenceState) -> list[str]:
+def _grade_cell(grade: str | None) -> str:
+    """Exactly ONE cell of grade badge, for the chip grid.
+
+    The chip layout is cell-addressed — `on_click` maps a mouse column back to
+    a chip by arithmetic — so every decoration has to have a width the layout
+    code knows about. Same glyphs and colours as `_grade_badge`; the only
+    differences are the fixed width and the missing leading pad.
+
+    It is painted OUTSIDE the chip's background fill on purpose: a marked chip
+    is filled with its severity colour, and a green ✓ on a yellow fill is the
+    one place on this board where the colour language would stop being
+    readable.
+    """
+    if grade == "correct":
+        return f"[{GRADE_CORRECT_COLOR}][b]✓[/][/]"
+    if grade == "wrong":
+        return f"[{GRADE_WRONG_COLOR}][b]✗[/][/]"
+    return " "
+
+
+def _grade_footer(state: EvidenceState, width: int = 80) -> list[str]:
     """The summary line under a graded board.
 
     Reports a bare COUNT of violations the player never touched — deliberately
     not their names, their groups, or their severities. Knowing "there were two
     more" is feedback; knowing which two is the answer key, and the player is
     meant to carry that uncertainty into the next shift.
+
+    `width` picks the long or short wording. This board is mounted as narrow as
+    ~28 usable cells (#evidence-st on a 100-column terminal) and the long form
+    is 31, so the sentence has to be allowed to shrink — a clipped verdict
+    ("2 violations went unrecord") is worse than a terse one.
     """
     n = state.unrecorded_count
     if n == 0:
-        return [f"  [{GRADE_CORRECT_COLOR}]Nothing went unrecorded.[/]"]
+        long_form = "Nothing went unrecorded."
+        text = long_form if len(long_form) + 2 <= width else "All recorded."
+        return [f"  [{GRADE_CORRECT_COLOR}]{text}[/]"]
     plural = "violation" if n == 1 else "violations"
-    return [f"  [{GRADE_WRONG_COLOR}][b]{n}[/] {plural} went unrecorded.[/]"]
+    long_form = f"{n} {plural} went unrecorded."
+    if len(long_form) + 2 <= width:
+        return [f"  [{GRADE_WRONG_COLOR}][b]{n}[/] {plural} went unrecorded.[/]"]
+    return [f"  [{GRADE_WRONG_COLOR}][b]{n}[/] unrecorded[/]"]
+
+
+# ─── Chip grid geometry ──────────────────────────────────────────────────────
+#
+# The editable board draws each violation as a clickable chip and packs chips
+# into rows. Every constant here is in terminal CELLS, and the renderer and the
+# hit-test share them — `on_click` does not re-measure the rendered text, it
+# recomputes the same arithmetic — so a chip's clickable area and its painted
+# area cannot drift apart.
+#
+# ── Why arithmetic and not one widget per violation ──
+# The obvious implementation is 27 Textual `Button`s. It does not survive the
+# layout this board actually lives in: the same widget is mounted at five
+# different widths (#evidence-gs 34%, #evidence-hc/lw 36%, #evidence-st 32%,
+# #evidence-c0 50%, and .rules-evidence at 100% inside the docs overlay), each
+# of which is a percentage of a terminal the player can resize at will. A
+# Button carries its own border and padding and cannot be told to be one cell
+# tall; 27 of them is 80+ rows in a panel that is often 12. Chips inside the
+# one Static keep the board at a row per chip, keep the existing scroll, cursor
+# and grading code intact, and let the column count fall out of the measured
+# width instead of being guessed at authoring time.
+
+_CHIP_GAP      = 2    # blank cells between two chips on the same row
+_CHIP_MAX_COLS = 4    # past this, rows get too wide to scan even on a big screen
+_BOARD_INDENT  = 2    # left margin, matches the group headers' own indent
+# frame(1) + marker(1) + space(1) + [label] + space(1) + grade(1) + frame(1)
+_CHIP_CHROME   = 6
+_CHIP_MIN_W    = _CHIP_CHROME + 6   # below this a chip is unreadable anyway
+
+# Width used when the widget has not been laid out yet — a direct _render_text()
+# call in a test, or the first repaint from on_mount() before Textual has
+# assigned a size. Deliberately narrow: one column is always a valid layout, so
+# a too-small guess degrades to the single-column list this board has always
+# been, while a too-large guess would overflow the panel on the first frame.
+_FALLBACK_WIDTH = 46
+
+# Chip surfaces. The severity colour stays the identity of a violation in every
+# state — that is the whole colour language of this board (yellow minor, orange
+# major, red critical) and it predates this layout. What the state changes is
+# the SURFACE the colour is painted on:
+#   unknown → severity ink on a faint raised tile   (an unpressed button)
+#   marked  → severity as the FILL, near-black ink  (a lit button)
+#   absent  → no severity at all, muted and struck  (a discarded button)
+CHIP_IDLE_BG     = "#141b23"
+CHIP_ABSENT_BG   = "#10151b"
+CHIP_ABSENT_FG   = "#5f6b78"
+CHIP_MARKED_FG   = "#0b0e10"
+CHIP_CURSOR      = "#00ff9f"   # same accent as the focused-panel border
+
+_MARK_UNKNOWN = "·"
+_MARK_MARKED  = "▲"
+_MARK_ABSENT  = "✗"
+
+
+def chip_columns(avail: int, longest_label: int) -> tuple[int, int]:
+    """(columns, cell_width) for `avail` cells of usable width.
+
+    Column count is the most columns whose NATURAL width still fits; the
+    leftover cells are then handed back to the chips so they fill the row
+    rather than leaving a ragged right edge. At one column that means a chip
+    spans the whole panel, which is what keeps a 32%-wide tool sidebar looking
+    like a stack of buttons instead of a cramped grid.
+
+    The floor division guarantees `cell_width >= longest_label + _CHIP_CHROME`
+    for any `avail` that fits a single natural chip, so labels are never
+    truncated except on a genuinely tiny terminal.
+    """
+    natural = max(longest_label, 1) + _CHIP_CHROME
+    cols = (avail + _CHIP_GAP) // (natural + _CHIP_GAP)
+    cols = max(1, min(_CHIP_MAX_COLS, cols))
+    cell = (avail - _CHIP_GAP * (cols - 1)) // cols
+    return cols, max(_CHIP_MIN_W, cell)
+
+
+def _fit(label: str, width: int) -> str:
+    """Label padded — or, only on a terminal too narrow for one chip, cut."""
+    if len(label) > width:
+        return label[:max(0, width - 1)] + "…"
+    return label.ljust(width)
+
+
+def _clip(label: str, width: int) -> str:
+    """Trim a label to `width` cells with an ellipsis. Never pads."""
+    if width <= 0:
+        return ""
+    if len(label) > width:
+        return label[:max(0, width - 1)] + "…"
+    return label
+
+
+def _wrap_markup(parts: list[str], width: int, sep: str = "  ",
+                 indent: str = "") -> list[str]:
+    """Greedily pack markup fragments into lines no wider than `width` cells.
+
+    Measured with `Text.cell_len`, so the colour tags and the `[dim on …]`
+    hotkey chips do not count toward the width the way `len()` would.
+
+    Both places this is used — the keyboard hint under the chip grid and the
+    summary board's category strip — are decoration that used to be built as
+    one long f-string. That is fine at the 100%-wide docs-overlay board and
+    silently clipped at the 32%-wide Stegotool sidebar, which is the failure
+    mode this whole widget is trying not to have: `overflow-x` is hidden on a
+    VerticalScroll, so an over-long line loses its tail with no scrollbar to
+    tell the player anything is missing.
+    """
+    # Both the separator and the indent are markup too, so both are measured
+    # in cells rather than characters — `" [dim]·[/] "` is eleven characters
+    # and three cells, and using len() here would wrap far too early.
+    sep_w = Text.from_markup(sep).cell_len
+    width = max(1, width - Text.from_markup(indent).cell_len)
+    lines: list[str] = []
+    cur: list[str] = []
+    cur_w = 0
+    for part in parts:
+        w = Text.from_markup(part).cell_len
+        add = w if not cur else w + sep_w
+        if cur and cur_w + add > width:
+            lines.append(indent + sep.join(cur))
+            cur, cur_w = [part], w
+        else:
+            cur.append(part)
+            cur_w += add
+    if cur:
+        lines.append(indent + sep.join(cur))
+    return lines
+
+
+# Kept as short fragments rather than one sentence so `_wrap_markup` has
+# somewhere to break: the narrowest board this widget is mounted in is about
+# 30 cells of usable width.
+_HINT_PARTS = [
+    "[dim]click a chip[/]",
+    "[dim]Tab focus[/]",
+    "[dim]↑↓ move[/]",
+    "[dim]Space cycles[/]",
+]
 
 
 class EvidenceBoard(VerticalScroll):
     """Player-controlled evidence checklist (a *view* over EvidenceState).
 
-    A scrollable container so every item stays reachable regardless of
-    terminal height. Nothing is ever written here automatically. The player
-    uses ↑↓ to move the cursor and Space to toggle a flag. ← / → are NOT
-    consumed here — they bubble up to the screen for page navigation.
+    Violations are drawn as clickable chips, packed into rows and split into
+    unnamed clusters inside each tool group (see
+    `rules_content.VIOLATION_CLUSTERS`). A scrollable container, so every chip
+    stays reachable regardless of terminal height.
+
+    Nothing is ever written here automatically. The player moves the cursor
+    with ↑↓ and cycles a chip with Space, or clicks a chip directly. ← / → are
+    NOT consumed here — they bubble up to the screen for focus navigation, and
+    that is exactly why ↑↓ walk the chips in READING order rather than by grid
+    row: with no horizontal key there would be no way back into a column the
+    cursor had left, so a row-wise cursor would strand chips on a multi-column
+    board. The grid is a spatial layout for the eye and the mouse; the keyboard
+    still sees the same ordered list it always has.
 
     Several boards share one `EvidenceState`, so flagging a finding on a tool
     page is immediately reflected on the Candidate page board and vice versa.
@@ -208,18 +384,32 @@ class EvidenceBoard(VerticalScroll):
             self.can_focus = False
             self.border_title = " FLAGGED EVIDENCE "
         else:
-            self.border_title = " EVIDENCE BOARD  [dim](↑↓ move · Space flag)[/] "
+            self.border_title = " EVIDENCE BOARD  [dim](↑↓ · Space · click)[/] "
         self._state = state
         # Progressive unlock: this view's own slice of the catalog, filtered
         # to violations whose revealing tool the player currently has. The
         # instance is rebuilt fresh every day (IntakeScreen is recreated per
         # day), so baking the filter in at construction is enough — it never
         # needs to grow mid-shift.
-        self._items = rules_content.visible_catalog(unlocked_tools)
+        #
+        # `_clusters` is the layout; `_items` is that same list flattened, and
+        # is what `_cursor` indexes. Deriving one from the other rather than
+        # filtering the catalog twice is what keeps the cursor, the hit map and
+        # the painted chips addressing the same violation.
+        self._clusters = rules_content.clustered_catalog(unlocked_tools)
+        self._items: list[tuple[str, DiscrepancyKind, str]] = [
+            item for _g, _cid, items in self._clusters for item in items
+        ]
         self._cursor: int = 0
         self._focused: bool = False
         self._cursor_line: int = 0
-        self._content = Static(id=f"{widget_id}-content")
+        # Hit map, rebuilt on every render: line index → [(x_start, x_end,
+        # item index)]. Cells between chips are deliberately absent from it, so
+        # a click landing in a gutter does nothing rather than toggling
+        # whichever chip happens to be nearest.
+        self._hit: dict[int, list[tuple[int, int, int]]] = {}
+        self._last_width: int = -1
+        self._content = Static(id=f"{widget_id}-content", classes="evidence-content")
 
     def compose(self) -> ComposeResult:
         yield self._content
@@ -238,6 +428,27 @@ class EvidenceBoard(VerticalScroll):
             except Exception:  # noqa: BLE001, S110 -- scrolling before the widget is fully
                 # mounted/sized is a no-op, not a failure worth surfacing.
                 pass
+
+    def on_resize(self, event) -> None:
+        """Re-pack the chip grid when the panel's usable width changes.
+
+        `event` is unused — the width is re-measured rather than read off it,
+        because the scrollbar gutter is what actually decides how much room the
+        chips get and that is not in the resize payload.
+
+        Guarded on the measured width rather than firing on every resize: a
+        repaint can add or remove the vertical scrollbar, which changes the
+        content width, which fires another resize. Comparing against the width
+        the last render actually used breaks that loop after one bounce instead
+        of letting the board oscillate between two column counts. (The
+        stylesheet also reserves the scrollbar gutter, which removes the cause;
+        this is the belt to that pair of braces.)
+
+        The summary view needs this too, not just the chip grid — its category
+        strip wraps and its rule is drawn to the panel width.
+        """
+        if self._content_width() != self._last_width:
+            self.repaint()
 
     def reset_cursor(self) -> None:
         """Reset this view's cursor and repaint (flags are cleared on the
@@ -273,6 +484,24 @@ class EvidenceBoard(VerticalScroll):
         self._focused = False
         self.repaint()
 
+    # ── Toggling ──────────────────────────────────────────────────────
+
+    def _toggle(self, index: int) -> None:
+        """Cycle one violation and resync every other board view.
+
+        The single mutation path for both Space and the mouse — a click is a
+        cursor move plus this, never a second copy of the cycle logic, so the
+        two input routes cannot drift the way a parallel implementation would.
+        """
+        if not (0 <= index < len(self._items)):
+            return
+        self._state.cycle(self._items[index][1])
+        self.repaint()   # immediate repaint for this board
+        # Repaint other board views so shared state stays in sync.
+        for board in self.app.query(EvidenceBoard):
+            if board is not self:
+                board.repaint()
+
     # ── Key handling ──────────────────────────────────────────────────
 
     def on_key(self, event: Key) -> None:
@@ -287,71 +516,154 @@ class EvidenceBoard(VerticalScroll):
             event.stop()
             self.repaint()
         elif event.key == "space":
-            kind = self._items[self._cursor][1]
             # Cycle: unknown → marked → absent → unknown.
-            self._state.cycle(kind)
+            self._toggle(self._cursor)
             event.stop()
-            self.repaint()  # immediate repaint for this board
-            # Repaint other board views so shared state stays in sync.
-            for board in self.app.query(EvidenceBoard):
-                if board is not self:
-                    board.repaint()
-        # ← / → are NOT stopped — they bubble to IntakeScreen for page nav.
+        # ← / → are NOT stopped — they bubble to IntakeScreen for focus nav.
+
+    # ── Mouse handling ────────────────────────────────────────────────
+
+    def _mouse_to_cell(self, event) -> tuple[int, int] | None:
+        """Mouse position → (column, line) inside the rendered content.
+
+        Measured against the inner Static's own screen region rather than this
+        container's gutter. The Static is what scrolls, so its region already
+        carries the scroll offset, and that region is reported in SCREEN
+        coordinates — the one frame of reference a Click keeps no matter which
+        widget in the chain ends up handling it. Deriving the offset from
+        `event.x` instead would silently depend on whether the press landed on
+        the Static or on the container's own border and padding.
+        """
+        try:
+            region = self._content.region
+        except Exception:  # noqa: BLE001 -- not mounted / not yet laid out
+            return None
+        x = event.screen_x - region.x
+        y = event.screen_y - region.y
+        if x < 0 or y < 0:
+            return None
+        return x, y
+
+    def hit_test(self, x: int, y: int) -> int | None:
+        """Item index at content cell (x, y), or None for a gap or a header.
+
+        Public because it is the seam the click tests drive: they can assert
+        the map the last render built without reproducing Textual's mouse
+        dispatch, which is the part most likely to change under us.
+        """
+        for start, end, index in self._hit.get(y, ()):
+            if start <= x < end:
+                return index
+        return None
+
+    def on_click(self, event) -> None:
+        if self._summary or getattr(event, "button", 1) != 1:
+            return
+        cell = self._mouse_to_cell(event)
+        if cell is None:
+            return
+        index = self.hit_test(*cell)
+        if index is None:
+            return
+        # A click is also a cursor move, so ↑↓ and Space carry on from wherever
+        # the player last pointed instead of from a stale row.
+        self._cursor = index
+        if not self.has_focus:
+            self.focus()
+        self._toggle(index)
+        event.stop()
 
     # ── Rendering ─────────────────────────────────────────────────────
+
+    def _content_width(self) -> int:
+        """Usable cell width for chips, or the fallback when unmounted."""
+        try:
+            width = self.content_size.width
+        except Exception:  # noqa: BLE001 -- size is unavailable before layout
+            width = 0
+        return width if width > 0 else _FALLBACK_WIDTH
+
+    def _chip_markup(self, index: int, label: str, label_w: int) -> str:
+        """One chip, exactly `label_w + _CHIP_CHROME` cells wide."""
+        kind      = self._items[index][1]
+        state     = self._state.state_of(kind)
+        sev       = _sev_color(kind)
+        at_cursor = index == self._cursor and self._focused
+        grade     = _grade_cell(self._state.grade_of(kind))
+        text      = _fit(label, label_w)
+
+        if state == "marked":
+            body = f"[b {CHIP_MARKED_FG} on {sev}]{_MARK_MARKED} {text} [/]"
+        elif state == "absent":
+            body = (f"[{CHIP_ABSENT_FG} on {CHIP_ABSENT_BG}]{_MARK_ABSENT} "
+                    f"[strike]{text}[/] [/]")
+        else:
+            body = f"[{sev} on {CHIP_IDLE_BG}]{_MARK_UNKNOWN} {text} [/]"
+
+        if at_cursor:
+            left  = f"[{CHIP_CURSOR}][b]▏[/][/]"
+            right = f"[{CHIP_CURSOR}][b]▕[/][/]"
+        else:
+            left = right = " "
+        return f"{left}{body}{grade}{right}"
 
     def _render_text(self) -> str:
         if self._summary:
             return self._render_summary()
+
+        width = self._content_width()
+        self._last_width = width
+        avail   = max(_CHIP_MIN_W, width - _BOARD_INDENT)
+        longest = max((len(lbl) for _g, _k, lbl in self._items), default=1)
+        cols, cell_w = chip_columns(avail, longest)
+        label_w = max(1, cell_w - _CHIP_CHROME)
+
         lines: list[str] = []
+        hit: dict[int, list[tuple[int, int, int]]] = {}
+        index = 0
         current_group = ""
-        # Left gutter reserved for a prominent flag indicator; text is then
-        # indented so it sits nearer the centre of the panel.
-        INDENT = "   "
-        for idx, (group, kind, label) in enumerate(self._items):
+
+        for group, _cluster_id, items in self._clusters:
             if group != current_group:
                 gcolor, hotkey = _GROUP_META.get(group, ("#7dd3c0", ""))
                 hint = f"  [dim on #10161d] {hotkey} [/]" if hotkey else ""
                 if current_group:
-                    lines.append("")  # spacer between groups
+                    lines.append("")          # breathing room before a header
                 lines.append(f"  [{gcolor}][b]▎ {group}[/][/]{hint}")
                 current_group = group
-
-            state     = self._state.state_of(kind)
-            at_cursor = idx == self._cursor and self._focused
-            sev       = _sev_color(kind)
-            # Post-verdict grade badge (reveal window). Empty until reveal(),
-            # and empty forever on rows the player left at "unknown" — a blank
-            # row is how the answer key stays off the board.
-            badge     = _grade_badge(self._state.grade_of(kind))
-
-            # 4-column gutter carries the state indicator:
-            #   marked  → bold severity bar  (present)
-            #   absent  → muted ✗ marker     (ruled out)
-            #   unknown → blank              (no icon)
-            if state == "marked":
-                gutter = f"[{sev}][b]▐██▌[/][/]"
-            elif state == "absent":
-                gutter = "[#6b7785] ✗  [/]"
             else:
-                gutter = "    "
+                # Cluster divider. Whitespace only, by design: these groupings
+                # are unnamed mnemonics, and a rule or a caption would promote
+                # them into a second header level competing with the real one.
+                lines.append("")
 
-            if at_cursor:
-                self._cursor_line = len(lines)
-                lines.append(f"{gutter}{INDENT}[reverse] {label} [/]{badge}")
-            elif state == "marked":
-                lines.append(f"{gutter}{INDENT}[{sev}][b]{label}[/][/]{badge}")
-            elif state == "absent":
-                lines.append(f"{gutter}{INDENT}[#6b7785][strike]{label}[/][/]{badge}")
-            else:
-                lines.append(f"{gutter}{INDENT}[{sev}]{label}[/]")
+            for row_start in range(0, len(items), cols):
+                row = items[row_start:row_start + cols]
+                chips: list[str] = []
+                spans: list[tuple[int, int, int]] = []
+                x = _BOARD_INDENT
+                for offset, (_g, _kind, label) in enumerate(row):
+                    item_index = index + row_start + offset
+                    chips.append(self._chip_markup(item_index, label, label_w))
+                    spans.append((x, x + cell_w, item_index))
+                    if item_index == self._cursor and self._focused:
+                        self._cursor_line = len(lines)
+                    x += cell_w + _CHIP_GAP
+                hit[len(lines)] = spans
+                lines.append(" " * _BOARD_INDENT
+                             + (" " * _CHIP_GAP).join(chips))
+            index += len(items)
+
+        self._hit = hit
 
         if self._state.revealed:
             lines.append("")
-            lines.extend(_grade_footer(self._state))
+            lines.extend(_grade_footer(self._state, width))
         elif not self._focused:
             lines.append("")
-            lines.append("  [dim]Tab to focus · ↑↓ move · Space cycles unknown/marked/absent[/]")
+            lines.extend(_wrap_markup(_HINT_PARTS, width,
+                                      sep=" [dim]·[/] ",
+                                      indent=" " * _BOARD_INDENT))
         return "\n".join(lines)
 
     def _render_summary(self) -> str:
@@ -376,36 +688,52 @@ class EvidenceBoard(VerticalScroll):
                 chips.append(f"[{gcolor}][b] {g} [/][/]")
             else:
                 chips.append(f"[#3a4a58] {g} [/]")
-        lines: list[str] = ["  ".join(chips),
-                            "[#1c2733]" + "─" * 46 + "[/]", ""]
+        # Both the strip and its underline are sized to the panel. Five lit
+        # group chips are ~60 cells and this board is half of the Candidate
+        # page's mid row, so on anything under a ~130-column terminal the old
+        # single-line strip (and its hardcoded 46-cell rule) ran off the right
+        # edge into the clip.
+        width = self._content_width()
+        self._last_width = width
+        lines: list[str] = [*_wrap_markup(chips, width),
+                            "[#1c2733]" + "─" * max(10, width) + "[/]", ""]
 
         if not recorded:
-            lines.append("[dim]No evidence recorded for this candidate.[/]")
+            lines.append(_clip("No evidence recorded for this candidate.",
+                               width))
+            lines[-1] = f"[dim]{lines[-1]}[/]"
             lines.append("")
             if self._state.revealed:
                 # Nothing to tick, but the count still lands — a player who
                 # flagged nothing on a dirty candidate should feel that.
-                lines.extend(_grade_footer(self._state))
+                lines.extend(_grade_footer(self._state, width))
             else:
-                lines.append("[dim]Open a tool page and press [b]Tab[/] to record evidence.[/]")
+                lines.extend(_wrap_markup(
+                    ["[dim]Open a tool page[/]", "[dim]press [b]Tab[/][/]",
+                     "[dim]to record evidence.[/]"], width, sep=" "))
             return "\n".join(lines)
 
+        # 4 cells of indent + marker + space, and 3 more for a graded row's
+        # "  ✓" — reserved unconditionally so a row does not change width the
+        # moment the verdict lands.
+        label_room = max(4, width - 9)
         current_group = ""
         for group, kind, label in recorded:
             if group != current_group:
                 gcolor, _hk = _GROUP_META.get(group, ("#7dd3c0", ""))
-                lines.append(f"[{gcolor}][b]▎ {group}[/][/]")
+                lines.append(f"[{gcolor}][b]▎ {_clip(group, width - 2)}[/][/]")
                 current_group = group
             badge = _grade_badge(self._state.grade_of(kind))
+            text  = _clip(label, label_room)
             if self._state.state_of(kind) == "marked":
                 sev = _sev_color(kind)
-                lines.append(f"    [{sev}][b]▲ {label}[/][/]{badge}")
+                lines.append(f"    [{sev}][b]▲ {text}[/][/]{badge}")
             else:  # absent — ruled out
-                lines.append(f"    [#6b7785]✗ [strike]{label}[/][/]{badge}")
+                lines.append(f"    [#6b7785]✗ [strike]{text}[/][/]{badge}")
         n_m = len(marked)
         n_a = len(recorded) - n_m
         lines.append("")
         lines.append(f"[dim]{n_m} marked · {n_a} ruled out[/]")
         if self._state.revealed:
-            lines.extend(_grade_footer(self._state))
+            lines.extend(_grade_footer(self._state, width))
         return "\n".join(lines)
