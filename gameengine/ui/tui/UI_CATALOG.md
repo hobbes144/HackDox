@@ -1,5 +1,5 @@
 # HackDox TUI — Interface Catalog
-*Last updated: 2026-05-30*
+*Last updated: 2026-09-12*
 
 ---
 
@@ -12,6 +12,9 @@ All player input during gameplay flows through a persistent `CommandBar` at the 
 ---
 
 ## Screen Stack
+
+Every change BETWEEN these screens is covered by a `TransitionScreen`
+(see Screen Transitions below); page switches inside `IntakeScreen` are not.
 
 ```
 HackDoxApp
@@ -55,6 +58,11 @@ HackDoxApp
 ### GameOverScreen
 - **Trigger:** Lives reach zero
 - **Keys:** `R` restart · `Q` quit
+
+### TransitionScreen *(modal, twice per screen change)*
+- **Trigger:** `HackDoxApp._transition`, on every full-screen change
+- **Content:** animated CRT signal-loss rows over the screen underneath
+- **Keys:** none — input is dead for the duration (see Screen Transitions)
 
 ---
 
@@ -168,6 +176,42 @@ HackDoxApp
 - Two lines: response/feedback · `hackdox@terminal:~$` prompt with live buffer
 - Player types commands; Enter submits; Backspace edits; Esc clears
 - Uses `self.update(markup)` for Rich markup rendering
+
+---
+
+## Screen Transitions
+
+Every full-screen change glitches instead of cutting: intro → briefing →
+shift → end of day → between-day menu → next briefing, plus game over and
+campaign end. Page switches within a shift (`1`-`5`) and the modal overlays
+(rules, evidence board, credit reveal) are deliberately excluded — they happen
+dozens of times a shift, and a lock-out there is friction, not atmosphere.
+
+| Phase | Duration | What is on screen |
+|---|---|---|
+| out | `TRANSITION_DURATION × TRANSITION_SWAP_AT` | the OUTGOING page, glitch ramping to full coverage |
+| swap | one callback, nothing awaited | the screen change, under total coverage — never visible |
+| in | the remainder | the INCOMING page, glitch decaying to clear |
+
+Input is dead from the first frame to the last: both halves are modal screens,
+so the page underneath gets no keys, no clicks and none of its own bindings,
+and `TransitionScreen.on_key` swallows what arrives so a mashed key cannot
+queue up and land on the next page. `config.TRANSITION_PASSTHROUGH_KEYS`
+(ctrl+c / ctrl+q) is the one exception — an animation must never trap the
+player.
+
+The picture lives in `ui/tui/glitch.py` (`build_frame`, `coverage_for`,
+`GlitchEnvelope` — all app-free and unit-tested); the screen that draws it is
+`ui/tui/screens/transition.py`. It paints in whole terminal ROWS because
+Textual's compositor replaces a cell outright whenever any widget paints it:
+show-through exists only where the top screen paints nothing, so a covered row
+is a `Static` of noise and an uncovered row is `visibility: hidden`. Intensity
+is therefore just how many rows are covered — and at the peak that is all of
+them, which is what hides the swap.
+
+Knobs: `config.TRANSITION_ENABLED` / `_DURATION` / `_SWAP_AT` /
+`_FRAME_INTERVAL` / `_START_INTENSITY` / `_FULL_COVER_AT` / `_MAX_BANDS` /
+`_JITTER`. Sound: `transition_glitch`, fired once per window.
 
 ---
 
@@ -298,6 +342,8 @@ File: `gameengine/ui/tui/app.tcss`
 
 | File | Purpose |
 |------|---------|
-| `gameengine/ui/tui/app.py` | All screens, widgets, and IntakeScreen game logic |
+| `gameengine/ui/tui/app.py` | `HackDoxApp` — screen stack, transitions, day lifecycle |
+| `gameengine/ui/tui/glitch.py` | Screen-transition frames (app-free: frame builder + envelope) |
+| `gameengine/ui/tui/screens/transition.py` | `TransitionScreen` — draws the glitch, blocks input |
 | `gameengine/ui/tui/app.tcss` | All CSS for TUI layout and theming |
 | `gameengine/config.py` | `KEY_BINDINGS`, tool costs, economy constants |

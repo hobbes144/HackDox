@@ -61,6 +61,8 @@ from gameengine.ui.tui.screens.game_over import GameOverScreen
 from gameengine.ui.tui.screens.intake import IntakeScreen
 from gameengine.ui.tui.screens.intro import IntroScreen
 from gameengine.ui.tui.screens.rules import RulesScreen
+from gameengine.ui.tui.screens.transition import TransitionScreen
+from gameengine.ui.tui import glitch
 from gameengine.ui.tui.shared import (
     _B,
     _BOARD_HOME_GROUP,
@@ -155,6 +157,7 @@ __all__ = [
     "StegoImagePanel",
     "Toast",
     "ToolTerminal",
+    "TransitionScreen",
     "TypewriterLog",
     "_TWMessage",
     "_format_day_rules",
@@ -191,6 +194,9 @@ class HackDoxApp(App):
         self._day_start_health: float = config.SITE_HEALTH_START
         self._hd_earned = 0   # HD$ from verdicts, set at finish_day
         self._hd_bonus  = 0   # HD$ Site Health bonus, set at finish_day
+        # Transition bookkeeping (see _transition).
+        self._transition_busy   = False
+        self._queued_screen: object | None = None
 
     def on_mount(self) -> None:
         self._narratives = load_narratives()
@@ -221,8 +227,7 @@ class HackDoxApp(App):
         # 2-20 had no authored intro key at all and opened on silence.
         narrative = resolve_narrative(
             self._narratives, self._day.overseer_intro_key, "generic_intro")
-        self.pop_screen()
-        self.push_screen(BriefingScreen(self._day, narrative, self._state))
+        self._transition(BriefingScreen(self._day, narrative, self._state))
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
@@ -230,8 +235,7 @@ class HackDoxApp(App):
         self._day_start_health = self._state.site_health
         intro = resolve_narrative(
             self._narratives, self._day.overseer_intro_key, "generic_intro")
-        self.pop_screen()
-        self.push_screen(IntakeScreen(self._day, self._state, intro))
+        self._transition(IntakeScreen(self._day, self._state, intro))
 
     def finish_day(self) -> None:
         assert self._state is not None and self._day is not None
@@ -253,16 +257,14 @@ class HackDoxApp(App):
         # #15: was the literal string "..." on every unauthored day.
         narrative = resolve_narrative(self._narratives, outro_key,
                                       generic_outro_key(performance))
-        self.pop_screen()
-        self.push_screen(EODScreen(
+        self._transition(EODScreen(
             self._day, self._state, narrative, performance,
             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
             health_delta=self._state.site_health - self._day_start_health,
         ))
 
     def game_over(self) -> None:
-        self.pop_screen()
-        self.push_screen(GameOverScreen())
+        self._transition(GameOverScreen())
 
     def show_between_day(self) -> None:
         """EOD → between-day menu (issue #22)."""
@@ -273,8 +275,7 @@ class HackDoxApp(App):
         narrative = resolve_narrative(
             self._narratives, f"day{self._day.number}_between",
             "generic_between")
-        self.pop_screen()
-        self.push_screen(BetweenDayScreen(
+        self._transition(BetweenDayScreen(
             self._day, self._state, narrative,
             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
             health_delta=self._state.site_health - self._day_start_health,
@@ -292,8 +293,7 @@ class HackDoxApp(App):
         prev_day = self._day
         if self._lab_day is not None:
             # One shift, then out — a lab run has no day 2.
-            self.pop_screen()
-            self.push_screen(CampaignEndScreen(st.current_day))
+            self._transition(CampaignEndScreen(st.current_day))
             return
         st.current_day += 1
         st.current_slot_index = 0
@@ -306,17 +306,78 @@ class HackDoxApp(App):
         try:
             self._day = load_day(st.current_day)
         except FileNotFoundError:
-            self.pop_screen()
-            self.push_screen(CampaignEndScreen(st.current_day))
+            self._transition(CampaignEndScreen(st.current_day))
             return
         self._day_start_health = st.site_health
         # #15: falls through to generic copy rather than an empty panel — days
         # 2-20 had no authored intro key at all and opened on silence.
         narrative = resolve_narrative(
             self._narratives, self._day.overseer_intro_key, "generic_intro")
-        self.pop_screen()
-        self.push_screen(BriefingScreen(self._day, narrative, self._state,
+        self._transition(BriefingScreen(self._day, narrative, self._state,
                                         prev_day=prev_day))
+
+    # ── Screen transitions (glitch) ─────────────────────────────────────
+    #
+    # Every full-screen change goes through _transition instead of a bare
+    # pop/push, so the change is covered by the CRT signal-loss effect and
+    # input is dead while it runs. Knobs live in config.TRANSITION_*; set
+    # TRANSITION_ENABLED = False and every swap cuts instantly again.
+    #
+    # Page switches inside a shift (1-5) and the modal overlays (rules,
+    # evidence board, credit reveal) deliberately do NOT use this — they
+    # happen dozens of times a shift.
+
+    def _swap_screen(self, screen) -> None:
+        """The bare screen change every transition eventually performs."""
+        self.pop_screen()
+        self.push_screen(screen)
+
+    def _transition(self, screen) -> None:
+        """Glitch over the screen change, in two halves.
+
+        First half covers the OUTGOING screen and ramps to full coverage;
+        the swap happens at the peak (in _transition_swap, where nothing is
+        visible); the second half decays back to clear over the INCOMING
+        screen. Both halves are modal screens, so the keyboard is dead from
+        the first frame to the last.
+        """
+        if not config.TRANSITION_ENABLED:
+            self._swap_screen(screen)
+            return
+        if self._transition_busy:
+            # Input is dead for the whole window, so a second screen change
+            # mid-transition can only come from a stray timer. Honour it at
+            # the end rather than stacking a second glitch, which would leave
+            # a transition screen orphaned on the stack.
+            self._queued_screen = screen
+            return
+        self._transition_busy = True
+        sound_manager.play("transition_glitch")
+        out_dur = max(0.01, config.TRANSITION_DURATION * config.TRANSITION_SWAP_AT)
+        in_dur  = max(0.01, config.TRANSITION_DURATION - out_dur)
+        self.push_screen(TransitionScreen(
+            phase=glitch.PHASE_OUT, duration=out_dur,
+            on_complete=lambda: self._transition_swap(screen, in_dur)))
+
+    def _transition_swap(self, screen, in_dur: float) -> None:
+        """Midpoint: swap the screen underneath the noise, then decay out.
+
+        The four stack operations run in ONE callback with nothing awaited
+        between them, so the compositor never gets a chance to paint the
+        intermediate states — the player sees full-coverage noise throughout.
+        """
+        self.pop_screen()            # this half of the glitch
+        self._swap_screen(screen)    # the actual screen change, unseen
+        self.push_screen(TransitionScreen(
+            phase=glitch.PHASE_IN, duration=in_dur,
+            on_complete=self._transition_end))
+
+    def _transition_end(self) -> None:
+        self.pop_screen()            # the incoming half — input is live again
+        self._transition_busy = False
+        queued, self._queued_screen = self._queued_screen, None
+        if queued is not None:
+            self._swap_screen(queued)
 
     def _evaluate_performance(self) -> Performance:
         assert self._state is not None and self._day is not None

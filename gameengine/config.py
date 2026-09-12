@@ -386,6 +386,41 @@ VERDICT_REVEAL_ENABLED        = True
 VERDICT_REVEAL_DURATION       = 3.0    # seconds the border pulse runs
 VERDICT_REVEAL_PULSE_INTERVAL = 0.22   # seconds between bright/dim swaps
 
+# ─── Screen transitions (glitch) ─────────────────────────────────────────────
+#
+# Every FULL-SCREEN change (intro → briefing → shift → end of day → between-day
+# menu → next briefing, plus game over / campaign end) is covered by an
+# animated CRT signal-loss effect instead of cutting straight over. Page
+# switches WITHIN the shift (1-5) and the modal overlays (rules, evidence
+# board, credit reveal) are untouched — those happen dozens of times a shift
+# and a lock-out there would just be friction.
+#
+# The window is two halves (see HackDoxApp._transition): the first covers the
+# outgoing screen and ramps up to full coverage, the swap happens underneath
+# at the peak where nothing is visible, and the second decays back to clear
+# over the incoming screen. Input is dead for the whole duration — that is the
+# point of the beat, so a keystroke meant for the old page cannot land on the
+# new one.
+#
+# Set TRANSITION_ENABLED = False to switch it off: screen changes then cut
+# instantly, exactly as they did before the feature.
+TRANSITION_ENABLED = True
+TRANSITION_DURATION = 0.75      # seconds, total across both halves
+TRANSITION_SWAP_AT = 0.5       # fraction of the duration spent over the OLD screen
+TRANSITION_FRAME_INTERVAL = 0.05   # seconds between frames (~20fps)
+
+# Look. Intensity drives how MANY terminal rows a frame paints over, because
+# an unpainted row is the only way the screen underneath shows through (see
+# widgets/glitch.py).
+TRANSITION_START_INTENSITY = 0.35  # first frame — a hard hit, not a fade-in
+TRANSITION_FULL_COVER_AT = 0.90    # intensity at which every row is covered
+TRANSITION_MAX_BANDS = 7           # tear bands at peak intensity
+TRANSITION_JITTER = 0.12           # per-frame flicker around the ramp
+
+# Keys that still work while a transition is on screen. Quitting must never be
+# blocked by an animation.
+TRANSITION_PASSTHROUGH_KEYS = ("ctrl+c", "ctrl+q")
+
 # ─── Campaign shape (#17) ────────────────────────────────────────────────────
 #
 # CAMPAIGN_LAST_DAY is the ceiling for procedurally-synthesized days: past it,

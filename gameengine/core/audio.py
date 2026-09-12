@@ -87,6 +87,11 @@ SFX_REGISTRY: dict[str, str] = {
     # Candidate-page verdict pulse (the border flash, not the commit itself).
     "pulse_celebration": "pulse_celebration.wav",
     "pulse_error":       "pulse_error.wav",
+
+    # Screen transitions — the glitch that covers a full-screen change
+    # (see ui/tui/screens/transition.py). Fires once, at the start of the
+    # window, not per half.
+    "transition_glitch": "transition_glitch.wav",
 }
 
 

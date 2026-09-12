@@ -172,6 +172,18 @@ def build() -> dict[str, list[float]]:
                                     tone(987.77, 0.12, 0.48), gap=0.008),
         "pulse_error": mix(tone(233.08, 0.18, 0.45, harmonic2=0.35),
                           tone(220.0, 0.18, 0.4, attack=0.01, release=0.7)),
+
+        # Screen transition glitch — a torn-signal burst roughly as long as
+        # the transition window itself (config.TRANSITION_DURATION): noise
+        # over a falling sweep, with a second noise hit where the effect
+        # peaks and the screen swap happens underneath it.
+        "transition_glitch": mix(
+            noise_burst(0.85, 0.30, seed=7, attack=0.005, release=0.55),
+            sweep(1400, 180, 0.85, 0.22, attack=0.01, release=0.5),
+            concat(noise_burst(0.04, 0.0, seed=1, attack=0.5, release=0.5),
+                   noise_burst(0.22, 0.26, seed=9, attack=0.02, release=0.7),
+                   gap=0.40),
+        ),
     }
 
 
