@@ -9,6 +9,7 @@ from gameengine.ui.tui.screens.game_over import GameOverScreen
 from gameengine.ui.tui.screens.intake import IntakeScreen
 from gameengine.ui.tui.screens.intro import IntroScreen
 from gameengine.ui.tui.screens.rules import RulesScreen
+from gameengine.ui.tui.screens.transition import TransitionScreen
 
 __all__ = [
     'BetweenDayScreen',
@@ -20,4 +21,5 @@ __all__ = [
     'IntakeScreen',
     'IntroScreen',
     'RulesScreen',
+    'TransitionScreen',
 ]

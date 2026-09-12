@@ -138,6 +138,28 @@ ContentSwitcher {
     text-style: bold dim;
 }
 
+/* Arrow-key focus feedback for the verdict row (batch-3 follow-up bugfix,
+ * Nick): ADMIT/DENY/NEXT already sit in the same up/down focus chain as the
+ * panels (see IntakeScreen.action_focus_next/prev), but before this they had
+ * no focus styling of their own — Button's built-in :focus only tweaks
+ * text-style, which the bold set two rules up already forces to the same
+ * value. Landing on a button while arrow-navigating looked identical to
+ * landing on nothing, which read as extra, dead "clicks" between the Chat
+ * and Reference panels. A bright outline (doesn't disturb layout the way a
+ * border swap would against ADMIT/DENY's own success/error borders) plus a
+ * reversed text style matches the #00ff9f focus treatment every other panel
+ * already uses. */
+#verdict-buttons Button:focus,
+#btn-next:focus {
+    outline: heavy #00ff9f;
+    text-style: bold reverse;
+}
+
+#btn-next:disabled:focus {
+    outline: none;
+    text-style: bold dim;
+}
+
 /* Toggleable evidence board on the tool pages (2-5). Hidden until the player
  * presses Tab, then it occupies the left column in place of the condensed
  * dossier/reference sidebar so the tool data on the right stays visible.
@@ -569,6 +591,66 @@ CreditRevealScreen {
     padding: 2 3;
     background: #0b0714;
     border: double #c084fc;
+}
+
+/* ── Screen transition glitch ─────────────────────────────────────────────
+ *
+ * TransitionScreen + GlitchField (ui/tui/screens/transition.py,
+ * ui/tui/widgets/glitch.py). The screen's own background is translucent so
+ * uncovered cells wash slightly darker than the page underneath; the rows
+ * themselves are what hide it.
+ *
+ * .glitch-row is one terminal line, mounted directly on the screen. `width:
+ * 100%` so a painted row covers the full line — at peak intensity every row is
+ * painted, which is what makes the screen swap underneath invisible. `.off`
+ * hides a row outright: it keeps its place in the layout but paints nothing,
+ * and Textual's compositor then lets the screen below show through. A
+ * transparent background would NOT do this — a painted cell always replaces
+ * the character beneath it, which is also why the rows are NOT wrapped in a
+ * container (an empty container is just as opaque as a filled one).
+ *
+ * TransitionScreen.solid is the full-coverage state: nothing can show through
+ * at the peak anyway, so the screen paints opaque as well.
+ *
+ * Kept ABOVE the verdict-reveal block on purpose; that block has to stay last
+ * in the file (see its own comment).
+ */
+
+TransitionScreen {
+    background: #05070a 25%;
+    layout: vertical;
+    overflow: hidden hidden;
+}
+
+TransitionScreen.solid {
+    background: #05070a;
+}
+
+/* The in-place damage glitch (IntakeScreen._begin_damage_glitch). Same rows,
+ * but over the LIVE page instead of a screen swap, so they go on their own
+ * layer: a layer is arranged independently, which is what lets the rows be
+ * mounted onto the screen without disturbing the layout of the page they
+ * cover. `default` is named first so every existing widget — which declares
+ * no layer at all — stays underneath. */
+
+IntakeScreen {
+    layers: default damage-glitch;
+}
+
+.glitch-burst-row {
+    layer: damage-glitch;
+}
+
+.glitch-row {
+    width: 100%;
+    height: 1;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+}
+
+.glitch-row.off {
+    visibility: hidden;
 }
 
 /* ── Verdict reveal window ────────────────────────────────────────────────

@@ -12,6 +12,7 @@ from textual.widgets import Static
 
 from gameengine import config
 from gameengine.core import persistence, scoring, tools_bridge
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import Day, GameState
 from gameengine.ui.tui.screens._narration import (
     _play_overseer,
@@ -283,6 +284,7 @@ class BetweenDayScreen(Screen):
         st.hackdollars -= price
         if kind == "upgrade":
             st.upgrades.add(iid)
+            sound_manager.play("upgrade_purchase")
         elif kind == "credit":
             st.hackdox_credits += 1
         else:

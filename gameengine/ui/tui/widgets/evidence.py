@@ -9,6 +9,7 @@ from textual.events import Key
 from textual.widgets import Static
 
 from gameengine.core import scoring
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import DiscrepancyKind
 from gameengine.ui.tui import rules_content
 from gameengine.ui.tui.shared import (
@@ -587,7 +588,10 @@ class EvidenceBoard(VerticalScroll):
         """
         if not (0 <= index < len(self._items)):
             return
-        self._state.cycle(self._items[index][1])
+        kind = self._items[index][1]
+        self._state.cycle(kind)
+        if self._state.state_of(kind) == "marked":
+            sound_manager.play("evidence_flag")
         self.repaint()   # immediate repaint for this board
         # Repaint other board views so shared state stays in sync.
         for board in self.app.query(EvidenceBoard):
@@ -638,7 +642,8 @@ class EvidenceBoard(VerticalScroll):
                 self.repaint(reveal_cursor=True)
             # else: not consumed — bubbles to IntakeScreen for focus nav.
         elif event.key == "space":
-            # Cycle: unknown → marked → absent → unknown.
+            # Cycle: unknown → marked → absent → unknown. Sound lives in
+            # _toggle() itself so Space and a mouse click can't drift.
             self._toggle(self._cursor)
             event.stop()
 

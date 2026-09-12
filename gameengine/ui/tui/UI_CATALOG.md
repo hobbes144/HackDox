@@ -1,5 +1,5 @@
 # HackDox TUI — Interface Catalog
-*Last updated: 2026-05-30*
+*Last updated: 2026-09-12*
 
 ---
 
@@ -12,6 +12,9 @@ All player input during gameplay flows through a persistent `CommandBar` at the 
 ---
 
 ## Screen Stack
+
+Every change BETWEEN these screens is covered by a `TransitionScreen`
+(see Screen Transitions below); page switches inside `IntakeScreen` are not.
 
 ```
 HackDoxApp
@@ -55,6 +58,11 @@ HackDoxApp
 ### GameOverScreen
 - **Trigger:** Lives reach zero
 - **Keys:** `R` restart · `Q` quit
+
+### TransitionScreen *(modal, twice per screen change)*
+- **Trigger:** `HackDoxApp._transition`, on every full-screen change
+- **Content:** animated CRT signal-loss rows over the screen underneath
+- **Keys:** none — input is dead for the duration (see Screen Transitions)
 
 ---
 
@@ -171,10 +179,95 @@ HackDoxApp
 
 ---
 
+## Screen Transitions
+
+Every full-screen change glitches instead of cutting: intro → briefing →
+shift → end of day → between-day menu → next briefing, plus game over and
+campaign end. Page switches within a shift (`1`-`5`) and the modal overlays
+(rules, evidence board, credit reveal) are deliberately excluded — they happen
+dozens of times a shift, and a lock-out there is friction, not atmosphere.
+
+| Phase | Duration | What is on screen |
+|---|---|---|
+| out | `TRANSITION_DURATION × TRANSITION_SWAP_AT` | the OUTGOING page, glitch ramping to full coverage |
+| swap | one callback, nothing awaited | the screen change, under total coverage — never visible |
+| in | the remainder | the INCOMING page, glitch decaying to clear |
+
+Input is dead from the first frame to the last: both halves are modal screens,
+so the page underneath gets no keys, no clicks and none of its own bindings,
+and `TransitionScreen.on_key` swallows what arrives so a mashed key cannot
+queue up and land on the next page. `config.TRANSITION_PASSTHROUGH_KEYS`
+(ctrl+c / ctrl+q) is the one exception — an animation must never trap the
+player.
+
+The picture lives in `ui/tui/glitch.py` (`build_frame`, `coverage_for`,
+`GlitchEnvelope` — all app-free and unit-tested); the screen that draws it is
+`ui/tui/screens/transition.py`. It paints in whole terminal ROWS because
+Textual's compositor replaces a cell outright whenever any widget paints it:
+show-through exists only where the top screen paints nothing, so a covered row
+is a `Static` of noise and an uncovered row is `visibility: hidden`. Intensity
+is therefore just how many rows are covered — and at the peak that is all of
+them, which is what hides the swap.
+
+Knobs: `config.TRANSITION_ENABLED` / `_DURATION` / `_SWAP_AT` /
+`_FRAME_INTERVAL` / `_START_INTENSITY` / `_FULL_COVER_AT` / `_MAX_BANDS` /
+`_JITTER`. Sound: `transition_glitch`, fired once per window.
+
+---
+
+## Damage Glitch
+
+A brief burst of the same signal-loss effect over the LIVE candidate page
+after an admit that **damages Site Health** — the site glitching as something
+gets inside it. Health itself lands in one batch at end of day, so without
+this the moment a threat gets in passes with only a line of text.
+
+| Admit | ⛨ | Colour | Effect |
+|---|---|---|---|
+| The Incompatible | −2 | violet `#c084fc` | a few torn rows, ~0.3s — easy to miss |
+| Clumsy Cutie | −4 | yellow `#ffd93d` | noticeable |
+| The Dark Web | −8 | green `#00ff9f` | heavy — and their admit is CORRECT by the rules |
+| Bad Actor | −10 | red `#ff5470` | heavier |
+| Sneaky Bugger | −12 | white `#e8f0f8` | briefly swallows the screen, ~0.9s |
+
+The colour says *who* got in; the size says *how badly*. Every hue is one the
+game already uses (severity yellow/orange/red, Overseer violet, terminal
+green), so the burst never introduces a colour the player hasn't been taught
+to read — the Dark Web's green is the "everything checks out" colour turned
+against them, and the Sneaky Bugger's white is no colour at all.
+`config.ARCHETYPE_GLITCH_TINT` is the table; `glitch.tinted_palette()` biases
+the frame palette toward the hue (`DAMAGE_GLITCH_TINT_BIAS`, 0.7) rather than
+flooding it — at 1.0 it stops reading as a broken signal and becomes a
+coloured rectangle. Screen transitions keep the house palette: the tint
+belongs to a verdict, and a screen change is nobody's fault.
+
+Keyed off the verdict's recorded `site_health_delta`, not a list of
+archetypes: a correct denial never fires it (health untouched), admitting the
+White Hat never fires it either (+1 — rules-wrong, but the site is better for
+it), and retuning `ARCHETYPE_HEALTH_WEIGHTS` retunes the whole scale.
+`glitch.burst_shape()` maps the hit to (peak, duration);
+`glitch.BurstEnvelope` hits at once and decays, with a stutter re-hit on the
+heavier ones.
+
+Unlike a screen transition it **never blocks** — NEXT stays live and the
+keyboard keeps working, because the verdict window is skippable by design. The
+rows are mounted onto `IntakeScreen` on its own `damage-glitch` CSS layer,
+which is what lets them cover the page without rearranging it.
+
+Code: `IntakeScreen._begin_damage_glitch` / `_render_damage_glitch` /
+`_end_damage_glitch` (torn down from `_end_verdict_reveal`, so every candidate
+load and the unmount path both clear it). Knobs:
+`config.DAMAGE_GLITCH_ENABLED` / `_MIN_DURATION` / `_MAX_DURATION` /
+`_MIN_PEAK` / `_MAX_PEAK` / `_CURVE` / `_RE_HIT_ABOVE` / `_FRAME_INTERVAL` /
+`_TINT_BIAS` / `_TINT_DEFAULT` · `config.ARCHETYPE_GLITCH_TINT`.
+
+---
+
 ## Verdict Reveal Window
 
 Fires on every verdict; ~3s, fully skippable (NEXT is enabled before the window
-opens). Three channels, each answering a different question:
+opens). Three channels, each answering a different question — plus the Damage
+Glitch above, which fires only when the admit cost the site something:
 
 | Channel | Question | Where |
 |---|---|---|
@@ -298,6 +391,8 @@ File: `gameengine/ui/tui/app.tcss`
 
 | File | Purpose |
 |------|---------|
-| `gameengine/ui/tui/app.py` | All screens, widgets, and IntakeScreen game logic |
+| `gameengine/ui/tui/app.py` | `HackDoxApp` — screen stack, transitions, day lifecycle |
+| `gameengine/ui/tui/glitch.py` | Glitch frames for both effects (frame builder, palettes, envelopes, `RowPainter`) |
+| `gameengine/ui/tui/screens/transition.py` | `TransitionScreen` — draws the glitch, blocks input |
 | `gameengine/ui/tui/app.tcss` | All CSS for TUI layout and theming |
 | `gameengine/config.py` | `KEY_BINDINGS`, tool costs, economy constants |

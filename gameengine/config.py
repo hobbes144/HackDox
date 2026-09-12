@@ -386,6 +386,99 @@ VERDICT_REVEAL_ENABLED        = True
 VERDICT_REVEAL_DURATION       = 3.0    # seconds the border pulse runs
 VERDICT_REVEAL_PULSE_INTERVAL = 0.22   # seconds between bright/dim swaps
 
+# ─── Screen transitions (glitch) ─────────────────────────────────────────────
+#
+# Every FULL-SCREEN change (intro → briefing → shift → end of day → between-day
+# menu → next briefing, plus game over / campaign end) is covered by an
+# animated CRT signal-loss effect instead of cutting straight over. Page
+# switches WITHIN the shift (1-5) and the modal overlays (rules, evidence
+# board, credit reveal) are untouched — those happen dozens of times a shift
+# and a lock-out there would just be friction.
+#
+# The window is two halves (see HackDoxApp._transition): the first covers the
+# outgoing screen and ramps up to full coverage, the swap happens underneath
+# at the peak where nothing is visible, and the second decays back to clear
+# over the incoming screen. Input is dead for the whole duration — that is the
+# point of the beat, so a keystroke meant for the old page cannot land on the
+# new one.
+#
+# Set TRANSITION_ENABLED = False to switch it off: screen changes then cut
+# instantly, exactly as they did before the feature.
+TRANSITION_ENABLED = True
+TRANSITION_DURATION = 0.75      # seconds, total across both halves
+TRANSITION_SWAP_AT = 0.5       # fraction of the duration spent over the OLD screen
+TRANSITION_FRAME_INTERVAL = 0.05   # seconds between frames (~20fps)
+
+# Look. Intensity drives how MANY terminal rows a frame paints over, because
+# an unpainted row is the only way the screen underneath shows through (see
+# widgets/glitch.py).
+TRANSITION_START_INTENSITY = 0.35  # first frame — a hard hit, not a fade-in
+TRANSITION_FULL_COVER_AT = 0.90    # intensity at which every row is covered
+TRANSITION_MAX_BANDS = 7           # tear bands at peak intensity
+TRANSITION_JITTER = 0.12           # per-frame flicker around the ramp
+
+# Keys that still work while a transition is on screen. Quitting must never be
+# blocked by an animation.
+TRANSITION_PASSTHROUGH_KEYS = ("ctrl+c", "ctrl+q")
+
+# ─── Damage glitch (wrong admit) ─────────────────────────────────────────────
+#
+# The same signal-loss effect, fired in place over the live page for a brief
+# moment after an admit that DAMAGES SITE HEALTH — the site itself glitching
+# as something gets inside it. Scaled by the size of the hit, so the numbers
+# the player never sees mid-shift (health lands in one batch at end of day)
+# are still felt at the moment they earn them:
+#
+#   the_incompatible  −2   a couple of torn rows, easy to miss
+#   clumsy_cutie      −4   noticeable
+#   dark_web          −8   heavy — note this one is CORRECT by the rules
+#   bad_actor        −10   heavier
+#   sneaky_bugger    −12   briefly swallows the screen
+#
+# Driven off the verdict's recorded site_health_delta rather than a list of
+# archetypes, which is why a correct denial never fires it (health untouched)
+# and admitting the White Hat never does either (+1: rules-wrong, but the
+# site is better for it). The signal is damage, not disapproval.
+#
+# Unlike a screen transition this NEVER blocks input: the rows sit on their own
+# CSS layer over the live page, and NEXT stays enabled throughout (the verdict
+# window's skippability is a locked design decision — see VERDICT_REVEAL_*).
+DAMAGE_GLITCH_ENABLED = True
+DAMAGE_GLITCH_MIN_DURATION = 0.30   # seconds, at the smallest hit
+DAMAGE_GLITCH_MAX_DURATION = 0.90   # seconds, at the worst hit in the table
+DAMAGE_GLITCH_MIN_PEAK = 0.10       # opening intensity, smallest hit
+DAMAGE_GLITCH_MAX_PEAK = 0.95       # opening intensity, worst hit
+DAMAGE_GLITCH_CURVE = 1.6           # >1 keeps the low end genuinely subtle
+DAMAGE_GLITCH_RE_HIT_ABOVE = 0.55   # peaks above this stutter a second time
+DAMAGE_GLITCH_FRAME_INTERVAL = 0.05 # seconds between frames (~20fps)
+
+# Colour bias — the burst says WHO got in, not just how badly. Each archetype
+# tints the static toward its own hue, all of them drawn from the palette the
+# rest of the game already speaks (severity yellow/orange/red, Overseer violet,
+# terminal green) so the burst never introduces a colour the player has not
+# been taught to read:
+#
+#   the_incompatible  violet   the odd one out — a policy mismatch, not malice
+#   clumsy_cutie      yellow   the minor-severity hue: sloppiness, not intent
+#   dark_web          green    the "everything checks out" colour turned against
+#                              the player — this admit WAS correct by the rules
+#   bad_actor         red      critical severity, the loudest thing on screen
+#   sneaky_bugger     white    no colour at all: clinical, surgical, the worst
+#
+# Only archetypes that can damage Site Health ever show one (the rest never
+# fire the burst). Change a hue here and the whole effect follows.
+ARCHETYPE_GLITCH_TINT: dict[str, str] = {
+    "the_incompatible": "#c084fc",
+    "clumsy_cutie":     "#ffd93d",
+    "dark_web":         "#00ff9f",
+    "bad_actor":        "#ff5470",
+    "sneaky_bugger":    "#e8f0f8",
+}
+DAMAGE_GLITCH_TINT_DEFAULT = "#ff5470"  # an archetype with no entry of its own
+DAMAGE_GLITCH_TINT_BIAS = 0.7           # share of the palette the hue takes over
+                                        # (1.0 is a flat colour wash — it stops
+                                        # reading as a broken signal)
+
 # ─── Campaign shape (#17) ────────────────────────────────────────────────────
 #
 # CAMPAIGN_LAST_DAY is the ceiling for procedurally-synthesized days: past it,
@@ -812,3 +905,24 @@ KEY_BINDINGS: dict[str, str] = {
     "help":             "question_mark",
     "quit":             "q",
 }
+
+# ─── Audio ────────────────────────────────────────────────────────────────────
+#
+# Textual has no built-in sound — SFX and (future) background music are
+# played independently through pygame.mixer (see gameengine/core/audio.py).
+# Missing pygame, or no audio device on the host (CI, headless), both
+# degrade to silence automatically; none of this is required to run or
+# test the game. Volumes are 0.0-1.0 and multiply together (an SFX plays at
+# master_volume * sfx_volume).
+
+AUDIO_DIR           = CONTENT_DIR / "audio"
+AUDIO_SFX_DIR       = AUDIO_DIR / "sfx"
+AUDIO_MUSIC_DIR     = AUDIO_DIR / "music"
+# Deliberately NOT part of a campaign save (core/persistence.py) — a volume
+# preference should survive starting a new game or switching save slots.
+AUDIO_SETTINGS_PATH = SAVES_DIR / "audio_settings.json"
+
+SOUND_ENABLED_DEFAULT = True
+DEFAULT_MASTER_VOLUME = 1.0   # overall multiplier on both channels below
+DEFAULT_MUSIC_VOLUME  = 0.6   # background/ambient tracks (no trigger uses this yet)
+DEFAULT_SFX_VOLUME    = 0.8   # one-shot cues — verdicts, tool runs, UI ticks, etc.
