@@ -421,6 +421,64 @@ TRANSITION_JITTER = 0.12           # per-frame flicker around the ramp
 # blocked by an animation.
 TRANSITION_PASSTHROUGH_KEYS = ("ctrl+c", "ctrl+q")
 
+# ─── Damage glitch (wrong admit) ─────────────────────────────────────────────
+#
+# The same signal-loss effect, fired in place over the live page for a brief
+# moment after an admit that DAMAGES SITE HEALTH — the site itself glitching
+# as something gets inside it. Scaled by the size of the hit, so the numbers
+# the player never sees mid-shift (health lands in one batch at end of day)
+# are still felt at the moment they earn them:
+#
+#   the_incompatible  −2   a couple of torn rows, easy to miss
+#   clumsy_cutie      −4   noticeable
+#   dark_web          −8   heavy — note this one is CORRECT by the rules
+#   bad_actor        −10   heavier
+#   sneaky_bugger    −12   briefly swallows the screen
+#
+# Driven off the verdict's recorded site_health_delta rather than a list of
+# archetypes, which is why a correct denial never fires it (health untouched)
+# and admitting the White Hat never does either (+1: rules-wrong, but the
+# site is better for it). The signal is damage, not disapproval.
+#
+# Unlike a screen transition this NEVER blocks input: the rows sit on their own
+# CSS layer over the live page, and NEXT stays enabled throughout (the verdict
+# window's skippability is a locked design decision — see VERDICT_REVEAL_*).
+DAMAGE_GLITCH_ENABLED = True
+DAMAGE_GLITCH_MIN_DURATION = 0.30   # seconds, at the smallest hit
+DAMAGE_GLITCH_MAX_DURATION = 0.90   # seconds, at the worst hit in the table
+DAMAGE_GLITCH_MIN_PEAK = 0.10       # opening intensity, smallest hit
+DAMAGE_GLITCH_MAX_PEAK = 0.95       # opening intensity, worst hit
+DAMAGE_GLITCH_CURVE = 1.6           # >1 keeps the low end genuinely subtle
+DAMAGE_GLITCH_RE_HIT_ABOVE = 0.55   # peaks above this stutter a second time
+DAMAGE_GLITCH_FRAME_INTERVAL = 0.05 # seconds between frames (~20fps)
+
+# Colour bias — the burst says WHO got in, not just how badly. Each archetype
+# tints the static toward its own hue, all of them drawn from the palette the
+# rest of the game already speaks (severity yellow/orange/red, Overseer violet,
+# terminal green) so the burst never introduces a colour the player has not
+# been taught to read:
+#
+#   the_incompatible  violet   the odd one out — a policy mismatch, not malice
+#   clumsy_cutie      yellow   the minor-severity hue: sloppiness, not intent
+#   dark_web          green    the "everything checks out" colour turned against
+#                              the player — this admit WAS correct by the rules
+#   bad_actor         red      critical severity, the loudest thing on screen
+#   sneaky_bugger     white    no colour at all: clinical, surgical, the worst
+#
+# Only archetypes that can damage Site Health ever show one (the rest never
+# fire the burst). Change a hue here and the whole effect follows.
+ARCHETYPE_GLITCH_TINT: dict[str, str] = {
+    "the_incompatible": "#c084fc",
+    "clumsy_cutie":     "#ffd93d",
+    "dark_web":         "#00ff9f",
+    "bad_actor":        "#ff5470",
+    "sneaky_bugger":    "#e8f0f8",
+}
+DAMAGE_GLITCH_TINT_DEFAULT = "#ff5470"  # an archetype with no entry of its own
+DAMAGE_GLITCH_TINT_BIAS = 0.7           # share of the palette the hue takes over
+                                        # (1.0 is a flat colour wash — it stops
+                                        # reading as a broken signal)
+
 # ─── Campaign shape (#17) ────────────────────────────────────────────────────
 #
 # CAMPAIGN_LAST_DAY is the ceiling for procedurally-synthesized days: past it,

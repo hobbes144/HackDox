@@ -8,11 +8,12 @@ choreography. Two things happen here and nothing else:
 
 **Why the rows are children of the screen.** Textual's compositor lets the
 screen below show through only where the top screen paints NOTHING — and any
-widget spanning the window paints, container or not (see glitch.py). So the
-frame is drawn as one `Static` per terminal row, mounted directly here: a
-covered row carries `width` cells of noise, an uncovered row is hidden and the
-page shows through. Wrapping them in a field widget would make the whole
-window opaque for the entire transition, which is a cut, not a glitch.
+widget spanning the window paints, container or not. So the frame is drawn as
+one `Static` per terminal row, mounted directly here by `glitch.RowPainter`
+(which the in-place damage glitch shares): a covered row carries `width` cells
+of noise, an uncovered row is hidden and the page shows through. Wrapping them
+in a field widget would make the whole window opaque for the entire
+transition, which is a cut, not a glitch.
 
 **Why this is a screen at all.** Input blocking. A pushed screen is the active
 one, so the screen beneath receives no keys, no clicks and — crucially — none
@@ -30,7 +31,6 @@ from typing import ClassVar
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import ModalScreen
-from textual.widgets import Static
 
 from gameengine import config
 from gameengine.ui.tui import glitch
@@ -52,8 +52,7 @@ class TransitionScreen(ModalScreen):
         self._done        = False
         self._timer       = None
         self._frames      = None
-        self._rows: list[Static] = []
-        self._row_on: list[bool] = []
+        self._painter     = glitch.RowPainter(self)
         # The "in" half is mounted with the swap already done behind it, and
         # the compositor can paint once before the first frame exists. Starting
         # opaque means that frame is black rather than a clear look at the page
@@ -75,14 +74,7 @@ class TransitionScreen(ModalScreen):
         height = max(0, window.height if window else 0)
         frame  = glitch.build_frame(width, height, self._envelope.intensity(),
                                     self._envelope.rng)
-        self._rows, self._row_on = [], []
-        for text in frame:
-            covered = text is not None
-            self._rows.append(Static(
-                text if covered else "",
-                classes="glitch-row" if covered else "glitch-row off"))
-            self._row_on.append(covered)
-        yield from self._rows
+        yield from self._painter.build(height, frame)
 
     def on_mount(self) -> None:
         self._envelope.restart()      # the ramp starts on mount, not on build
@@ -107,14 +99,10 @@ class TransitionScreen(ModalScreen):
     def _resize_rows(self, height: int) -> None:
         """Terminal resized mid-transition — rebuild the row set."""
         height = max(0, height)
-        if height == len(self._rows):
+        if height == self._painter.height:
             return
-        for row in self._rows:
-            row.remove()
-        self._rows   = [Static("", classes="glitch-row off") for _ in range(height)]
-        self._row_on = [False] * height
-        if self._rows:
-            self.mount_all(self._rows)
+        self._painter.discard()
+        self._painter.mount(height)
 
     def _set_solid(self, solid: bool) -> None:
         """Opaque screen background at full coverage.
@@ -131,22 +119,13 @@ class TransitionScreen(ModalScreen):
         self.set_class(solid, "solid")
 
     def render_frame(self) -> None:
-        if not self._rows:
+        if not self._painter.height:
             return
         intensity = self._envelope.intensity()
         self._set_solid(self._envelope.is_full(intensity))
         width = self.size.width or (self.app.size.width if self.app else 0)
-        frame = glitch.build_frame(width, len(self._rows), intensity,
-                                   self._envelope.rng)
-        for i, (row, text) in enumerate(zip(self._rows, frame)):
-            covered = text is not None
-            if covered:
-                row.update(text)
-            # The class only flips when the row's state actually changes — a
-            # style change is a layout refresh, and this runs ~20×/second.
-            if self._row_on[i] != covered:
-                row.set_class(not covered, "off")
-                self._row_on[i] = covered
+        self._painter.paint(glitch.build_frame(
+            width, self._painter.height, intensity, self._envelope.rng))
 
     # ── Input is dead for the duration ──────────────────────────────────
     def on_key(self, event) -> None:

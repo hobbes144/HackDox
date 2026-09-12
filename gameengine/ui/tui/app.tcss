@@ -626,6 +626,21 @@ TransitionScreen.solid {
     background: #05070a;
 }
 
+/* The in-place damage glitch (IntakeScreen._begin_damage_glitch). Same rows,
+ * but over the LIVE page instead of a screen swap, so they go on their own
+ * layer: a layer is arranged independently, which is what lets the rows be
+ * mounted onto the screen without disturbing the layout of the page they
+ * cover. `default` is named first so every existing widget — which declares
+ * no layer at all — stays underneath. */
+
+IntakeScreen {
+    layers: default damage-glitch;
+}
+
+.glitch-burst-row {
+    layer: damage-glitch;
+}
+
 .glitch-row {
     width: 100%;
     height: 1;

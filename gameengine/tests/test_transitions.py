@@ -105,6 +105,20 @@ def _markers_visible(app: App) -> int:
     return app.export_screenshot().count(MARKER)
 
 
+async def _settle(app, timeout: float = 10.0) -> None:
+    """Wait for the transition in flight to finish.
+
+    Polled rather than slept-through: the halves are driven by real timers, and
+    a fixed sleep of duration+ε turns into a flaky assertion the moment the
+    machine running the suite is busy (it did, under a parallel test run).
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while app._transition_busy and asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)          # let the final pop land
+    assert not app._transition_busy, "the transition never completed"
+
+
 async def _open_marker_page(pilot) -> _MarkerScreen:
     page = _MarkerScreen()
     await pilot.app.push_screen(page)
@@ -331,7 +345,7 @@ def test_a_screen_change_glitches_then_lands_clean():
             assert isinstance(app.screen_stack[-2], IntroScreen)
             assert app._transition_busy is True
 
-            await asyncio.sleep(config.TRANSITION_DURATION + 0.5)
+            await _settle(app)
             assert isinstance(app.screen, BriefingScreen)
             assert len(app.screen_stack) == 2, "the stack did not rebalance"
             assert app._transition_busy is False
@@ -393,7 +407,7 @@ def test_a_screen_change_mid_transition_is_queued_not_stacked():
             assert app._queued_screen is late
             assert len(app.screen_stack) == depth, "a second glitch was stacked"
 
-            await asyncio.sleep(config.TRANSITION_DURATION + 0.5)
+            await _settle(app)
             assert app.screen is late
             assert len(app.screen_stack) == 2
             assert app._queued_screen is None
@@ -419,8 +433,7 @@ def test_the_whole_day_loop_transitions_and_rebalances():
             for name, call in steps:
                 call()
                 assert isinstance(app.screen, TransitionScreen), name
-                await asyncio.sleep(config.TRANSITION_DURATION + 0.4)
-                assert not app._transition_busy, name
+                await _settle(app)
                 assert len(app.screen_stack) == 2, (
                     name, [type(s).__name__ for s in app.screen_stack])
             assert app._state.current_day == 2, "the day never advanced"

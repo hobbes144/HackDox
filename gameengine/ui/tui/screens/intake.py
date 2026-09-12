@@ -16,7 +16,7 @@ from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
 from gameengine.core.audio import sound_manager
 from gameengine.core.models import Candidate, Day, GameState, ToolName, Verdict
-from gameengine.ui.tui import rules_content
+from gameengine.ui.tui import glitch, rules_content
 from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
 from gameengine.ui.tui.screens.rules import RulesScreen
 from gameengine.ui.tui.shared import (
@@ -108,6 +108,12 @@ class IntakeScreen(Screen):
         # harder to leak than a task we have to remember to await.
         self._reveal_timers: list = []
         self._reveal_classes: tuple[str, str] = ("", "")
+        # Damage glitch (see _begin_damage_glitch) — its own clock, rows and
+        # timers, because it outlives neither the pulse nor the candidate.
+        self._burst: glitch.BurstEnvelope | None = None
+        self._burst_rows: glitch.RowPainter | None = None
+        self._burst_palette: glitch.Palette | None = None
+        self._burst_timers: list = []
 
         # ── Widgets ───────────────────────────────────────────────────
         self.status   = StatusHeader(state, day, state.current_slot_index)
@@ -584,6 +590,7 @@ class IntakeScreen(Screen):
         # GameState, so switching it off (config.VERDICT_REVEAL_ENABLED) can
         # never change what a shift is worth.
         self._begin_verdict_reveal(verdict, result.correct)
+        self._begin_damage_glitch(result.site_health_delta, result.archetype)
 
         # Site Health deltas are only recorded here — they apply in one
         # batch at end of day (finish_day), so the loss condition can only
@@ -684,16 +691,99 @@ class IntakeScreen(Screen):
                 # exactly the state we want; stopping it again is a no-op.
                 pass
         self._reveal_timers = []
+        self._end_damage_glitch()
         if not any(self._reveal_classes):
             return
         for widget in self._flash_targets():
             widget.remove_class(*self._reveal_classes)
         self._reveal_classes = ("", "")
 
+    # ── Damage glitch ─────────────────────────────────────────────────
+
+    def _begin_damage_glitch(self, health_delta: float,
+                             archetype=None) -> None:
+        """Fourth channel of the verdict beat: the site itself takes a hit.
+
+        Fires on any admit that DAMAGES Site Health, scaled by how much (see
+        glitch.burst_shape) — a throwaway-email Incompatible tears a few rows
+        for a third of a second, a Sneaky Bugger briefly swallows the screen.
+        Health itself lands in one batch at end of day, so without this the
+        moment a threat gets inside the site passes with only a line of text;
+        the glitch is that moment made physical.
+
+        Keyed off the recorded delta rather than a list of archetypes, which
+        is why a correct denial never fires it (health untouched) and admitting
+        the White Hat never does either (+1: rules-wrong, but the site is
+        better for it). The signal is damage, not disapproval — and it does
+        fire for the Dark Web, whose admit is correct by the rules and still
+        costs the site 8%.
+
+        The static is tinted by archetype (config.ARCHETYPE_GLITCH_TINT), so
+        the burst says WHO got in as well as how badly: the Bad Actor comes
+        through red, the Incompatible violet, the Sneaky Bugger in clinical
+        white. An unknown archetype falls back to the house colour rather than
+        breaking the verdict path.
+
+        Unlike a screen transition, nothing here blocks: NEXT is already
+        enabled, the rows sit on the `damage-glitch` CSS layer over the live
+        page, and the effect is purely presentational — switching it off
+        (config.DAMAGE_GLITCH_ENABLED) cannot change what a shift is worth.
+        """
+        if not config.DAMAGE_GLITCH_ENABLED or health_delta >= 0:
+            return
+        self._end_damage_glitch()          # never stack two bursts
+        peak, duration = glitch.burst_shape(health_delta)
+        if peak <= 0.0:
+            return
+        self._burst = glitch.BurstEnvelope(peak, duration)
+        self._burst_palette = glitch.palette_for_archetype(archetype)
+        self._burst_rows = glitch.RowPainter(
+            self, classes="glitch-row glitch-burst-row")
+        size = self.app.size
+        # Mounted already painted: mounting is asynchronous, and an unpainted
+        # first frame would be a visible hole at the hardest-hitting moment.
+        self._burst_rows.mount(size.height, glitch.build_frame(
+            size.width, size.height, peak, self._burst.rng,
+            self._burst_palette))
+        self._burst_timers = [
+            self.set_interval(config.DAMAGE_GLITCH_FRAME_INTERVAL,
+                              self._render_damage_glitch),
+            self.set_timer(duration, self._end_damage_glitch),
+        ]
+
+    def _render_damage_glitch(self) -> None:
+        if self._burst is None or self._burst_rows is None:
+            return
+        width = self.app.size.width if self.app else 0
+        self._burst_rows.paint(glitch.build_frame(
+            width, self._burst_rows.height, self._burst.intensity(),
+            self._burst.rng, self._burst_palette))
+
+    def _end_damage_glitch(self) -> None:
+        """Stop the burst and unmount its rows. Idempotent — it is called on
+        its own duration timer, from _end_verdict_reveal (which every candidate
+        load and the unmount path both run), and possibly by the next verdict.
+
+        Teardown is load-bearing: NEXT is live from the first frame, so
+        advancing mid-burst is a normal path, and a leaked frame timer would
+        keep painting noise over the NEXT candidate's dossier."""
+        for timer in self._burst_timers:
+            try:
+                timer.stop()
+            except Exception:  # noqa: BLE001, S110 -- an already-expired timer is
+                # exactly the state we want; stopping it again is a no-op.
+                pass
+        self._burst_timers = []
+        if self._burst_rows is not None:
+            self._burst_rows.discard()
+        self._burst_rows = None
+        self._burst_palette = None
+        self._burst = None
+
     def on_unmount(self) -> None:
         """The day can end (or the app can quit) mid-pulse — leave no timer
         holding a reference to a screen that is on its way out."""
-        self._end_verdict_reveal()
+        self._end_verdict_reveal()   # also ends any damage glitch
 
     def _run_tool(self, tool: ToolName, *, filtered: bool = False) -> None:
         # Progressive unlock (#33): a locked tool is fully inert — the shortcut
