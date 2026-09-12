@@ -3125,7 +3125,14 @@ def test_rule_sheet_round_trips_and_renders(tmp_path, monkeypatch):
             assert note in rules
 
     # A synthesized day authors nothing and must render exactly as before #49.
-    synth = load_day(config.TUTORIAL_LAST_DAY + 1)
+    # Find the first day past the tutorial with no authored day_NN.json —
+    # rather than hard-coding TUTORIAL_LAST_DAY + 1, since #39 (days 6-7) and
+    # eventually Phase 3 (days 8-11) author real content there too, and this
+    # assertion is specifically about the UNauthored, synthesized case.
+    unauthored = next(
+        n for n in range(config.TUTORIAL_LAST_DAY + 1, config.CAMPAIGN_LAST_DAY + 1)
+        if not (config.DAYS_DIR / f"day_{n:02d}.json").exists())
+    synth = load_day(unauthored)
     assert synth.rule_sheet is None
     assert "today's rule sheet" not in rules_content.build_dossier_text(synth)
 
@@ -3784,3 +3791,133 @@ def test_a_real_directive_day_produces_a_coherent_briefing(
     # not zero (the removal silently swallowing the addition too).
     assert len(lines) == 1
     assert lines[0] == directive["justification"]
+
+
+# ─── Issue #39 (Phase 2) — days 6-7, pre-directive Dark Web presence ───────
+
+
+def test_day_06_and_07_load_successfully():
+    """Both authored days parse and produce a sane Day (#39 AC)."""
+    for n in (6, 7):
+        day = load_day(n)
+        assert day.number == n
+        assert day.candidate_count == sum(day.archetype_mix.values()), (
+            f"day {n}: declared archetype_mix does not sum to its own "
+            f"candidate_count")
+
+
+def test_day_06_and_07_guarantee_a_dark_web_slot():
+    """Dark Web must appear by DECLARED mix, not by a lucky roll (#39 AC).
+
+    Days 6-7 are the first days Dark Web is meant to show up at all
+    (config.ARCHETYPE_MIX_BY_BAND only adds it starting at the "medium"
+    band), and the whole point of Phase 2 is that its presence is scripted
+    rather than incidental. Checking the resolved archetype_mix directly
+    (rather than sampling generated candidates) is what makes this a
+    determinism check and not a probability check.
+    """
+    for n in (6, 7):
+        day = load_day(n)
+        assert day.archetype_mix.get(Archetype.DARK_WEB, 0) >= 1, (
+            f"day {n} does not declare a Dark Web slot in its archetype_mix")
+
+    # Belt-and-suspenders: the declared mix must actually realize as a Dark
+    # Web candidate landing in some slot, for more than one seed, so a bug in
+    # _pick_archetype_for_slot/_shuffled_archetype_bag that silently dropped
+    # a mix entry would also be caught here.
+    for n in (6, 7):
+        day = load_day(n)
+        for seed in (SEED, 0xBADC0DE, 1):
+            slots = [candidate_gen.generate(seed, day, s).archetype
+                     for s in range(day.candidate_count)]
+            assert Archetype.DARK_WEB in slots, (
+                f"day {n} seed {seed:#x}: declared mix has a Dark Web slot "
+                f"but generation never realized one")
+
+
+def test_days_06_and_07_carry_no_dark_web_directive():
+    """#39: the corruption arc (added_rules/removed_rules) is Phase 3's job
+    (days 8-11), not Phase 2's. Days 6-7 must still be plain inherited-from-
+    day-1 rulebooks with only the ordinary Overseer-Variable flips applied —
+    exactly like day 5.
+    """
+    import json
+
+    from gameengine.core.content_loader import mutate_variable_rules
+
+    day1 = load_day(1)
+    for n in (6, 7):
+        raw = json.loads(
+            (config.DAYS_DIR / f"day_{n:02d}.json").read_text(encoding="utf-8"))
+        assert "added_rules" not in raw, f"day {n} should not fire a directive yet"
+        assert "removed_rules" not in raw, f"day {n} should not fire a directive yet"
+        assert "rules" not in raw, f"day {n} should inherit day 1's rulebook"
+
+        day = load_day(n)
+        assert day.directive_removed_rule_ids == frozenset(), (
+            f"day {n} recorded a directive removal with no directive authored")
+        assert day.rules == mutate_variable_rules(day1.rules, n), (
+            f"day {n}'s rulebook has drifted from day 1's beyond the "
+            f"ordinary Overseer-Variable flips")
+        # No rule in the inherited book is itself dark_web-mutability — that
+        # mutability only exists to carry a directive's own justification.
+        assert not any(r.mutability == "dark_web" for r in day.rules), (
+            f"day {n}'s inherited rulebook should not contain a dark_web "
+            f"rule with no directive to justify it")
+
+
+@pytest.mark.parametrize("day_number,expected_pool", [
+    (7, "_CHAT_DARK_WEB_EARLY"),
+    (9, "_CHAT_DARK_WEB_EARLY"),
+    (10, "_CHAT_DARK_WEB_MID"),
+    (15, "_CHAT_DARK_WEB_MID"),
+    (16, "_CHAT_DARK_WEB_LATE"),
+    (18, "_CHAT_DARK_WEB_LATE"),
+])
+def test_dark_web_chat_escalates_by_day_band(day_number, expected_pool):
+    """#39: the same archetype's chat has to read bolder deeper into the
+    campaign, since it reappears from day 6 through day 20. Spot-checks one
+    day inside each of the three bands this task defines (EARLY 6-9,
+    MID 10-15, LATE 16-20) and confirms the generated lines come from
+    exactly that band's pool, not a neighboring one.
+    """
+    from dataclasses import replace
+
+    day = replace(load_day(6), number=day_number)
+    expected = getattr(candidate_gen, expected_pool)
+    other_pools = {
+        name: getattr(candidate_gen, name)
+        for name in ("_CHAT_DARK_WEB_EARLY", "_CHAT_DARK_WEB_MID",
+                     "_CHAT_DARK_WEB_LATE")
+        if name != expected_pool
+    }
+
+    found = False
+    for seed in (SEED, 0xBADC0DE, 1):
+        for slot in range(day.candidate_count):
+            candidate = candidate_gen.generate(seed, day, slot)
+            if candidate.archetype != Archetype.DARK_WEB:
+                continue
+            found = True
+            for line in candidate.chat_script:
+                assert line.text in expected, (
+                    f"day {day_number}: Dark Web chat line {line.text!r} is "
+                    f"not in the expected pool {expected_pool}")
+                for other_name, other_pool in other_pools.items():
+                    assert line.text not in other_pool, (
+                        f"day {day_number}: Dark Web chat line {line.text!r} "
+                        f"belongs to {other_name}, not {expected_pool}")
+    assert found, f"day {day_number}: no Dark Web candidate generated to check"
+
+
+def test_dark_web_chat_pools_are_disjoint_and_nonempty():
+    """The three escalation pools must not silently share or drop lines —
+    both would be an easy copy/paste mistake given how similar the three are
+    in register (#39)."""
+    early = set(candidate_gen._CHAT_DARK_WEB_EARLY)
+    mid = set(candidate_gen._CHAT_DARK_WEB_MID)
+    late = set(candidate_gen._CHAT_DARK_WEB_LATE)
+    assert early and mid and late
+    assert early.isdisjoint(mid)
+    assert early.isdisjoint(late)
+    assert mid.isdisjoint(late)

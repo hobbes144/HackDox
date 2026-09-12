@@ -205,11 +205,58 @@ _CHAT_HOSTILE = (
     "this is absurd. just approve it.",
 )
 
-_CHAT_FLIPPANT = (
+# ─── Dark Web chat escalation (#39) ─────────────────────────────────────────
+#
+# The Dark Web archetype is rules-clean and reappears across the whole
+# medium/hard campaign (config.ARCHETYPE_MIX_BY_BAND), so the same three
+# bragging lines on day 6 and day 20 would flatten the Overseer's whole
+# capture arc into background noise. Three day-banded pools swap in for
+# `Archetype.DARK_WEB` specifically inside `_build_chat` — every other
+# archetype's `chat_pool` is untouched, so this is additive, not a rework of
+# how chat selection works in general.
+#
+# EARLY (days 6-9, the medium band's first stretch): flippant, casual,
+# bragging that could almost pass for dark humor if you're not listening.
+_CHAT_DARK_WEB_EARLY = (
     "lol, paperwork. classic.",
     "you'll let me in. they always do.",
     "you do know who I am, right?",
+    "relax, nobody actually reads these tickets.",
 )
+
+# MID (days 10-15): bolder — willing to name specific harm, confident the
+# player either can't stop them or won't bother.
+_CHAT_DARK_WEB_MID = (
+    "cute that you're still checking boxes on this end.",
+    "the last account you cleared for me? still open. still useful.",
+    "flag it if you want. it won't stick, and we both know it.",
+    "I don't even bother covering my tracks with you anymore.",
+)
+
+# LATE (days 16-20): the mask is off — open contempt, and it needles the
+# player directly about whether they'll actually do anything.
+_CHAT_DARK_WEB_LATE = (
+    "go ahead, deny me. see what that does to your quota.",
+    "you know exactly what I do with this, and you keep saying yes.",
+    "I almost respect it when you pretend this is a hard call.",
+    "we both know who actually runs this desk.",
+)
+
+# Band boundaries for the pools above. Deliberately its own schedule, not
+# config.ARCHETYPE_MIX_BY_BAND's difficulty bands (medium runs 6-12) — this is
+# a narrative escalation curve for one archetype's voice, not a detection-
+# complexity lever, and the two happen to diverge past day 12.
+_DARK_WEB_CHAT_BAND_LAST_EARLY = 9   # days 6-9
+_DARK_WEB_CHAT_BAND_LAST_MID   = 15  # days 10-15; 16-20 is LATE
+
+
+def _dark_web_chat_pool(day_number: int) -> tuple[str, ...]:
+    """Which of the three escalation pools a Dark Web candidate draws from."""
+    if day_number <= _DARK_WEB_CHAT_BAND_LAST_EARLY:
+        return _CHAT_DARK_WEB_EARLY
+    if day_number <= _DARK_WEB_CHAT_BAND_LAST_MID:
+        return _CHAT_DARK_WEB_MID
+    return _CHAT_DARK_WEB_LATE
 
 _CHAT_EARNEST = (
     "I read the rulebook. I tried to do this the right way.",
@@ -276,7 +323,9 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         affiliation_pool="thin",
         purpose_pool="suspect",
         tone="flippant",
-        chat_pool=_CHAT_FLIPPANT,
+        # Static fallback only — `_build_chat` swaps this for the day-banded
+        # pool (`_dark_web_chat_pool`) whenever the archetype is DARK_WEB.
+        chat_pool=_CHAT_DARK_WEB_EARLY,
     ),
     Archetype.CLUMSY_CUTIE: ArchetypeSpec(
         archetype=Archetype.CLUMSY_CUTIE,
@@ -981,14 +1030,23 @@ def _build_chat(
     rng: random.Random,
     spec: ArchetypeSpec,
     discrepancies: list[Discrepancy],
+    day_number: int,
 ) -> tuple[ChatLine, ...]:
     """Compose 3-5 chat lines from the archetype's pool.
 
     Bad Actors always get the HOSTILE_CHAT line spliced if it's in their
     discrepancies. Other archetypes get neutral pool lines.
+
+    Dark Web is the one archetype whose pool isn't fixed (#39): it reappears
+    across the whole medium/hard campaign, so `_dark_web_chat_pool` swaps in
+    a bolder set of lines the later `day_number` falls, in place of the
+    spec's static `chat_pool`. Every other archetype is unaffected.
     """
     lines: list[ChatLine] = []
-    base = list(spec.chat_pool)
+    base = list(
+        _dark_web_chat_pool(day_number) if spec.archetype == Archetype.DARK_WEB
+        else spec.chat_pool
+    )
     rng.shuffle(base)
     n = rng.randint(3, min(5, max(3, len(base))))
     minute = rng.randint(0, 30)
@@ -1133,7 +1191,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
             handle_squats = target
 
     rng_chat = _seeded_rng(game_seed, day.number, slot_index, "chat")
-    chat = _build_chat(rng_chat, spec, discrepancies)
+    chat = _build_chat(rng_chat, spec, discrepancies, day.number)
 
     # Determine GitHub commit email.
     # Candidates with a GitHub handle always have a commit email; candidates

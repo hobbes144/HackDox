@@ -1,0 +1,50 @@
+{
+  "number": 6,
+  "title": "Day 6 — Full Slate",
+  "candidate_count": 7,
+
+  "_comment": "#39 (Phase 2). First post-tutorial day: no new tool, no new page, no rulebook change yet — day5_graduation promised the rulebook would start moving, but that promise's PAYOFF is Phase 3 (days 8-11, added_rules/removed_rules). Rulebook inherited from day_01.json with today's Overseer-Variable flips, same as day 5. archetype_mix is authored explicitly (not band-derived) so dark_web:1 is a declared, deterministic slot rather than a statistical maybe — see test_day_06_and_07_guarantee_a_dark_web_slot. allowed_violations is omitted on purpose: the per-day whitelist was tutorial scaffolding (#32) pacing which evidence kinds could appear day-by-day; every kind's revealing tool is already taught by day 5, so dropping the whitelist here just matches what synthesize_day already does for every unauthored day beyond the tutorial.",
+
+  "archetype_mix": {
+    "obvious_admit": 1,
+    "day_to_day": 1,
+    "the_professional": 1,
+    "clumsy_cutie": 1,
+    "bad_actor": 1,
+    "sneaky_bugger": 1,
+    "dark_web": 1
+  },
+
+  "quotas": {
+    "min_correct_admits": 2,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "medium",
+  "overseer_intro_key": "day6_intro",
+  "overseer_outro_keys": {
+    "excellent": "day6_outro_excellent",
+    "passing": "day6_outro_passing",
+    "poor": "day6_outro_poor",
+    "failed": "day6_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Same rulebook as yesterday. No new tool, no new page — you have the full set now, and the whole catalog of things worth checking is fair game, not just the slice each tutorial day let through.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "A network of sock-puppet accounts under one handle is a deny.",
+      "A handle that apes a listed organisation's handle is a flag on its own — corroborate before denying.",
+      "Accounts all created within days of each other, built for this and nothing else, is a deny. That's a burner identity.",
+      "A handle matching a known threat-forum account is a deny, full stop.",
+      "Traffic that never crosses the brute-force line but never lets up either is a deny — it will not flag itself. You have to go looking."
+    ]
+  }
+}

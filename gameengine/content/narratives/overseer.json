@@ -43,5 +43,19 @@
   "day5_outro_poor": "Something went out with a payload in it today.",
   "day5_outro_failed": "That's five days and I'm still having this conversation.",
   "day5_graduation": "That's everything. Every tool you're getting, you have.\nFrom here I stop walking you through it. The rulebook is still the rulebook, but it changes — sometimes overnight, and I'll tell you when it does, though not always with much notice.\nAnd the applicants get better at this. The obvious ones thin out. What's left are the ones who know exactly what you check.\nGood luck.",
-  "day5_between": "You're through the training days. Tomorrow the list is longer, the tools cost more, and nobody is going to tell you which page to open. Spend what you earned."
+  "day5_between": "You're through the training days. Tomorrow the list is longer, the tools cost more, and nobody is going to tell you which page to open. Spend what you earned.",
+
+  "day6_intro": "Seven today. No new tool, no new page — you've got the full kit now, so use what's already on the desk before you decide.\nRulebook's the same as yesterday's. Same rules stand until I tell you otherwise.\nWork the queue. I'm not walking through it with you anymore.",
+  "day6_outro_excellent": "Clean. That's the standard now, not a bonus.",
+  "day6_outro_passing": "It held. Not fast, but it held.",
+  "day6_outro_poor": "Something got through that the rulebook would have caught, if you'd opened it.",
+  "day6_outro_failed": "That's not the pace I need from you. We'll talk tomorrow.",
+  "day6_between": "Same rules tomorrow, more of them to actually apply. Spend what you earned — you'll want the head start.",
+
+  "day7_intro": "Seven again. You'll notice some of today's files are spotless — dossier clean, sweep clean, log clean, nothing anywhere you're required to look.\nSpotless isn't the same question as fine. It just means the checklist ran out before it found anything.\nIf it's genuinely clean, admit it. That's still the rule. Go on.",
+  "day7_outro_excellent": "That's the read I want. You didn't mistake spotless for fine, and you didn't invent problems that weren't there either.",
+  "day7_outro_passing": "You got through it. A couple of those deserved a second look before you moved on.",
+  "day7_outro_poor": "Something walked through today with nothing on it. That's not innocence, that's a gap in your read.",
+  "day7_outro_failed": "Twice in two days. I don't want a third.",
+  "day7_between": "Two shifts past training and the list keeps growing. So does what I expect out of you. Spend it, rest, and be sharper tomorrow."
 }
