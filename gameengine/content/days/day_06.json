@@ -3,7 +3,9 @@
   "title": "Day 6 — Full Slate",
   "candidate_count": 7,
 
-  "_comment": "#39 (Phase 2). First post-tutorial day: no new tool, no new page, no rulebook change yet — day5_graduation promised the rulebook would start moving, but that promise's PAYOFF is Phase 3 (days 8-11, added_rules/removed_rules). Rulebook inherited from day_01.json with today's Overseer-Variable flips, same as day 5. archetype_mix is authored explicitly (not band-derived) so dark_web:1 is a declared, deterministic slot rather than a statistical maybe — see test_day_06_and_07_guarantee_a_dark_web_slot. allowed_violations is omitted on purpose: the per-day whitelist was tutorial scaffolding (#32) pacing which evidence kinds could appear day-by-day; every kind's revealing tool is already taught by day 5, so dropping the whitelist here just matches what synthesize_day already does for every unauthored day beyond the tutorial.",
+  "_comment": "#39 (Phase 2). First post-tutorial day: no new tool, no new page. Rulebook inherited from day_01.json with today's Overseer-Variable flips, same as day 5 — day5_graduation's promised rulebook change is Phase 3's payoff (days 8-11, added_rules/removed_rules), not this day's.",
+  "_comment_mix": "archetype_mix is authored explicitly (not band-derived) so dark_web:1 is a declared, deterministic slot rather than a statistical maybe — see test_day_06_and_07_guarantee_a_dark_web_slot.",
+  "_comment_violations": "allowed_violations is omitted on purpose: the per-day whitelist was tutorial scaffolding (#32) pacing which evidence kinds could appear day-by-day. Every kind's revealing tool is already taught by day 5, so dropping the whitelist here matches what synthesize_day already does for every unauthored day beyond the tutorial.",
 
   "archetype_mix": {
     "obvious_admit": 1,
@@ -30,7 +32,7 @@
   },
 
   "rule_sheet": {
-    "summary": "Same rulebook as yesterday. No new tool, no new page — you have the full set now, and the whole catalog of things worth checking is fair game, not just the slice each tutorial day let through.",
+    "summary": "Same lines in the book as yesterday — but check the severities before you lean on one; at least one of them just moved. No new tool, no new page: you have the full set now, and the whole catalog of things worth checking is fair game, not just the slice each tutorial day let through.",
     "approved": {
       "domains": ["everything approved so far"],
       "affiliations": ["everything approved so far"]

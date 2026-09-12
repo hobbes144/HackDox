@@ -228,7 +228,7 @@ _CHAT_DARK_WEB_EARLY = (
 # player either can't stop them or won't bother.
 _CHAT_DARK_WEB_MID = (
     "cute that you're still checking boxes on this end.",
-    "the last account you cleared for me? still open. still useful.",
+    "the accounts you people clear for me stay open. stay useful.",
     "flag it if you want. it won't stick, and we both know it.",
     "I don't even bother covering my tracks with you anymore.",
 )
@@ -237,26 +237,24 @@ _CHAT_DARK_WEB_MID = (
 # player directly about whether they'll actually do anything.
 _CHAT_DARK_WEB_LATE = (
     "go ahead, deny me. see what that does to your quota.",
-    "you know exactly what I do with this, and you keep saying yes.",
+    "you know exactly what I do with this. that's never been the obstacle.",
     "I almost respect it when you pretend this is a hard call.",
     "we both know who actually runs this desk.",
 )
 
-# Band boundaries for the pools above. Deliberately its own schedule, not
-# config.ARCHETYPE_MIX_BY_BAND's difficulty bands (medium runs 6-12) — this is
-# a narrative escalation curve for one archetype's voice, not a detection-
-# complexity lever, and the two happen to diverge past day 12.
-_DARK_WEB_CHAT_BAND_LAST_EARLY = 9   # days 6-9
-_DARK_WEB_CHAT_BAND_LAST_MID   = 15  # days 10-15; 16-20 is LATE
+# Band boundaries for the pools above live in config.py, next to the
+# difficulty bands they're modeled on but deliberately not shared with them
+# (config.DARK_WEB_CHAT_BAND_LAST_EARLY/_MID).
 
 
 def _dark_web_chat_pool(day_number: int) -> tuple[str, ...]:
     """Which of the three escalation pools a Dark Web candidate draws from."""
-    if day_number <= _DARK_WEB_CHAT_BAND_LAST_EARLY:
+    if day_number <= config.DARK_WEB_CHAT_BAND_LAST_EARLY:
         return _CHAT_DARK_WEB_EARLY
-    if day_number <= _DARK_WEB_CHAT_BAND_LAST_MID:
+    if day_number <= config.DARK_WEB_CHAT_BAND_LAST_MID:
         return _CHAT_DARK_WEB_MID
     return _CHAT_DARK_WEB_LATE
+
 
 _CHAT_EARNEST = (
     "I read the rulebook. I tried to do this the right way.",

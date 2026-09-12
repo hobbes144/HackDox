@@ -553,6 +553,16 @@ DIFFICULTY_BAND_LAST_EASY   = TUTORIAL_LAST_DAY   # days 1-5
 DIFFICULTY_BAND_LAST_MEDIUM = 12                  # days 6-12; 13+ is hard
 
 
+# ─── Dark Web chat escalation (#39) ──────────────────────────────────────────
+#
+# Band boundaries for candidate_gen._dark_web_chat_pool. Deliberately its own
+# schedule, not the difficulty bands above (medium runs 6-12) — this is a
+# narrative escalation curve for one archetype's voice, not a detection-
+# complexity lever, and the two happen to diverge past day 12.
+DARK_WEB_CHAT_BAND_LAST_EARLY = 9   # days 6-9
+DARK_WEB_CHAT_BAND_LAST_MID   = 15  # days 10-15; 16-20 is LATE
+
+
 # ─── Overseer-Variable rule flips (#35 / #36) ────────────────────────────────
 #
 # How many days an `overseer_variable` rule holds its current severity before

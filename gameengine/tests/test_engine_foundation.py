@@ -3125,14 +3125,15 @@ def test_rule_sheet_round_trips_and_renders(tmp_path, monkeypatch):
             assert note in rules
 
     # A synthesized day authors nothing and must render exactly as before #49.
-    # Find the first day past the tutorial with no authored day_NN.json —
-    # rather than hard-coding TUTORIAL_LAST_DAY + 1, since #39 (days 6-7) and
-    # eventually Phase 3 (days 8-11) author real content there too, and this
-    # assertion is specifically about the UNauthored, synthesized case.
-    unauthored = next(
-        n for n in range(config.TUTORIAL_LAST_DAY + 1, config.CAMPAIGN_LAST_DAY + 1)
-        if not (config.DAYS_DIR / f"day_{n:02d}.json").exists())
-    synth = load_day(unauthored)
+    # Call synthesize_day directly rather than hunting for a day number with
+    # no authored day_NN.json — #39 (days 6-7) already authors past
+    # TUTORIAL_LAST_DAY + 1, and Phase 3/Phase 5 are scheduled to author the
+    # rest of 8-20, so a "find the first hole" search would eventually raise
+    # StopIteration. load_day already delegates to synthesize_day for any
+    # unauthored day, so calling it directly tests the same behavior
+    # permanently, independent of how much of the campaign ends up authored.
+    from gameengine.core.content_loader import synthesize_day
+    synth = synthesize_day(config.TUTORIAL_LAST_DAY + 1)
     assert synth.rule_sheet is None
     assert "today's rule sheet" not in rules_content.build_dossier_text(synth)
 
@@ -3867,12 +3868,14 @@ def test_days_06_and_07_carry_no_dark_web_directive():
 
 
 @pytest.mark.parametrize("day_number,expected_pool", [
+    (6, "_CHAT_DARK_WEB_EARLY"),
     (7, "_CHAT_DARK_WEB_EARLY"),
     (9, "_CHAT_DARK_WEB_EARLY"),
     (10, "_CHAT_DARK_WEB_MID"),
     (15, "_CHAT_DARK_WEB_MID"),
     (16, "_CHAT_DARK_WEB_LATE"),
     (18, "_CHAT_DARK_WEB_LATE"),
+    (20, "_CHAT_DARK_WEB_LATE"),
 ])
 def test_dark_web_chat_escalates_by_day_band(day_number, expected_pool):
     """#39: the same archetype's chat has to read bolder deeper into the
