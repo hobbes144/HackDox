@@ -4067,6 +4067,96 @@ def test_days_08_through_11_rule_sheets_render():
             assert note in rules_text
 
 
+def test_day_09_has_slack_to_deny_the_dark_web_candidate():
+    """#40 review fix (item 1) — a real design bug, not a content nit.
+
+    Per CLAUDE.md's Game Design section, denying the Dark Web candidate is
+    the deliberate moral choice that shifts alignment toward White Hat.
+    Before this fix, day 9's mix had exactly 3 ADMIT-ground-truth archetypes
+    TOTAL (obvious_admit, day_to_day, dark_web — it was the only day in 8-11
+    without the_professional), against a quota (min_correct_admits) of 3.
+    Denying the Dark Web candidate — even correctly, even with a flawless
+    read on everything else — then mathematically guaranteed missing quota,
+    which structurally punished the exact choice the corruption arc exists to
+    set up. Adding the_professional:1 to the mix (and bumping candidate_count
+    8 -> 9 to match) gives day 9 one more ADMIT-worthy archetype than its
+    quota requires: `admit_worthy_total > quota` is the slack, and it's
+    exactly enough to absorb denying the one Dark Web candidate in the mix
+    and still reach quota.
+    """
+    day = load_day(9)
+    admit_worthy_total = sum(
+        count for arch, count in day.archetype_mix.items()
+        if candidate_gen.ARCHETYPE_SPECS[arch].correct_verdict == Verdict.ADMIT)
+    assert admit_worthy_total > day.quotas.min_correct_admits, (
+        f"day 9: {admit_worthy_total} ADMIT-worthy archetypes against a "
+        f"quota of {day.quotas.min_correct_admits} leaves no slack to deny "
+        f"the Dark Web candidate without automatically failing quota")
+    dark_web_count = day.archetype_mix.get(Archetype.DARK_WEB, 0)
+    assert dark_web_count >= 1, "day 9 must still declare a Dark Web slot"
+    assert admit_worthy_total - dark_web_count >= day.quotas.min_correct_admits, (
+        "day 9: quota must still be reachable after denying every Dark Web "
+        "candidate in the mix")
+
+
+def test_days_08_through_11_rule_sheet_notes_match_resolved_severities():
+    """#40 review fix (item 8) — the rule_sheet is display copy that CAN
+    drift from the actual rulebook (CONTENT_AUTHORING.md's own words:
+    'keeping them honest against each other is an authoring job,
+    deliberately'). Spot-checks the five notes that describe DW-01..DW-04's
+    targets (and the one kind no directive ever touches, low_and_slow)
+    against each day's ACTUAL resolved rule severity, so a future edit that
+    changes one without the other is caught rather than silently drifting.
+    """
+    # expected severity of the rule matching each kind, per day.
+    expectations = {
+        8:  {DiscrepancyKind.SOCK_PUPPET_ACCOUNTS: "weighted",
+             DiscrepancyKind.THREAT_FORUM_MATCH: "disqualifying",
+             DiscrepancyKind.CREDENTIAL_STUFFING: "disqualifying",
+             DiscrepancyKind.ENCRYPTED_PAYLOAD: "disqualifying",
+             DiscrepancyKind.LOW_AND_SLOW: "disqualifying"},
+        9:  {DiscrepancyKind.SOCK_PUPPET_ACCOUNTS: "weighted",
+             DiscrepancyKind.THREAT_FORUM_MATCH: "weighted",
+             DiscrepancyKind.CREDENTIAL_STUFFING: "disqualifying",
+             DiscrepancyKind.ENCRYPTED_PAYLOAD: "disqualifying",
+             DiscrepancyKind.LOW_AND_SLOW: "disqualifying"},
+        10: {DiscrepancyKind.SOCK_PUPPET_ACCOUNTS: "weighted",
+             DiscrepancyKind.THREAT_FORUM_MATCH: "weighted",
+             DiscrepancyKind.CREDENTIAL_STUFFING: "weighted",
+             DiscrepancyKind.ENCRYPTED_PAYLOAD: "disqualifying",
+             DiscrepancyKind.LOW_AND_SLOW: "disqualifying"},
+        11: {DiscrepancyKind.SOCK_PUPPET_ACCOUNTS: "weighted",
+             DiscrepancyKind.THREAT_FORUM_MATCH: "weighted",
+             DiscrepancyKind.CREDENTIAL_STUFFING: "weighted",
+             DiscrepancyKind.ENCRYPTED_PAYLOAD: "weighted",
+             DiscrepancyKind.LOW_AND_SLOW: "disqualifying"},
+    }
+    for n, kinds in expectations.items():
+        day = load_day(n)
+        for kind, expected_severity in kinds.items():
+            predicate = f"has_discrepancy:{kind.value}"
+            rule = next(r for r in day.rules if r.predicate == predicate)
+            assert rule.severity == expected_severity, (
+                f"day {n}: {kind.name}'s resolved rule is {rule.severity}, "
+                f"but the rule_sheet prose was authored assuming "
+                f"{expected_severity}")
+        notes_text = " ".join(day.rule_sheet.notes).lower()
+        if any(v == "weighted" for v in kinds.values()):
+            assert "advisory" in notes_text, (
+                f"day {n}: a kind is weighted but no note says so in plain "
+                f"terms")
+        if any(v == "disqualifying" for v in kinds.values()):
+            # Two phrasings are both used, honestly, across these four days'
+            # notes ("still an automatic deny" for the DW-targeted kinds,
+            # "still a deny" for low_and_slow, which no directive ever
+            # touches) — accept either rather than over-fitting to one exact
+            # string, which is exactly the fragility item 7 flagged elsewhere.
+            assert ("still a deny" in notes_text
+                    or "still an automatic deny" in notes_text), (
+                f"day {n}: a kind is still disqualifying but no note says "
+                f"so in plain terms")
+
+
 def test_days_08_through_11_do_not_regress_days_1_through_7():
     """Sanity check the new day files and the forced_chat plumbing did not
     disturb anything already authored (#40 AC)."""
@@ -4124,24 +4214,101 @@ def test_forced_chat_appends_after_the_ordinary_chat_pool():
             "ordinary chat")
 
 
-def test_forced_chat_is_validated_when_the_day_loads(tmp_path, monkeypatch):
+def test_forced_chat_out_of_range_slot_fails_loudly(tmp_path, monkeypatch):
     """A scripted slot that doesn't exist must fail loudly, same stance as
-    forced_violations (#40, mirroring #15's pattern)."""
+    forced_violations (#40, mirroring #15's pattern).
+
+    Derives the expected slot count from day 1's OWN candidate_count rather
+    than hardcoding "6" (#40 review fix, item 7) — this test shouldn't
+    silently stop meaning anything the day day 1's shift length changes.
+    """
     import json
 
     base = json.loads(
         (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
-    base = {**base, "forced_chat": {"99": ["a line nobody will ever hear"]}}
+    count = base["candidate_count"]
+    out_of_range = count + 91  # comfortably outside any plausible shift
+    base = {**base,
+            "forced_chat": {str(out_of_range): ["a line nobody will ever hear"]}}
     (tmp_path / "day_01.json").write_text(json.dumps(base), encoding="utf-8")
     monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
-    with pytest.raises(ValueError, match="only has 6 slots"):
+    with pytest.raises(ValueError, match=f"only has {count} slots"):
+        load_day(1)
+
+
+def test_forced_includes_out_of_range_slot_fails_loudly(tmp_path, monkeypatch):
+    """#40 review fix (item 5): forced_includes previously had NO bounds
+    check at all — the one slot-keyed mechanism of the three (alongside
+    forced_violations/forced_chat) that didn't validate its slot indices.
+    It now shares `_validate_slot` with the other two.
+    """
+    import json
+
+    base = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    count = base["candidate_count"]
+    out_of_range = count + 91
+    base = {**base, "forced_includes": {
+        **base.get("forced_includes", {}), str(out_of_range): "obvious_admit"}}
+    (tmp_path / "day_01.json").write_text(json.dumps(base), encoding="utf-8")
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    with pytest.raises(ValueError, match=f"only has {count} slots"):
+        load_day(1)
+
+
+def test_forced_chat_requires_a_forced_includes_pin(tmp_path, monkeypatch):
+    """#40 review fix (item 2): forced_chat alone says nothing about which
+    archetype occupies the slot — an unpinned slot's archetype is whatever
+    the day's shuffled bag happens to assign, seed-dependent and liable to
+    change the moment the day's archetype_mix is edited (exactly what nearly
+    happened when day 9's mix grew a the_professional slot for the quota fix
+    above). The loader requires a forced_includes entry for the same slot and
+    fails loudly, naming the file, when one is missing.
+    """
+    import json
+
+    base = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    # Day 1 pins every slot in its own forced_includes; strip slot 0's pin so
+    # this actually exercises the missing-pin path rather than the happy one.
+    base = {**base, "forced_includes": {
+        k: v for k, v in base.get("forced_includes", {}).items() if k != "0"
+    }, "forced_chat": {"0": ["a line with no pinned archetype to land on"]}}
+    (tmp_path / "day_01.json").write_text(json.dumps(base), encoding="utf-8")
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    with pytest.raises(ValueError, match="no forced_includes entry"):
+        load_day(1)
+
+
+def test_forced_chat_rejects_non_string_lines(tmp_path, monkeypatch):
+    """#40 review fix (item 6): a nested JSON value must not silently
+    coerce via str() into the literal string "['not', 'a', 'string']" —
+    same fail-loud stance `_parse_rule`/`_parse_rule_sheet` already take on a
+    malformed input shape rather than degrading quietly."""
+    import json
+
+    base = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    # Slot 0 is already pinned in day 1's own forced_includes, so this
+    # exercises only the type check, not the pairing requirement above.
+    base = {**base, "forced_chat": {"0": [["not", "a", "string"]]}}
+    (tmp_path / "day_01.json").write_text(json.dumps(base), encoding="utf-8")
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    with pytest.raises(ValueError, match="non-string line"):
         load_day(1)
 
 
 def test_day_08_forced_chat_names_concrete_dark_web_harm():
     """#40 AC: at least one Clumsy Cutie/Obvious Admit in 8-11 names harm the
     Dark Web did to someone they know — a concrete, small-scale aside, not a
-    lore lecture, from an otherwise ordinary, non-malicious candidate."""
+    lore lecture, from an otherwise ordinary, non-malicious candidate.
+
+    Deliberately does NOT sniff for specific keywords ("lost"/"money"/…) —
+    that would break on an unrelated copy-editing pass (#40 review fix, item
+    7). What actually carries meaning is checked instead: the line lands on a
+    non-malicious archetype, and it never names the arc/service directly
+    (a concrete personal anecdote, not a lore lecture).
+    """
     day = load_day(8)
     assert day.forced_chat, "day 8 authors no forced_chat at all"
     for slot, lines in day.forced_chat.items():
@@ -4156,8 +4323,6 @@ def test_day_08_forced_chat_names_concrete_dark_web_harm():
         joined = " ".join(lines).lower()
         # Concrete and small-scale, not an abstract lecture about the arc.
         assert "dark web" not in joined and "hackdox" not in joined
-        assert any(word in joined for word in
-                   ("lost", "money", "scam", "gone", "drained"))
 
 
 # ─── #40 AC — the literal-ruleset and moral tracks diverge ─────────────────

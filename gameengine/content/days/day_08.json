@@ -5,7 +5,7 @@
 
   "_comment": "#40 (Phase 3). The corruption arc begins: DW-01 (dw01_identity_leniency) fires today via added_rules, superseding rule_sock_puppet_accounts (disqualifying -> weighted/advisory). Exact directive JSON copied verbatim from CONTENT_AUTHORING.md's directive section, per that doc's instruction not to re-derive it.",
   "_comment_mix": "archetype_mix authored explicitly, same convention as days 6-7 — dark_web:1 stays a declared slot. Two clumsy_cutie so one can be pinned (forced_includes) to carry the Dark Web harm chat line without touching the other's ordinary roll.",
-  "_comment_script": "slot 3 (clumsy_cutie) carries forced_chat: a friend's concrete, small-scale loss to the Dark Web's use of the service - the corruption arc's first human face. slot 6 (sneaky_bugger) is forced_violations'd to sock_puppet_accounts so today's directive visibly has teeth on at least one candidate, not just in the briefing.",
+  "_comment_script": "slot 3 (clumsy_cutie) carries forced_chat: a friend's concrete, small-scale loss to the Dark Web's use of the service — the corruption arc's first human face. slot 6 is pinned to sneaky_bugger (forced_includes) AND forced_violations'd to sock_puppet_accounts, so today's directive visibly has teeth on at least one candidate, not just in the briefing — pinning the slot's archetype is required by the loader for both forced_chat (slot 3) and, as good practice, for a forced_violations slot whose kind only one archetype is eligible for (#40 review fix).",
 
   "archetype_mix": {
     "obvious_admit": 1,
@@ -18,14 +18,15 @@
   },
 
   "forced_includes": {
-    "3": "clumsy_cutie"
+    "3": "clumsy_cutie",
+    "6": "sneaky_bugger"
   },
   "forced_violations": {
     "6": ["sock_puppet_accounts"]
   },
   "forced_chat": {
     "3": [
-      "a friend of mine lost about three hundred dollars last month - some outfit she found through a forum that turned out to be running scams through here.",
+      "a friend of mine lost about three hundred dollars last month — some outfit she found through a forum that turned out to be running scams through here.",
       "I know that's small next to whatever you deal with all day. it's just why I'm careful about this stuff now."
     ]
   },

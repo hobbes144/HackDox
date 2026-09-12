@@ -1075,9 +1075,13 @@ def _build_chat(
             tag="hostile",
         ))
 
+    # Index off the ACTUAL line count so far, not `n` + an assumed hostile
+    # splice — every shipped forced_chat use targets a non-hostile archetype,
+    # so hard-coding the +1 produced a visible timestamp gap (#40 review fix).
+    base_index = len(lines)
     for j, text in enumerate(forced_lines):
         lines.append(ChatLine(
-            timestamp=f"10:{(minute + (n + 1 + j) * 2) % 60:02d}",
+            timestamp=f"10:{(minute + (base_index + j) * 2) % 60:02d}",
             text=text,
             tag=spec.tone,
         ))

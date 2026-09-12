@@ -1,15 +1,16 @@
 {
   "number": 9,
   "title": "Day 9 — Two Lines Now",
-  "candidate_count": 8,
+  "candidate_count": 9,
 
   "_comment": "#40 (Phase 3). DW-02 (dw02_forum_leniency) fires today, superseding rule_threat_forum. DW-01 is RE-LISTED in added_rules per CONTENT_AUTHORING.md's cumulative-authoring warning — omitting it here would silently revert sock-puppet detection to disqualifying with no error and no line in the briefing.",
-  "_comment_mix": "archetype_mix authored explicitly, same convention as prior days. Two sneaky_bugger this time (per #39's own precedent on day 7) as the pacing note for the archetype the tools were built to punish for not being used.",
-  "_comment_script": "slot 5 (bad_actor) forced_violations'd to threat_forum_match so today's directive visibly has teeth on at least one candidate.",
+  "_comment_mix": "archetype_mix authored explicitly, same convention as prior days. Two sneaky_bugger this time (per #39's own precedent on day 7) as the pacing note for the archetype the tools were built to punish for not being used. the_professional:1 added (#40 review fix): without it this day had only 3 ADMIT-ground-truth archetypes (obvious_admit, day_to_day, dark_web) against a quota of 3 — denying the Dark Web candidate, the deliberate moral choice the whole corruption arc exists to set up, then mathematically guaranteed a POOR rating even with a flawless read on everything else. With the_professional added there are 4 ADMIT archetypes, so denying dark_web and admitting the other 3 correctly exactly meets quota — reachable, matching the same (zero-margin-but-achievable) structure days 10 and 11 already have. candidate_count bumped 8 -> 9 to match, per days 10-11's pattern; quotas.min_correct_admits stays 3 (config.DAY_MIN_CORRECT_ADMITS floors at round(9*0.34)=3 regardless of what's authored here, same floor as the old 8-candidate count had).",
+  "_comment_script": "slot 5 is pinned to bad_actor (forced_includes) AND forced_violations'd to threat_forum_match, so today's directive visibly has teeth on at least one candidate — pinning is required whenever a forced_violations kind is only eligible for one specific archetype (#40 review fix), so the archetype landing in that slot can't silently drift out from under the script the next time the mix changes.",
 
   "archetype_mix": {
     "obvious_admit": 1,
     "day_to_day": 1,
+    "the_professional": 1,
     "the_incompatible": 1,
     "clumsy_cutie": 1,
     "bad_actor": 1,
@@ -17,6 +18,9 @@
     "dark_web": 1
   },
 
+  "forced_includes": {
+    "5": "bad_actor"
+  },
   "forced_violations": {
     "5": ["threat_forum_match"]
   },

@@ -101,6 +101,42 @@ def _parse_rule_sheet(raw: dict | None) -> RuleSheet | None:
     return None if sheet.is_empty() else sheet
 
 
+def _validate_slot(slot: int, day_number: int, candidate_count: int,
+                    field: str) -> None:
+    """Fail loudly if a slot-keyed day-file field names a slot outside the
+    day's actual shift (#40 review fix).
+
+    Shared by `forced_includes`/`forced_violations`/`forced_chat` so all
+    three slot-scripting mechanisms fail the exact same way on the exact same
+    mistake — a typo'd slot index that would otherwise silently script a
+    candidate who never gets generated, with the day still loading and
+    playing fine.
+    """
+    if not 0 <= slot < candidate_count:
+        raise ValueError(
+            f"day {day_number}: {field} names slot {slot}, but the day only "
+            f"has {candidate_count} slots (0-{candidate_count - 1})")
+
+
+def _parse_forced_includes(
+    raw: dict, day_number: int, candidate_count: int,
+) -> dict[int, Archetype]:
+    """Parse and validate the day's pinned-archetype slots (#32).
+
+    JSON shape: {"<slot index>": "<archetype value>"}. Bounds-validated the
+    same way as `forced_violations`/`forced_chat` (#40 review fix) — this was
+    previously the one slot-keyed mechanism of the three with NO bounds check
+    at all, so a typo'd slot index here silently pinned a candidate who would
+    never actually be generated, with no error to say so.
+    """
+    out: dict[int, Archetype] = {}
+    for slot_raw, arch in (raw or {}).items():
+        slot = int(slot_raw)
+        _validate_slot(slot, day_number, candidate_count, "forced_includes")
+        out[slot] = Archetype(arch)
+    return out
+
+
 def _parse_forced_violations(
     raw: dict, day_number: int, candidate_count: int,
     allowed_violations: tuple[DiscrepancyKind, ...],
@@ -127,11 +163,7 @@ def _parse_forced_violations(
     out: dict[int, tuple[DiscrepancyKind, ...]] = {}
     for slot_raw, kinds_raw in (raw or {}).items():
         slot = int(slot_raw)
-        if not 0 <= slot < candidate_count:
-            raise ValueError(
-                f"day {day_number}: forced_violations names slot {slot}, but "
-                f"the day only has {candidate_count} slots (0-"
-                f"{candidate_count - 1})")
+        _validate_slot(slot, day_number, candidate_count, "forced_violations")
         kinds: list[DiscrepancyKind] = []
         for value in kinds_raw:
             kind = DiscrepancyKind(value)
@@ -158,30 +190,46 @@ def _parse_forced_violations(
 
 def _parse_forced_chat(
     raw: dict, day_number: int, candidate_count: int,
+    forced_includes: dict[int, Archetype],
 ) -> dict[int, tuple[str, ...]]:
     """Parse the day's scripted extra chat lines (Batch 5 Phase 3, #40).
 
     JSON shape: {"<slot index>": ["<line>", ...]} — the same slot-keyed shape
     as `forced_violations`/`forced_includes`. Unlike a scripted violation kind,
     a line of dialogue has no tool-tier gate or expressibility question to
-    fail, so the only thing worth validating loudly is the slot itself: a
-    typo'd slot index would otherwise script a candidate who never gets
-    generated, and the line would simply never appear with nothing in the
-    logs to say why.
+    fail, so bounds-checking the slot (shared with the other two mechanisms
+    via `_validate_slot`) is not the only thing worth validating loudly here.
 
-    `candidate_gen._build_chat` APPENDS these lines after the slot's ordinary
-    archetype chat rather than replacing it — see the field's docstring on
-    `Day.forced_chat` for why.
+    A scripted line landing on the WRONG archetype is arguably worse than one
+    that never lands at all: `forced_chat` alone says nothing about which
+    archetype occupies the slot, so an unpinned slot's archetype is whatever
+    the day's shuffled bag happens to put there — seed-dependent, and liable
+    to change the moment the day's archetype_mix is edited (#40 review fix:
+    exactly this happened when day 9's mix grew a the_professional slot).
+    A sympathetic "a friend of mine lost money" line landing on a Bad Actor or
+    the Dark Web candidate would read as actively incoherent, with nothing in
+    the loader to say why. So every scripted slot here MUST also be pinned in
+    `forced_includes` — see CONTENT_AUTHORING.md's forced_chat recipe.
     """
     out: dict[int, tuple[str, ...]] = {}
     for slot_raw, lines_raw in (raw or {}).items():
         slot = int(slot_raw)
-        if not 0 <= slot < candidate_count:
+        _validate_slot(slot, day_number, candidate_count, "forced_chat")
+        if slot not in forced_includes:
             raise ValueError(
-                f"day {day_number}: forced_chat names slot {slot}, but the "
-                f"day only has {candidate_count} slots (0-"
-                f"{candidate_count - 1})")
-        out[slot] = tuple(str(line) for line in lines_raw)
+                f"day {day_number}: forced_chat names slot {slot}, but that "
+                f"slot has no forced_includes entry — a scripted chat line "
+                f"needs a PINNED archetype, or it can land on a seed-"
+                f"dependent (and possibly incoherent) candidate")
+        lines: list[str] = []
+        for line in lines_raw:
+            if not isinstance(line, str):
+                raise ValueError(
+                    f"day {day_number}: forced_chat slot {slot} has a "
+                    f"non-string line {line!r} — every forced_chat entry "
+                    f"must be a plain string")
+            lines.append(line)
+        out[slot] = tuple(lines)
     return out
 
 
@@ -493,17 +541,17 @@ def load_day(day_number: int) -> Day:
     )
     difficulty_band = raw.get(
         "difficulty_band", config.difficulty_band_for_day(raw["number"]))
-    # forced_includes JSON: {"<slot index>": "<archetype value>"}.
-    forced_includes = {
-        int(slot): Archetype(arch)
-        for slot, arch in raw.get("forced_includes", {}).items()
-    }
+    forced_includes = _parse_forced_includes(
+        raw.get("forced_includes", {}), raw["number"], candidate_count)
     # #15/#49 — both optional, so every pre-Batch-4 day file loads unchanged.
     forced_violations = _parse_forced_violations(
         raw.get("forced_violations", {}), raw["number"], candidate_count,
         allowed_violations)
+    # forced_chat requires forced_includes to already be resolved, so a
+    # scripted slot with no pinned archetype fails loudly (#40 review fix).
     forced_chat = _parse_forced_chat(
-        raw.get("forced_chat", {}), raw["number"], candidate_count)
+        raw.get("forced_chat", {}), raw["number"], candidate_count,
+        forced_includes)
     rule_sheet = _parse_rule_sheet(raw.get("rule_sheet"))
     return Day(
         number=raw["number"],

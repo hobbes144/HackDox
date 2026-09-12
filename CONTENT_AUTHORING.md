@@ -55,6 +55,7 @@ Past day 20 (`config.CAMPAIGN_LAST_DAY`) the campaign-end screen fires.
 | `archetype_mix` | How many of each archetype. Must sum to `candidate_count`. |
 | `forced_includes` | `{"slot": "archetype"}` — pin who appears where. |
 | `forced_violations` | `{"slot": ["kind", …]}` — pin **what they carry**. This is the tutorial's teaching tool. |
+| `forced_chat` | **Optional** (Batch 5 Phase 3 / #40). `{"slot": ["line", …]}` — pin **extra chat lines** onto a slot, appended after that archetype's ordinary chat rather than replacing it. **Requires a `forced_includes` entry for the same slot** — see the recipe below. |
 | `allowed_violations` | Whitelist. Nothing outside it is ever planted. |
 | `rules` | **Optional.** Omit and the day inherits Day 1's rulebook with today's flips applied. Only Day 1 must declare it. |
 | `added_rules` | **Optional** (#37). Same shape as `rules` — appends new rules on top of whatever the day inherited (or restated). This is how a Dark Web directive lands. An entry may set `supersedes: "<old id>"` to retire that id automatically. **Not cumulative across days** — see the directive section below. |
@@ -80,6 +81,26 @@ Slot 1's candidate now *always* carries that violation, every seed. Three ways t
 - it isn't expressible yet (e.g. `cross_breach_reuse` before a second breach corpus unlocks)
 
 It fails rather than dropping silently on purpose: a dropped script still plays fine, it just stops teaching the thing the day exists for.
+
+### `forced_chat` — pin extra dialogue onto a slot (Batch 5 Phase 3 / #40)
+
+```jsonc
+"forced_includes": {
+  "3": "clumsy_cutie"
+},
+"forced_chat": {
+  "3": [
+    "a friend of mine lost about three hundred dollars last month — some outfit she found through a forum that turned out to be running scams through here.",
+    "I know that's small next to whatever you deal with all day. it's just why I'm careful about this stuff now."
+  ]
+}
+```
+
+Slot 3's candidate gets these lines **appended** after its archetype's ordinary chat — the candidate still reads as an everyday instance of its archetype (same tone, same rough line count), with one extra, human aside tacked on at the end. This is how an otherwise-ordinary candidate (an Obvious Admit, a Clumsy Cutie) gets a line no other instance of that archetype says — days 8–11 use it to give a Clumsy Cutie a line naming concrete, small-scale harm a friend suffered from the Dark Web's use of the service.
+
+**`forced_chat` MUST be paired with a `forced_includes` entry for the same slot.** `forced_chat` alone says nothing about which archetype ends up in that slot — an unpinned slot's archetype is whatever the day's shuffled bag happens to assign, which is seed-dependent and can silently change the next time the day's `archetype_mix` is edited (this bit day 9 for real: adding an archetype to the mix reshuffled which slot got which archetype). A sympathetic "a friend of mine lost money" line landing on a Bad Actor or the Dark Web candidate reads as actively incoherent. The loader enforces the pairing and fails loudly, naming the file, if a `forced_chat` slot has no matching `forced_includes` entry.
+
+The same pairing is good practice for `forced_violations` too, whenever the scripted kind is only eligible for one specific archetype (e.g. `sock_puppet_accounts` is Sneaky-Bugger-only) — the loader does not *require* this pairing for `forced_violations` (a kind ineligible for whatever archetype lands in the slot is just silently skipped, per that mechanism's own docstring), so an unpinned slot risks the script quietly teaching nothing on some seeds even though the day loads and plays fine.
 
 ### `rule_sheet` — the Papers-Please sheet (#49)
 
@@ -366,6 +387,8 @@ Window timing lives in `config.py`: `VERDICT_REVEAL_ENABLED`,
 **Author day 9 properly** → create `content/days/day_09.json`. Copy `day_05.json`, change `number`/`title`, omit `rules`. It takes over from the synthesizer immediately.
 
 **Guarantee a specific violation appears** → `forced_includes` for the archetype + `forced_violations` for the kind. It'll refuse to load if the day can't express it.
+
+**Give one specific candidate an extra line of dialogue** → `forced_includes` to pin the slot's archetype + `forced_chat` for the slot's extra line(s). It'll refuse to load if the slot isn't pinned.
 
 **Rename a violation everywhere** → `VIOLATION_CATALOG` in `rules_content.py`. One edit.
 

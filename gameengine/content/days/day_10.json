@@ -5,7 +5,7 @@
 
   "_comment": "#40 (Phase 3). DW-03 (dw03_stuffing_leniency) fires today, superseding rule_credential_stuffing. DW-01 and DW-02 are RE-LISTED per CONTENT_AUTHORING.md's cumulative-authoring warning.",
   "_comment_mix": "archetype_mix authored explicitly; the_professional and the_incompatible both return this shift as quick-case breathers alongside the growing suspicious cluster.",
-  "_comment_script": "slot 4 (bad_actor) forced_violations'd to credential_stuffing so today's directive visibly has teeth on at least one candidate.",
+  "_comment_script": "slot 4 is pinned to bad_actor (forced_includes) AND forced_violations'd to credential_stuffing, so today's directive visibly has teeth on at least one candidate — pinning is required whenever a forced_violations kind is only eligible for one specific archetype (#40 review fix).",
 
   "archetype_mix": {
     "obvious_admit": 1,
@@ -18,6 +18,9 @@
     "dark_web": 1
   },
 
+  "forced_includes": {
+    "4": "bad_actor"
+  },
   "forced_violations": {
     "4": ["credential_stuffing"]
   },
