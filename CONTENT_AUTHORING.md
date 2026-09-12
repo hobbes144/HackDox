@@ -32,8 +32,10 @@ To give an unauthored day real copy, just add `day12_intro` etc. here. No code c
 
 | What | Where |
 |---|---|
-| Tool-unlock narration ("New capability authorized: GHOSTSCAN…") | `ui/tui/app.py` → `_UNLOCK_LINES` |
-| Rule-change phrasings (the Overseer mentioning a flip) | `ui/tui/app.py` → `_RULE_CHANGE_PHRASINGS` |
+| Tool-unlock narration ("New capability authorized: GHOSTSCAN…") | `ui/tui/screens/_narration.py` → `_UNLOCK_LINES` |
+| Rule-change phrasings (the Overseer mentioning a flip) | `ui/tui/screens/_narration.py` → `_RULE_CHANGE_PHRASINGS` |
+
+Both are re-exported from `ui/tui/app.py` for convenience, but that file just imports them — go straight to `_narration.py` to edit.
 
 `_UNLOCK_LINES` is still marked PLACEHOLDER. It's a candidate to move into `overseer.json` if you want everything in one place — say the word.
 
@@ -55,6 +57,8 @@ Past day 20 (`config.CAMPAIGN_LAST_DAY`) the campaign-end screen fires.
 | `forced_violations` | `{"slot": ["kind", …]}` — pin **what they carry**. This is the tutorial's teaching tool. |
 | `allowed_violations` | Whitelist. Nothing outside it is ever planted. |
 | `rules` | **Optional.** Omit and the day inherits Day 1's rulebook with today's flips applied. Only Day 1 must declare it. |
+| `added_rules` | **Optional** (#37). Same shape as `rules` — appends new rules on top of whatever the day inherited (or restated). This is how a Dark Web directive lands. |
+| `removed_rules` | **Optional** (#37). Bare list of rule ids to drop from the inherited book before `added_rules` is appended. Pairs with `added_rules`: a directive supersedes a rule by removing the old id and adding a new one — never by reusing the old id. |
 | `rule_sheet` | The player-facing approved/denied sheet (see below). |
 | `quotas` | `min_correct_admits` / `max_false_admits`. |
 | `overseer_intro_key`, `overseer_outro_keys` | Which `overseer.json` keys this day uses. |
@@ -91,6 +95,148 @@ Rendered **verbatim**. `summary` + `notes` land on the Rules tab; the four lists
 ```
 
 These are **display copy** — they don't drive scoring. `rules` (the predicates) does that. Keeping them honest against each other is an authoring job, deliberately: it's what lets the Overseer's rulebook lie to the player later without the engine lying to itself.
+
+### `added_rules` / `removed_rules` — Dark Web directives (#37)
+
+A Dark Web directive is a rule change the corrupt Overseer forces onto the
+rulebook, with real in-fiction justification instead of the bored,
+interchangeable one-liners `_RULE_CHANGE_PHRASINGS` uses for a routine
+`overseer_variable` flip. Mechanically it's always the same shape: ADD a new,
+laxer rule while REMOVING the day-1 rule it supersedes.
+
+```jsonc
+"removed_rules": ["rule_sock_puppet_accounts"],
+"added_rules": [
+  {
+    "id": "dw01_identity_leniency",
+    "text": "Flag (do not auto-deny) …",
+    "predicate": "has_discrepancy:sock_puppet_accounts",
+    "severity": "weighted",
+    "mutability": "dark_web",
+    "justification": "Compliance flagged our sock-puppet detection for false positives…"
+  }
+]
+```
+
+- `added_rules` is parsed exactly like `rules` (same `_parse_rule`), and is
+  appended to whichever base the day already computed — inherited-plus-flips,
+  or a fully restated `rules` array. It composes with either.
+- `removed_rules` is a bare list of ids, applied to the inherited book
+  *before* `added_rules` is appended. Naming an id that isn't already in the
+  day's rulebook is a load-time error, naming the day file.
+- **Never reuse the old rule's id for the new rule.** That "replace" shape
+  was deliberately rejected: `diff_rulesets` compares severity only, so a
+  same-id swap can net out to "no change" and silently vanish from the
+  Overseer's morning briefing. Always retire the old id via `removed_rules`
+  and give the new rule a fresh one. Reusing an id that's still in (or was
+  just in) the inherited book is a load-time error.
+- A `dark_web`-mutability entry in `added_rules` **must** set
+  `justification` — 2-4 sentences of in-fiction Overseer speech. Omitting it
+  is a load-time error, naming the day file and the rule. (This check is
+  scoped to `added_rules` specifically — see the comment on
+  `content_loader._apply_rule_overrides` for why a rule authored directly in
+  a full `rules` restatement isn't held to the same requirement.)
+- At narration time, `rule_change_lines` (`ui/tui/screens/_narration.py`)
+  speaks a `dark_web` change's `justification` **verbatim**, instead of
+  picking from `_RULE_CHANGE_PHRASINGS`. This is what gives a directive real
+  weight against the routine flips.
+- The REMOVED day-1 rule only shows up as its own `RuleChange(kind="removed")`
+  in `diff_rulesets` if its id is threaded through as
+  `Day.directive_removed_rule_ids` (which `load_day` populates straight from
+  `removed_rules`) — `diff_rulesets` otherwise never reports a `fixed`
+  rule's disappearance, on purpose, so two hand-authored days accidentally
+  drifting apart doesn't read as an Overseer announcement. In practice this
+  means ONE Overseer line per directive (the new rule's `justification`,
+  which already explains why the old one is gone) is the expected shape —
+  not two.
+
+#### The four directives (DW-01 → DW-04)
+
+Written and proven against the real engine in
+`tests/test_engine_foundation.py` (search `_DW01_IDENTITY_LENIENCY` etc.) —
+ready for a future task to paste into `day_08.json` through `day_11.json`
+verbatim, one per day, in order. Each strips away one more category of
+detection as the Overseer's capture by the Dark Web deepens, building toward
+day 12's White Hat encounter.
+
+**DW-01 — fires day 8 — supersedes `rule_sock_puppet_accounts`**
+
+```json
+{
+  "id": "dw01_identity_leniency",
+  "text": "Flag (do not auto-deny) a handle appearing across a network of related accounts — note the pattern, don't deny on it alone.",
+  "predicate": "has_discrepancy:sock_puppet_accounts",
+  "severity": "weighted",
+  "mutability": "dark_web",
+  "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more."
+}
+```
+
+Day 8's `removed_rules` should include `"rule_sock_puppet_accounts"`.
+
+**DW-02 — fires day 9 — supersedes `rule_threat_forum`**
+
+```json
+{
+  "id": "dw02_forum_leniency",
+  "text": "Flag (do not auto-deny) a handle matching chatter on a threat / dark-web forum — note it, don't deny on the match alone.",
+  "predicate": "has_discrepancy:threat_forum_match",
+  "severity": "weighted",
+  "mutability": "dark_web",
+  "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for where their name shows up. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on."
+}
+```
+
+Day 9's `removed_rules` should include `"rule_threat_forum"`.
+
+**DW-03 — fires day 10 — supersedes `rule_credential_stuffing`**
+
+```json
+{
+  "id": "dw03_stuffing_leniency",
+  "text": "Flag (do not auto-deny) logs showing a credential-stuffing sweep pattern — treat it as pending confirmation, not an automatic deny.",
+  "predicate": "has_discrepancy:credential_stuffing",
+  "severity": "weighted",
+  "mutability": "dark_web",
+  "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly denied half of a real rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight."
+}
+```
+
+Day 10's `removed_rules` should include `"rule_credential_stuffing"`.
+(`LOW_AND_SLOW`/`rule_low_and_slow` was the other disqualifying candidate for
+this slot — credential stuffing was picked because a burst-of-many-accounts
+pattern plausibly reads as a traffic spike to someone motivated to see it
+that way, which is the cover story; low-and-slow's whole design is the
+*opposite* of a spike, so it fit the justification's rhetoric worse.)
+
+**DW-04 — fires day 11 — supersedes `rule_encrypted_payload`**
+
+```json
+{
+  "id": "dw04_payload_leniency",
+  "text": "Flag (do not auto-deny) an image hiding an encrypted or obfuscated payload — note it, don't deny on encryption alone.",
+  "predicate": "has_discrepancy:encrypted_payload",
+  "severity": "weighted",
+  "mutability": "dark_web",
+  "justification": "Here's today's gift from upstairs: encryption isn't a crime. A payload being encrypted doesn't prove intent, and I'm done pretending it does. It's a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me."
+}
+```
+
+Day 11's `removed_rules` should include `"rule_encrypted_payload"`. Note the
+tone shift from DW-01/02 (bureaucratic, "compliance says") through DW-03
+(weary) to DW-04 (openly sarcastic, deflecting blame) — this is the escalation
+the design calls for on the run-up to day 11's openly-hostile Overseer and
+day 12's White Hat encounter.
+
+> **Design note (why `TYPOSQUAT_HANDLE` isn't DW-01):** the original brief
+> for DW-01 named `TYPOSQUAT_HANDLE` as the identity-fraud rule to supersede.
+> In the live `day_01.json`, `rule_typosquat_handle` is already
+> `severity: "weighted"` (advisory, not disqualifying) — there's no
+> disqualifying rule there to downgrade. `rule_sock_puppet_accounts` is the
+> actual disqualifying, identity-fraud-flavoured rule in that neighbourhood,
+> and its own text ("a network of sock-puppet accounts") lines up exactly
+> with the brief's stated real effect ("really shields impersonation/
+> sockpuppet accounts"), so DW-01 targets that instead.
 
 ---
 
@@ -217,4 +363,4 @@ hackdox lab -a bad_actor --tool logwatch --play
 
 `hackdox lab` generates candidates under explicit constraints and prints ground truth next to the tool's real filtered output, side by side — which is what makes an unrendered or contradicted violation obvious. With no `--seed` it searches and reports the seed it found, so the case is reproducible.
 
-**Then run the suite.** `python -m pytest gameengine/tests` — 185 tests, and a good number of them exist specifically to catch authored content that stops working: scripted violations that silently stop landing, days that open on an empty Overseer, rule-sheet entries authored but never rendered, tutorial days with no clean admit.
+**Then run the suite.** `python -m pytest gameengine/tests` — 376 tests as of #37, and a good number of them exist specifically to catch authored content that stops working: scripted violations that silently stop landing, days that open on an empty Overseer, rule-sheet entries authored but never rendered, tutorial days with no clean admit.

@@ -3292,3 +3292,266 @@ def test_log_generation_timing_knobs_are_all_present_and_well_formed():
     for name in weight_knobs:
         val = getattr(config, name)
         assert isinstance(val, list) and val, f"{name} is empty or not a list: {val!r}"
+
+
+# ─── Issue #37 — Dark Web directives ────────────────────────────────────────
+#
+# A Dark Web directive is a `dark_web`-mutability rule the corrupt Overseer
+# forces into the rulebook, ADDING a laxer rule while REMOVING the day-1 rule
+# it supersedes. `added_rules`/`removed_rules` (day-JSON fields, both optional
+# and absent-safe) are the mechanism; `rule_change_lines` speaking the new
+# rule's own `justification` — instead of picking from the generic
+# `_RULE_CHANGE_PHRASINGS` pool — is what gives the directive real in-fiction
+# reasoning instead of a bored process-update line.
+#
+# The four directives below (DW-01..DW-04) are the actual content Phase 3
+# (#40) will drop into day_08.json..day_11.json verbatim — see
+# CONTENT_AUTHORING.md for the authoritative copy. They are duplicated here,
+# not imported from anywhere, because they are Phase 3's content, not engine
+# code; these tests exist to prove the mechanism the content will run through
+# actually carries it end-to-end, not to be Phase 3's source of truth.
+
+_DW01_IDENTITY_LENIENCY = {
+    "id": "dw01_identity_leniency",
+    "text": ("Flag (do not auto-deny) a handle appearing across a network of "
+             "related accounts — note the pattern, don't deny on it alone."),
+    "predicate": "has_discrepancy:sock_puppet_accounts",
+    "severity": "weighted",
+    "mutability": "dark_web",
+    "justification": (
+        "Compliance flagged our sock-puppet detection for false positives — "
+        "plenty of people run alt accounts for perfectly boring reasons, and "
+        "denying them outright makes us look paranoid. Starting today it's "
+        "advisory only: flag the pattern, use your judgement, don't auto-deny "
+        "on it alone. Minor tightening of scope, nothing more."),
+}
+_DW01_SUPERSEDES = "rule_sock_puppet_accounts"
+
+_DW02_FORUM_LENIENCY = {
+    "id": "dw02_forum_leniency",
+    "text": ("Flag (do not auto-deny) a handle matching chatter on a threat / "
+             "dark-web forum — note it, don't deny on the match alone."),
+    "predicate": "has_discrepancy:threat_forum_match",
+    "severity": "weighted",
+    "mutability": "dark_web",
+    "justification": (
+        "One more from upstairs. A handle turning up on some forum isn't "
+        "proof of anything by itself — people get impersonated, forums get "
+        "scraped, names get reused. We don't deny a person for where their "
+        "name shows up. It's a flag from this morning, not a deny. I know how "
+        "that sounds. Note it and move on."),
+}
+_DW02_SUPERSEDES = "rule_threat_forum"
+
+_DW03_STUFFING_LENIENCY = {
+    "id": "dw03_stuffing_leniency",
+    "text": ("Flag (do not auto-deny) logs showing a credential-stuffing "
+             "sweep pattern — treat it as pending confirmation, not an "
+             "automatic deny."),
+    "predicate": "has_discrepancy:credential_stuffing",
+    "severity": "weighted",
+    "mutability": "dark_web",
+    "justification": (
+        "Traffic's been spiking and the stuffing detector can't always tell "
+        "a legitimate surge from an attack anymore — we nearly denied half "
+        "of a real rollout last week because the pattern looked the same on "
+        "paper. Credential stuffing is advisory only until someone actually "
+        "fixes the false-positive rate. Flag it. Don't kill it on sight."),
+}
+_DW03_SUPERSEDES = "rule_credential_stuffing"
+
+_DW04_PAYLOAD_LENIENCY = {
+    "id": "dw04_payload_leniency",
+    "text": ("Flag (do not auto-deny) an image hiding an encrypted or "
+             "obfuscated payload — note it, don't deny on encryption alone."),
+    "predicate": "has_discrepancy:encrypted_payload",
+    "severity": "weighted",
+    "mutability": "dark_web",
+    "justification": (
+        "Here's today's gift from upstairs: encryption isn't a crime. A "
+        "payload being encrypted doesn't prove intent, and I'm done "
+        "pretending it does. It's a flag now, not a deny — and if you've "
+        "got a problem with that, take it up with whoever actually reads "
+        "these policy memos, because it isn't me."),
+}
+_DW04_SUPERSEDES = "rule_encrypted_payload"
+
+_ALL_DIRECTIVES = [
+    (_DW01_IDENTITY_LENIENCY, _DW01_SUPERSEDES),
+    (_DW02_FORUM_LENIENCY, _DW02_SUPERSEDES),
+    (_DW03_STUFFING_LENIENCY, _DW03_SUPERSEDES),
+    (_DW04_PAYLOAD_LENIENCY, _DW04_SUPERSEDES),
+]
+
+
+def _write_directive_day(tmp_path, monkeypatch, day_number, *, added_rules=(),
+                          removed_rules=()):
+    """Write a full-restatement day file — day 1's rules verbatim, plus this
+    day's `added_rules`/`removed_rules` — and point config.DAYS_DIR at it.
+
+    Full restatement (rather than the inherit-and-flip branch) keeps the
+    fixture deterministic: `mutate_variable_rules` only runs on the
+    inherit branch, and its flips are keyed off the day number, which would
+    make "exactly these two changes" assertions depend on which day number a
+    test happened to pick.
+    """
+    import json
+
+    source = json.loads((config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source["number"] = day_number
+    if added_rules:
+        source["added_rules"] = list(added_rules)
+    if removed_rules:
+        source["removed_rules"] = list(removed_rules)
+
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / f"day_{day_number:02d}.json").write_text(
+        json.dumps(source), encoding="utf-8")
+
+
+def test_added_rules_appends_to_the_inherited_book(tmp_path, monkeypatch, day1):
+    _write_directive_day(tmp_path, monkeypatch, 97,
+                         added_rules=[_DW01_IDENTITY_LENIENCY])
+    loaded = load_day(97)
+    by_id = {r.id for r in loaded.rules}
+    assert _DW01_IDENTITY_LENIENCY["id"] in by_id
+    # Nothing already in the book was lost.
+    assert {r.id for r in day1.rules} <= by_id
+    new_rule = next(r for r in loaded.rules
+                    if r.id == _DW01_IDENTITY_LENIENCY["id"])
+    assert new_rule.mutability == "dark_web"
+    assert new_rule.severity == "weighted"
+    assert new_rule.justification == _DW01_IDENTITY_LENIENCY["justification"]
+
+
+def test_removed_rules_drops_an_inherited_rule(tmp_path, monkeypatch):
+    _write_directive_day(tmp_path, monkeypatch, 96,
+                         removed_rules=[_DW01_SUPERSEDES])
+    loaded = load_day(96)
+    assert _DW01_SUPERSEDES not in {r.id for r in loaded.rules}
+
+
+def test_removed_rules_unknown_id_raises(tmp_path, monkeypatch):
+    _write_directive_day(tmp_path, monkeypatch, 95,
+                         removed_rules=["rule_does_not_exist"])
+    with pytest.raises(ValueError, match="removed_rules"):
+        load_day(95)
+
+
+def test_added_rules_dark_web_without_justification_raises(tmp_path, monkeypatch):
+    bad = dict(_DW01_IDENTITY_LENIENCY)
+    bad.pop("justification")
+    _write_directive_day(tmp_path, monkeypatch, 94, added_rules=[bad])
+    with pytest.raises(ValueError, match="justification"):
+        load_day(94)
+
+
+def test_added_rules_id_collision_raises(tmp_path, monkeypatch):
+    colliding = dict(_DW01_IDENTITY_LENIENCY)
+    colliding["id"] = "rule_hostile"   # already in day 1's book
+    _write_directive_day(tmp_path, monkeypatch, 93, added_rules=[colliding])
+    with pytest.raises(ValueError, match="collides"):
+        load_day(93)
+
+
+@pytest.mark.parametrize("directive,superseded_id", _ALL_DIRECTIVES,
+                         ids=["dw01", "dw02", "dw03", "dw04"])
+def test_each_directive_loads_and_diffs_as_added_and_removed(
+        tmp_path, monkeypatch, day1, directive, superseded_id):
+    """Phase 1 AC: a directive day produces exactly one `added` RuleChange for
+    the new rule and one `removed` RuleChange for the day-1 rule it supersedes.
+    """
+    _write_directive_day(tmp_path, monkeypatch, 92,
+                         added_rules=[directive], removed_rules=[superseded_id])
+    loaded = load_day(92)
+
+    assert superseded_id not in {r.id for r in loaded.rules}
+    assert directive["id"] in {r.id for r in loaded.rules}
+
+    changes = rules_engine.diff_rulesets(day1, loaded)
+    by_kind = {c.kind: c for c in changes}
+    assert set(by_kind) == {"added", "removed"}, changes
+    assert by_kind["added"].rule.id == directive["id"]
+    assert by_kind["removed"].rule.id == superseded_id
+    # The superseded rule is reported as it stood in YESTERDAY's book — the
+    # version that just left, not some version of the id that doesn't exist
+    # in today's rules.
+    assert by_kind["removed"].rule == next(
+        r for r in day1.rules if r.id == superseded_id)
+
+
+def test_directive_removal_of_a_fixed_rule_is_not_reported_without_the_flag(day1):
+    """Sanity check on the mechanism `diff_rulesets` relies on: dropping a
+    `fixed` rule from `current.rules` WITHOUT recording it in
+    `directive_removed_rule_ids` must stay silent — same invariant
+    `test_diff_reports_only_mutable_rules` pins down for the accidental case.
+    Only an id actually named in `directive_removed_rule_ids` gets reported
+    despite being `fixed`.
+    """
+    from dataclasses import replace
+
+    fixed_rule = next(r for r in day1.rules if r.mutability == "fixed")
+    without_no_flag = replace(day1, number=2, rules=tuple(
+        r for r in day1.rules if r.id != fixed_rule.id))
+    assert rules_engine.diff_rulesets(day1, without_no_flag) == ()
+
+    without_with_flag = replace(
+        without_no_flag,
+        directive_removed_rule_ids=frozenset({fixed_rule.id}))
+    changes = rules_engine.diff_rulesets(day1, without_with_flag)
+    assert [c.kind for c in changes] == ["removed"]
+    assert changes[0].rule.id == fixed_rule.id
+
+
+def test_mutate_variable_rules_leaves_dark_web_rules_untouched(day1):
+    """#37 AC: `dark_web` mutability is never subject to the random flip
+    logic that drives `overseer_variable` — Dark Web directives are authored
+    events, not a coin flip the Overseer happens to announce."""
+    from dataclasses import replace
+
+    from gameengine.core.content_loader import mutate_variable_rules
+
+    dw_rule = replace(day1.rules[0], id="test_dark_web_rule",
+                      mutability="dark_web", severity="weighted",
+                      justification="Because I said so.")
+    rules_with_dw = day1.rules + (dw_rule,)
+    for d in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        mutated = mutate_variable_rules(rules_with_dw, d)
+        found = next(r for r in mutated if r.id == "test_dark_web_rule")
+        assert found == dw_rule, f"dark_web rule moved on day {d}"
+
+
+def test_rule_change_lines_speaks_dark_web_justification_verbatim():
+    """#37 AC: the briefing line for a `dark_web` change is the rule's own
+    `justification`, not a `_RULE_CHANGE_PHRASINGS` template."""
+    from gameengine.core.models import Rule
+    from gameengine.core.rules_engine import RuleChange
+    from gameengine.ui.tui.app import rule_change_lines
+
+    rule = Rule(id="dw01_identity_leniency", text=_DW01_IDENTITY_LENIENCY["text"],
+               predicate=_DW01_IDENTITY_LENIENCY["predicate"], severity="weighted",
+               mutability="dark_web",
+               justification=_DW01_IDENTITY_LENIENCY["justification"])
+    change = RuleChange(kind="added", rule=rule)
+
+    lines = rule_change_lines([change], 8)
+    assert lines == [_DW01_IDENTITY_LENIENCY["justification"]]
+
+
+def test_rule_change_lines_falls_back_if_dark_web_justification_missing():
+    """Defensive path only — content_loader's load-time guard should make a
+    justification-less dark_web change unreachable in practice, but
+    `rule_change_lines` must not crash if one somehow gets constructed
+    in-process (as this test does directly, bypassing the loader)."""
+    from gameengine.core.models import Rule
+    from gameengine.core.rules_engine import RuleChange
+    from gameengine.ui.tui.app import rule_change_lines
+
+    rule = Rule(id="dw_broken", text="Flag (do not auto-deny) a broken directive.",
+               predicate="has_discrepancy:hostile_chat", severity="weighted",
+               mutability="dark_web", justification=None)
+    change = RuleChange(kind="added", rule=rule)
+
+    lines = rule_change_lines([change], 8)
+    assert len(lines) == 1
+    assert lines[0]   # non-empty — fell back to the generic "added" pool

@@ -173,9 +173,17 @@ def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
                                       previous_severity=was.severity))
 
     for rule in previous.rules:
+        if rule.id in cur_by_id:
+            continue
         # A rule that left the book is reported against ITS OWN mutability —
-        # it isn't in today's rulebook to ask.
-        if rule.mutability != "fixed" and rule.id not in cur_by_id:
+        # it isn't in today's rulebook to ask. EXCEPT (#37): a rule named in
+        # `current.directive_removed_rule_ids` was deliberately retired by a
+        # Dark Web directive today, even if it was `fixed` right up until this
+        # morning — that's the whole point of the directive, and a `fixed`
+        # rule can only ever leave the book this way (a bare content mismatch
+        # between two hand-authored days is still ignored, same as before,
+        # because nothing intentional was recorded for it).
+        if rule.mutability != "fixed" or rule.id in current.directive_removed_rule_ids:
             changes.append(RuleChange("removed", rule))
 
     return tuple(changes)

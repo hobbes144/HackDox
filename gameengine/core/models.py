@@ -280,6 +280,13 @@ class Rule:
     # existing content - a day file that never mentions mutability produces the
     # exact same ruleset it did before.
     mutability: RuleMutability = "fixed"
+    # Issue #37. In-fiction Overseer speech justifying a `dark_web`-mutability
+    # rule — spoken verbatim by `rule_change_lines` instead of picking from the
+    # generic `_RULE_CHANGE_PHRASINGS` pool, because a Dark Web directive needs
+    # a real reason, not a bored one-liner. Defaults to None so every existing
+    # rule (all "fixed"/"overseer_variable" today) loads byte-identically;
+    # content_loader enforces that a `dark_web` rule always sets this.
+    justification: str | None = None
 
 
 @dataclass(frozen=True)
@@ -379,6 +386,16 @@ class Day:
     forced_violations: dict[int, tuple[DiscrepancyKind, ...]] = field(
         default_factory=dict)
     rule_sheet: RuleSheet | None = None
+    # Issue #37 — rule ids this day's `removed_rules` explicitly retired (see
+    # content_loader._apply_rule_overrides). Distinct from "this id just isn't
+    # in `rules`": a rule can go missing between two days by accident (a typo,
+    # a stale copy-paste) or on purpose (a Dark Web directive superseding it).
+    # `diff_rulesets` uses this set to tell the two apart — an accidental gap
+    # in a `fixed` rule must stay silent (nobody authored that change), but a
+    # rule named here was deliberately retired and should be reported even
+    # though it was `fixed` right up until the day it left. Empty by default,
+    # so every pre-#37 day (and every hand-built test Day) is unaffected.
+    directive_removed_rule_ids: frozenset[str] = frozenset()
 
 
 # ─── Day results & game state ───────────────────────────────────────────────

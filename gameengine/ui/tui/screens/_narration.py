@@ -117,13 +117,26 @@ def _starts_a_sentence(template: str) -> bool:
 
 
 def rule_change_lines(changes, day_number: int) -> list[str]:
-    """One casual Overseer line per changed Overseer-Variable rule (#36).
+    """One casual Overseer line per changed rule — Overseer-Variable or Dark Web.
 
     Deterministic in the day number and the rule id, so replaying a day
     reproduces the same briefing rather than re-rolling the Overseer's phrasing.
+
+    Issue #37 — a `dark_web`-mutability change gets the rule's OWN
+    `justification` text, spoken verbatim, instead of a pick from
+    `_RULE_CHANGE_PHRASINGS`. The whole point of a Dark Web directive is that
+    it comes with real in-fiction reasoning, not the bored, interchangeable
+    one-liners used for routine `overseer_variable` flips — reusing the generic
+    pool here would flatten that distinction right back out. `content_loader`
+    guarantees a `dark_web` rule always has a justification at load time; the
+    fallback to the generic pool below is defensive only and should be
+    unreachable in practice.
     """
     lines: list[str] = []
     for change in changes:
+        if change.rule.mutability == "dark_web" and change.rule.justification:
+            lines.append(change.rule.justification)
+            continue
         if change.kind == "severity":
             bucket = ("tightened" if change.rule.severity == "disqualifying"
                       else "relaxed")
