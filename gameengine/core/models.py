@@ -388,11 +388,22 @@ class Day:
     #     the Rules overlay renders verbatim. None means "no authored sheet";
     #     the reference panel then falls back to the engine-wide word banks, as
     #     it did before #49.
+    #   forced_chat — Batch 5 Phase 3 (#40). Same slot-keyed shape as
+    #     forced_violations, but pins extra CHAT LINES onto a slot instead of
+    #     a violation kind. Maps slot index -> tuple of line strings, which
+    #     `candidate_gen._build_chat` appends after that slot's ordinary
+    #     archetype chat — the candidate still reads as its normal archetype;
+    #     the scripted lines are one extra, human aside at the end, not a
+    #     personality swap. This is how an otherwise-ordinary candidate (an
+    #     Obvious Admit, a Clumsy Cutie) gets a line that no other instance of
+    #     that archetype says, e.g. naming concrete harm the Dark Web did to
+    #     someone they know.
     allowed_violations: tuple[DiscrepancyKind, ...] = ()
     difficulty_band: str = "easy"
     forced_includes: dict[int, Archetype] = field(default_factory=dict)
     forced_violations: dict[int, tuple[DiscrepancyKind, ...]] = field(
         default_factory=dict)
+    forced_chat: dict[int, tuple[str, ...]] = field(default_factory=dict)
     rule_sheet: RuleSheet | None = None
     # Issue #37 — rule ids this day's `removed_rules` explicitly retired (see
     # content_loader._apply_rule_overrides). Distinct from "this id just isn't

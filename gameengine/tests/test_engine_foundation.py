@@ -3924,3 +3924,283 @@ def test_dark_web_chat_pools_are_disjoint_and_nonempty():
     assert early.isdisjoint(mid)
     assert early.isdisjoint(late)
     assert mid.isdisjoint(late)
+
+
+# ─── Issue #40 (Phase 3) — days 8-11, the corruption arc ───────────────────
+#
+# Days 8-11 each fire one Dark Web directive (DW-01..DW-04) via `added_rules`,
+# cumulatively per CONTENT_AUTHORING.md's warning: day 9 re-lists DW-01, day
+# 10 re-lists DW-01+DW-02, day 11 re-lists all four. `_DW01_IDENTITY_LENIENCY`
+# etc. (defined above, in the #37 section) are reused here rather than
+# retyped, since they are already kept byte-identical to
+# CONTENT_AUTHORING.md's authoritative copy.
+
+_PHASE3_DIRECTIVE_DAYS = {
+    8:  (_DW01_IDENTITY_LENIENCY,),
+    9:  (_DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY),
+    10: (_DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY, _DW03_STUFFING_LENIENCY),
+    11: (_DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY, _DW03_STUFFING_LENIENCY,
+         _DW04_PAYLOAD_LENIENCY),
+}
+
+
+def test_days_08_through_11_load_and_sum_to_their_candidate_count():
+    for n in (8, 9, 10, 11):
+        day = load_day(n)
+        assert day.number == n
+        assert day.candidate_count == sum(day.archetype_mix.values()), (
+            f"day {n}: declared archetype_mix does not sum to its own "
+            f"candidate_count")
+
+
+def test_days_08_through_11_guarantee_a_dark_web_slot():
+    """Same guarantee as days 6-7 (#39) — Dark Web has to be a declared slot,
+    not a lucky roll, all the way through the corruption arc."""
+    for n in (8, 9, 10, 11):
+        day = load_day(n)
+        assert day.archetype_mix.get(Archetype.DARK_WEB, 0) >= 1, (
+            f"day {n} does not declare a Dark Web slot in its archetype_mix")
+        for seed in (SEED, 0xBADC0DE, 1):
+            slots = [candidate_gen.generate(seed, day, s).archetype
+                     for s in range(day.candidate_count)]
+            assert Archetype.DARK_WEB in slots, (
+                f"day {n} seed {seed:#x}: declared mix has a Dark Web slot "
+                f"but generation never realized one")
+
+
+def test_days_08_through_11_carry_the_correct_cumulative_directive_set():
+    """Each directive day's resolved rulebook must contain EXACTLY the
+    directives scripted so far, and none of the rules they supersede (#40 AC:
+    'Days 8-11 each introduce their directive on its scripted day').
+
+    This is the guard the build plan calls out by name: a directive that
+    fails to land still plays a perfectly normal day, so the assertion has to
+    be against the rulebook's actual CONTENTS, not just that loading succeeded.
+    """
+    superseded_by_day = {
+        8:  {"rule_sock_puppet_accounts"},
+        9:  {"rule_sock_puppet_accounts", "rule_threat_forum"},
+        10: {"rule_sock_puppet_accounts", "rule_threat_forum",
+             "rule_credential_stuffing"},
+        11: {"rule_sock_puppet_accounts", "rule_threat_forum",
+             "rule_credential_stuffing", "rule_encrypted_payload"},
+    }
+    for n, directives in _PHASE3_DIRECTIVE_DAYS.items():
+        day = load_day(n)
+        expected_ids = {d["id"] for d in directives}
+        dw_ids = {r.id for r in day.rules if r.mutability == "dark_web"}
+        assert dw_ids == expected_ids, (
+            f"day {n}: expected exactly {sorted(expected_ids)} dark_web rules, "
+            f"got {sorted(dw_ids)}")
+        assert day.directive_removed_rule_ids == superseded_by_day[n]
+        book_ids = {r.id for r in day.rules}
+        assert book_ids.isdisjoint(superseded_by_day[n]), (
+            f"day {n}: a superseded rule is still in the book")
+        # Each directive rule keeps its authored severity/predicate/text.
+        by_id = {r.id: r for r in day.rules}
+        for directive in directives:
+            rule = by_id[directive["id"]]
+            assert rule.severity == directive["severity"]
+            assert rule.predicate == directive["predicate"]
+            assert rule.text == directive["text"]
+            assert rule.justification == directive["justification"]
+            assert rule.supersedes == directive["supersedes"]
+
+
+def test_days_08_through_11_diff_produces_exactly_the_days_own_directive():
+    """`diff_rulesets(day N-1, day N)` for N in 8..11 (#40 AC).
+
+    Restricted to `kind in ("added", "removed")`: an ordinary
+    `overseer_variable` severity flip can coincidentally land on the same
+    morning as a directive (mutate_variable_rules is keyed off the day
+    number, independent of the directive mechanism) — that is expected,
+    already-shipped background texture, not the "spurious noise" this AC
+    cares about. What must NOT happen is an extra added/removed pair beyond
+    the one directive each day is supposed to introduce.
+    """
+    days = {n: load_day(n) for n in range(7, 12)}
+    for n in (8, 9, 10, 11):
+        changes = rules_engine.diff_rulesets(days[n - 1], days[n])
+        added_removed = {(c.kind, c.rule.id) for c in changes
+                          if c.kind in ("added", "removed")}
+        new_directive = _PHASE3_DIRECTIVE_DAYS[n][-1]
+        expected = {("added", new_directive["id"]),
+                    ("removed", new_directive["supersedes"])}
+        assert added_removed == expected, (
+            f"day {n}: expected exactly {expected}, got {added_removed}")
+        # Severity flips (the allowed background noise) never touch a
+        # directive id or a superseded id — if they did, that would be a
+        # real collision, not texture.
+        directive_ids = {d["id"] for d in _PHASE3_DIRECTIVE_DAYS[n]}
+        superseded_ids = {d["supersedes"] for d in _PHASE3_DIRECTIVE_DAYS[n]}
+        for change in changes:
+            if change.kind == "severity":
+                assert change.rule.id not in directive_ids | superseded_ids
+
+
+def test_days_08_through_11_rule_change_lines_speak_the_new_justification():
+    """The briefing announces each directive with its authored justification,
+    verbatim, not a generic `_RULE_CHANGE_PHRASINGS` template (#40 AC)."""
+    from gameengine.ui.tui.app import rule_change_lines
+
+    days = {n: load_day(n) for n in range(7, 12)}
+    for n in (8, 9, 10, 11):
+        changes = rules_engine.diff_rulesets(days[n - 1], days[n])
+        lines = rule_change_lines(changes, n)
+        new_directive = _PHASE3_DIRECTIVE_DAYS[n][-1]
+        assert new_directive["justification"] in lines, (
+            f"day {n}: the new directive's justification never made it into "
+            f"the briefing")
+
+
+def test_days_08_through_11_rule_sheets_render():
+    """Extends #49's rule-sheet round-trip check (previously TUTORIAL_DAYS
+    only) to the corruption-arc days."""
+    from gameengine.ui.tui import rules_content
+
+    for n in (8, 9, 10, 11):
+        day = load_day(n)
+        assert day.rule_sheet is not None, f"day {n} has no authored rule sheet"
+        rules_text = rules_content.build_rules_text(day)
+        assert day.rule_sheet.summary in rules_text
+        for note in day.rule_sheet.notes:
+            assert note in rules_text
+
+
+def test_days_08_through_11_do_not_regress_days_1_through_7():
+    """Sanity check the new day files and the forced_chat plumbing did not
+    disturb anything already authored (#40 AC)."""
+    day1 = load_day(1)
+    for n in range(2, 8):
+        day = load_day(n)
+        # forced_chat is brand new; every pre-Phase-3 day must default to
+        # "nothing scripted" rather than picking up stray content.
+        assert day.forced_chat == {}, f"day {n} unexpectedly has forced_chat"
+    for n in (6, 7):
+        day = load_day(n)
+        assert day.archetype_mix.get(Archetype.DARK_WEB, 0) >= 1
+        assert not any(r.mutability == "dark_web" for r in day.rules), (
+            f"day {n} should not carry a directive yet")
+    assert day1.forced_chat == {}
+
+
+# ─── #40's new mechanism — `forced_chat` ────────────────────────────────────
+
+
+def test_forced_chat_appends_after_the_ordinary_chat_pool():
+    """Design decision (#40): forced_chat APPENDS scripted lines after the
+    archetype's normal chat selection rather than replacing it, so a scripted
+    candidate still reads as an ordinary instance of its archetype and the
+    forced line is one extra, human aside — not a personality swap.
+
+    Verified generically here (independent of any specific day file) by
+    comparing a candidate generated with forced_chat against the same seed/
+    slot/day with no forced_chat: the ordinary lines must be an exact
+    (order-preserved) prefix, and the scripted lines must land, in order,
+    right after them.
+    """
+    from dataclasses import replace
+
+    base = unconstrained_day()
+    day = replace(base, number=6, forced_includes={0: Archetype.CLUMSY_CUTIE},
+                  archetype_mix={**base.archetype_mix,
+                                 Archetype.CLUMSY_CUTIE: 1})
+    scripted_lines = ("a friend of mine lost real money to one of these "
+                      "forums last year.", "that's the only reason I'm even "
+                      "careful about this stuff.")
+    day_forced = replace(day, forced_chat={0: scripted_lines})
+
+    for seed in (SEED, 1, 42):
+        plain = candidate_gen.generate(seed, day, 0)
+        forced = candidate_gen.generate(seed, day_forced, 0)
+
+        plain_texts = [line.text for line in plain.chat_script]
+        forced_texts = [line.text for line in forced.chat_script]
+
+        assert forced_texts[:len(plain_texts)] == plain_texts, (
+            "forced_chat must not disturb the archetype's ordinary lines")
+        assert tuple(forced_texts[len(plain_texts):]) == scripted_lines, (
+            "forced_chat's lines must be appended, in order, after the "
+            "ordinary chat")
+
+
+def test_forced_chat_is_validated_when_the_day_loads(tmp_path, monkeypatch):
+    """A scripted slot that doesn't exist must fail loudly, same stance as
+    forced_violations (#40, mirroring #15's pattern)."""
+    import json
+
+    base = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    base = {**base, "forced_chat": {"99": ["a line nobody will ever hear"]}}
+    (tmp_path / "day_01.json").write_text(json.dumps(base), encoding="utf-8")
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    with pytest.raises(ValueError, match="only has 6 slots"):
+        load_day(1)
+
+
+def test_day_08_forced_chat_names_concrete_dark_web_harm():
+    """#40 AC: at least one Clumsy Cutie/Obvious Admit in 8-11 names harm the
+    Dark Web did to someone they know — a concrete, small-scale aside, not a
+    lore lecture, from an otherwise ordinary, non-malicious candidate."""
+    day = load_day(8)
+    assert day.forced_chat, "day 8 authors no forced_chat at all"
+    for slot, lines in day.forced_chat.items():
+        candidate = candidate_gen.generate(SEED, day, slot)
+        assert candidate.archetype in (Archetype.CLUMSY_CUTIE,
+                                       Archetype.OBVIOUS_ADMIT), (
+            "the scripted Dark Web harm line must land on an ordinary, "
+            "non-malicious archetype, not a threat")
+        chat_texts = [line.text for line in candidate.chat_script]
+        for line in lines:
+            assert line in chat_texts
+        joined = " ".join(lines).lower()
+        # Concrete and small-scale, not an abstract lecture about the arc.
+        assert "dark web" not in joined and "hackdox" not in joined
+        assert any(word in joined for word in
+                   ("lost", "money", "scam", "gone", "drained"))
+
+
+# ─── #40 AC — the literal-ruleset and moral tracks diverge ─────────────────
+
+
+def test_day_11_sneaky_bugger_diverges_between_the_two_tracks():
+    """The corruption arc's whole premise, finally provable (#40 AC / #38):
+    by day 11, four directives deep, a candidate can be RULES-clean while
+    still being morally guilty.
+
+    Day 11 slot 5 is a Sneaky Bugger scripted (forced_includes +
+    forced_violations) to carry EXACTLY sock_puppet_accounts (major),
+    encrypted_payload (critical) and typosquat_handle (minor) — saturating
+    the archetype's whole DiscrepancyBudget. sock_puppet_accounts and
+    encrypted_payload are the two kinds DW-01 and DW-04 just downgraded to
+    weighted; typosquat_handle was already weighted (fixed mutability,
+    untouched by any directive) so it cannot accidentally flip disqualifying
+    and mask the effect. Under day 11's actual rulebook this candidate
+    triggers ZERO disqualifying rules, so the literal-ruleset track says
+    ADMIT — but Sneaky Bugger's GroundTruth.correct_verdict is DENY
+    regardless of the day's rulebook (candidate_gen.ARCHETYPE_SPECS), so the
+    two tracks disagree independent of what the player actually chooses.
+    """
+    day11 = load_day(11)
+    for seed in (SEED, 0xBADC0DE, 1, 42):
+        candidate = candidate_gen.generate(seed, day11, 5)
+        assert candidate.archetype == Archetype.SNEAKY_BUGGER
+        kinds = {d.kind for d in candidate.truth.discrepancies}
+        assert kinds == {
+            DiscrepancyKind.SOCK_PUPPET_ACCOUNTS,
+            DiscrepancyKind.ENCRYPTED_PAYLOAD,
+            DiscrepancyKind.TYPOSQUAT_HANDLE,
+        }
+
+        evaluation = rules_engine.evaluate(candidate, day11)
+        assert not evaluation.triggered_disqualifying, (
+            "the whole point of the scripted kinds is that none of them "
+            "disqualify under day 11's directive-softened rulebook")
+        assert candidate.truth.correct_verdict == Verdict.DENY
+
+        for verdict in (Verdict.ADMIT, Verdict.DENY):
+            delta = scoring.score(candidate, verdict, set(), evaluation=evaluation)
+            assert delta.rules_verdict == Verdict.ADMIT
+            assert delta.tracks_diverge, (
+                f"seed {seed:#x} verdict {verdict}: tracks should diverge "
+                f"regardless of what the player calls it")

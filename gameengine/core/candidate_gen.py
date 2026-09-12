@@ -1029,6 +1029,7 @@ def _build_chat(
     spec: ArchetypeSpec,
     discrepancies: list[Discrepancy],
     day_number: int,
+    forced_lines: tuple[str, ...] = (),
 ) -> tuple[ChatLine, ...]:
     """Compose 3-5 chat lines from the archetype's pool.
 
@@ -1039,6 +1040,16 @@ def _build_chat(
     across the whole medium/hard campaign, so `_dark_web_chat_pool` swaps in
     a bolder set of lines the later `day_number` falls, in place of the
     spec's static `chat_pool`. Every other archetype is unaffected.
+
+    `forced_lines` (`Day.forced_chat`, Batch 5 Phase 3 / #40) is appended
+    after everything else, never in place of it — the candidate still reads
+    as an ordinary instance of its archetype, and the scripted line is one
+    extra, human aside at the end of the conversation, not a personality
+    swap. This is deliberately APPEND rather than REPLACE: replacing the pool
+    would mean re-authoring a whole archetype-consistent chat script per
+    scripted slot just to land one sentence, and would make the forced
+    candidate stand out as visibly different in every OTHER way too (line
+    count, tone) rather than just the one line that matters.
     """
     lines: list[ChatLine] = []
     base = list(
@@ -1062,6 +1073,13 @@ def _build_chat(
             timestamp=f"10:{(minute + n * 2) % 60:02d}",
             text="you'll regret this. I have friends.",
             tag="hostile",
+        ))
+
+    for j, text in enumerate(forced_lines):
+        lines.append(ChatLine(
+            timestamp=f"10:{(minute + (n + 1 + j) * 2) % 60:02d}",
+            text=text,
+            tag=spec.tone,
         ))
     return tuple(lines)
 
@@ -1189,7 +1207,8 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
             handle_squats = target
 
     rng_chat = _seeded_rng(game_seed, day.number, slot_index, "chat")
-    chat = _build_chat(rng_chat, spec, discrepancies, day.number)
+    chat = _build_chat(rng_chat, spec, discrepancies, day.number,
+                        day.forced_chat.get(slot_index, ()))
 
     # Determine GitHub commit email.
     # Candidates with a GitHub handle always have a commit email; candidates

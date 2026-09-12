@@ -57,5 +57,33 @@
   "day7_outro_passing": "You got through it. A couple of those deserved a second look before you moved on.",
   "day7_outro_poor": "Something walked through today with nothing on it. That's not innocence, that's a gap in your read.",
   "day7_outro_failed": "Twice in two days. I don't want a third.",
-  "day7_between": "Two shifts past training and the list keeps growing. So does what I expect out of you. Spend it, rest, and be sharper tomorrow."
+  "day7_between": "Two shifts past training and the list keeps growing. So does what I expect out of you. Spend it, rest, and be sharper tomorrow.",
+
+  "day8_intro": "Before you start — I've got something to read you. It's not mine, I didn't draft it, and I'd rather not be the one saying it out loud. But it's the book now, so it's the book.\nNothing else moved today. Same faces as always. Work the queue.",
+  "day8_outro_excellent": "You didn't let the new softness slow you down. Good — I wasn't sure you'd notice the difference.",
+  "day8_outro_passing": "It held. Even with the book a little lighter than it was yesterday.",
+  "day8_outro_poor": "Something got a pass today that yesterday's book would have caught. That's what 'advisory' costs you, apparently.",
+  "day8_outro_failed": "That line cost us today, on the first day it existed. I'll note it. I'm honestly not sure to whom.",
+  "day8_between": "Spend it. Tomorrow's book won't be any heavier — I wouldn't get used to that.",
+
+  "day9_intro": "Another one came down this morning. Same shape as yesterday's, different line. I'm starting to see the pattern, for what that's worth.\nRead it, then get to work.",
+  "day9_outro_excellent": "Two soft spots in the book now and you still read them right. Don't let that turn into a habit you stop noticing.",
+  "day9_outro_passing": "You got through it. I'd have liked cleaner, but the book's not any cleaner either, is it.",
+  "day9_outro_poor": "Yesterday's softness, today's mistake. I'm noticing a shape here and I don't love it.",
+  "day9_outro_failed": "Two directives in, and we're already having the bad version of this conversation.",
+  "day9_between": "Spend what you've got. I'd tell you it gets easier from here, but you've read the same book I have.",
+
+  "day10_intro": "Three now. I stopped asking why around directive two. Compliance says it's about false-positive rates. I have my own read on who's actually paying compliance, but nobody's asked for it.\nAnyway. Work the queue.",
+  "day10_outro_excellent": "Clean, in spite of everything upstairs keeps taking off the table. That's on you, not the book.",
+  "day10_outro_passing": "Held. Barely, and less because of the rules than because of you.",
+  "day10_outro_poor": "Three lines gone soft this week, and today's the day one of them mattered. Of course it was today.",
+  "day10_outro_failed": "I don't have anything reassuring left to say about how this book keeps moving. Neither should you.",
+  "day10_between": "Spend it while it's still yours to spend. I wouldn't assume tomorrow's book does you any favors either.",
+
+  "day11_intro": "Fourth one. Read it yourself — I'm done pretending to be surprised by these.\nHere's what I actually think, since you keep looking at me like I owe you an explanation for it: every one of these makes your job easier, not harder. Fewer deny calls, fewer arguments, fewer people looking at you sideways when you turn them away. You should be thanking upstairs, not glaring at me.\nWork the queue. And stop looking for someone in this room to be angry at.",
+  "day11_outro_excellent": "You read straight through four directives without flinching once. I'd call that discipline. Some people upstairs would call it something else.",
+  "day11_outro_passing": "You got there. Try not to let a fifth one — whenever it comes — slow you down the way the third one did.",
+  "day11_outro_poor": "Something walked through today on a rule I personally handed you the softened version of. I did my part.",
+  "day11_outro_failed": "Four days of me making this easier for you, and today's the day it fell apart. That's not the book's fault anymore. That one's yours.",
+  "day11_between": "Spend it. And think about what you're actually protecting by still holding the line on the one rule nobody's asked you to soften yet — because I promise you, somebody's noticed that you do."
 }

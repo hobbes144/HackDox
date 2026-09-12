@@ -156,6 +156,35 @@ def _parse_forced_violations(
     return out
 
 
+def _parse_forced_chat(
+    raw: dict, day_number: int, candidate_count: int,
+) -> dict[int, tuple[str, ...]]:
+    """Parse the day's scripted extra chat lines (Batch 5 Phase 3, #40).
+
+    JSON shape: {"<slot index>": ["<line>", ...]} — the same slot-keyed shape
+    as `forced_violations`/`forced_includes`. Unlike a scripted violation kind,
+    a line of dialogue has no tool-tier gate or expressibility question to
+    fail, so the only thing worth validating loudly is the slot itself: a
+    typo'd slot index would otherwise script a candidate who never gets
+    generated, and the line would simply never appear with nothing in the
+    logs to say why.
+
+    `candidate_gen._build_chat` APPENDS these lines after the slot's ordinary
+    archetype chat rather than replacing it — see the field's docstring on
+    `Day.forced_chat` for why.
+    """
+    out: dict[int, tuple[str, ...]] = {}
+    for slot_raw, lines_raw in (raw or {}).items():
+        slot = int(slot_raw)
+        if not 0 <= slot < candidate_count:
+            raise ValueError(
+                f"day {day_number}: forced_chat names slot {slot}, but the "
+                f"day only has {candidate_count} slots (0-"
+                f"{candidate_count - 1})")
+        out[slot] = tuple(str(line) for line in lines_raw)
+    return out
+
+
 def scale_archetype_mix(
     base_mix: dict[Archetype, int],
     target_total: int,
@@ -306,6 +335,7 @@ def synthesize_day(day_number: int) -> Day:
         # days ago, and its rule sheet describes a rulebook that has since
         # moved. Note this is NOT inherited from `template` for that reason.
         forced_violations={},
+        forced_chat={},
         rule_sheet=None,
     )
 
@@ -472,6 +502,8 @@ def load_day(day_number: int) -> Day:
     forced_violations = _parse_forced_violations(
         raw.get("forced_violations", {}), raw["number"], candidate_count,
         allowed_violations)
+    forced_chat = _parse_forced_chat(
+        raw.get("forced_chat", {}), raw["number"], candidate_count)
     rule_sheet = _parse_rule_sheet(raw.get("rule_sheet"))
     return Day(
         number=raw["number"],
@@ -486,6 +518,7 @@ def load_day(day_number: int) -> Day:
         difficulty_band=difficulty_band,
         forced_includes=forced_includes,
         forced_violations=forced_violations,
+        forced_chat=forced_chat,
         rule_sheet=rule_sheet,
         directive_removed_rule_ids=directive_removed_rule_ids,
     )
