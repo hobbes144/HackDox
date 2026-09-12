@@ -57,8 +57,8 @@ Past day 20 (`config.CAMPAIGN_LAST_DAY`) the campaign-end screen fires.
 | `forced_violations` | `{"slot": ["kind", …]}` — pin **what they carry**. This is the tutorial's teaching tool. |
 | `allowed_violations` | Whitelist. Nothing outside it is ever planted. |
 | `rules` | **Optional.** Omit and the day inherits Day 1's rulebook with today's flips applied. Only Day 1 must declare it. |
-| `added_rules` | **Optional** (#37). Same shape as `rules` — appends new rules on top of whatever the day inherited (or restated). This is how a Dark Web directive lands. |
-| `removed_rules` | **Optional** (#37). Bare list of rule ids to drop from the inherited book before `added_rules` is appended. Pairs with `added_rules`: a directive supersedes a rule by removing the old id and adding a new one — never by reusing the old id. |
+| `added_rules` | **Optional** (#37). Same shape as `rules` — appends new rules on top of whatever the day inherited (or restated). This is how a Dark Web directive lands. An entry may set `supersedes: "<old id>"` to retire that id automatically. **Not cumulative across days** — see the directive section below. |
+| `removed_rules` | **Optional** (#37). Bare list of rule ids to drop from the inherited book. Union'd with any `added_rules[].supersedes` ids — use this on its own only when a rule is retired with no replacement. |
 | `rule_sheet` | The player-facing approved/denied sheet (see below). |
 | `quotas` | `min_correct_admits` / `max_false_admits`. |
 | `overseer_intro_key`, `overseer_outro_keys` | Which `overseer.json` keys this day uses. |
@@ -102,10 +102,10 @@ A Dark Web directive is a rule change the corrupt Overseer forces onto the
 rulebook, with real in-fiction justification instead of the bored,
 interchangeable one-liners `_RULE_CHANGE_PHRASINGS` uses for a routine
 `overseer_variable` flip. Mechanically it's always the same shape: ADD a new,
-laxer rule while REMOVING the day-1 rule it supersedes.
+laxer rule that names the day-1 rule it `supersedes`; the old rule is retired
+automatically.
 
 ```jsonc
-"removed_rules": ["rule_sock_puppet_accounts"],
 "added_rules": [
   {
     "id": "dw01_identity_leniency",
@@ -113,51 +113,68 @@ laxer rule while REMOVING the day-1 rule it supersedes.
     "predicate": "has_discrepancy:sock_puppet_accounts",
     "severity": "weighted",
     "mutability": "dark_web",
-    "justification": "Compliance flagged our sock-puppet detection for false positives…"
+    "justification": "Compliance flagged our sock-puppet detection for false positives…",
+    "supersedes": "rule_sock_puppet_accounts"
   }
 ]
 ```
 
+> **⚠️ DIRECTIVES ARE NOT CUMULATIVE ACROSS DAYS — YOU MUST RE-AUTHOR THEM ON EVERY LATER DAY.**
+> `load_day`'s inherit-without-`rules` branch always rebuilds a day's book from
+> **Day 1**, never from the previous day. So if day 8 adds DW-01 and day 9's
+> file doesn't repeat it, day 9 silently goes back to Day 1's original rule —
+> DW-01 vanishes and `rule_sock_puppet_accounts` comes back with no warning,
+> no error, nothing in the diff. **Every directive day must re-list every
+> directive that fired on an earlier day, in addition to its own new one.**
+> By day 11 that means `added_rules` for day 11 lists all four DW-01..DW-04
+> objects — verbose compared to a "sticky" flip, but still far cheaper than
+> restating the ~28-entry rulebook, and it keeps each day file an honest,
+> literal statement of "everything different about today's book" (see the
+> per-directive blocks below for the exact cumulative lists to use).
+
 - `added_rules` is parsed exactly like `rules` (same `_parse_rule`), and is
   appended to whichever base the day already computed — inherited-plus-flips,
   or a fully restated `rules` array. It composes with either.
-- `removed_rules` is a bare list of ids, applied to the inherited book
-  *before* `added_rules` is appended. Naming an id that isn't already in the
-  day's rulebook is a load-time error, naming the day file.
+- **`supersedes`** on an added rule names the id of the rule it replaces.
+  That id is removed from the day's book automatically — you do not also
+  need to list it in `removed_rules` (though you may; the two are unioned).
+  Use `removed_rules` on its own only for a rule that's retired outright,
+  with no replacement.
 - **Never reuse the old rule's id for the new rule.** That "replace" shape
   was deliberately rejected: `diff_rulesets` compares severity only, so a
   same-id swap can net out to "no change" and silently vanish from the
-  Overseer's morning briefing. Always retire the old id via `removed_rules`
-  and give the new rule a fresh one. Reusing an id that's still in (or was
-  just in) the inherited book is a load-time error.
+  Overseer's morning briefing. Always retire the old id via `supersedes`/
+  `removed_rules` and give the new rule a fresh one. Reusing an id that's
+  still in the inherited book — for either `added_rules` or `removed_rules`/
+  `supersedes` naming an id that ISN'T in the book — is a load-time error,
+  naming the day file. So is a duplicate id within one `added_rules` array,
+  or either field being the wrong JSON shape (not a list).
 - A `dark_web`-mutability entry in `added_rules` **must** set
   `justification` — 2-4 sentences of in-fiction Overseer speech. Omitting it
   is a load-time error, naming the day file and the rule. (This check is
-  scoped to `added_rules` specifically — see the comment on
-  `content_loader._apply_rule_overrides` for why a rule authored directly in
-  a full `rules` restatement isn't held to the same requirement.)
+  scoped to `added_rules` specifically — a `dark_web` rule authored directly
+  in a full `rules` restatement isn't held to the same requirement.)
 - At narration time, `rule_change_lines` (`ui/tui/screens/_narration.py`)
-  speaks a `dark_web` change's `justification` **verbatim**, instead of
-  picking from `_RULE_CHANGE_PHRASINGS`. This is what gives a directive real
-  weight against the routine flips.
-- The REMOVED day-1 rule only shows up as its own `RuleChange(kind="removed")`
-  in `diff_rulesets` if its id is threaded through as
-  `Day.directive_removed_rule_ids` (which `load_day` populates straight from
-  `removed_rules`) — `diff_rulesets` otherwise never reports a `fixed`
-  rule's disappearance, on purpose, so two hand-authored days accidentally
-  drifting apart doesn't read as an Overseer announcement. In practice this
-  means ONE Overseer line per directive (the new rule's `justification`,
-  which already explains why the old one is gone) is the expected shape —
-  not two.
+  speaks an **added** `dark_web` change's `justification` **verbatim**,
+  instead of picking from `_RULE_CHANGE_PHRASINGS` — this is what gives a
+  directive real weight against the routine flips. The superseded rule's own
+  `removed` change is **suppressed**, not given a second, generic "that
+  clause is gone" line — `rule_change_lines` recognises it via `supersedes`
+  and folds it into the one bespoke line, so a directive still reads as ONE
+  authored beat, not a specific reason immediately followed by a
+  contradicting "nobody said why."
 
 #### The four directives (DW-01 → DW-04)
 
-Written and proven against the real engine in
-`tests/test_engine_foundation.py` (search `_DW01_IDENTITY_LENIENCY` etc.) —
-ready for a future task to paste into `day_08.json` through `day_11.json`
-verbatim, one per day, in order. Each strips away one more category of
-detection as the Overseer's capture by the Dark Web deepens, building toward
-day 12's White Hat encounter.
+**This section is the source of truth for the directive copy.** The Python
+copies in `tests/test_engine_foundation.py` (`_DW01_IDENTITY_LENIENCY` etc.)
+exist only to prove this exact content survives the real engine end-to-end —
+if the two ever disagree, this doc wins; update the test to match it, not the
+other way round. Ready for a future task to paste into `day_08.json` through
+`day_11.json`, one per day, in order — **remembering the cumulative-authoring
+warning above.** Each strips away one more category of detection as the
+Overseer's capture by the Dark Web deepens, building toward day 12's White
+Hat encounter.
 
 **DW-01 — fires day 8 — supersedes `rule_sock_puppet_accounts`**
 
@@ -168,11 +185,12 @@ day 12's White Hat encounter.
   "predicate": "has_discrepancy:sock_puppet_accounts",
   "severity": "weighted",
   "mutability": "dark_web",
-  "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more."
+  "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
+  "supersedes": "rule_sock_puppet_accounts"
 }
 ```
 
-Day 8's `removed_rules` should include `"rule_sock_puppet_accounts"`.
+Day 8's `added_rules`: `[DW-01]`.
 
 **DW-02 — fires day 9 — supersedes `rule_threat_forum`**
 
@@ -183,11 +201,13 @@ Day 8's `removed_rules` should include `"rule_sock_puppet_accounts"`.
   "predicate": "has_discrepancy:threat_forum_match",
   "severity": "weighted",
   "mutability": "dark_web",
-  "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for where their name shows up. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on."
+  "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for where their name shows up. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on.",
+  "supersedes": "rule_threat_forum"
 }
 ```
 
-Day 9's `removed_rules` should include `"rule_threat_forum"`.
+Day 9's `added_rules`: `[DW-01, DW-02]` — **DW-01 must be re-listed** or it
+silently reverts (see the warning above).
 
 **DW-03 — fires day 10 — supersedes `rule_credential_stuffing`**
 
@@ -198,11 +218,12 @@ Day 9's `removed_rules` should include `"rule_threat_forum"`.
   "predicate": "has_discrepancy:credential_stuffing",
   "severity": "weighted",
   "mutability": "dark_web",
-  "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly denied half of a real rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight."
+  "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly denied half of a real rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight.",
+  "supersedes": "rule_credential_stuffing"
 }
 ```
 
-Day 10's `removed_rules` should include `"rule_credential_stuffing"`.
+Day 10's `added_rules`: `[DW-01, DW-02, DW-03]`.
 (`LOW_AND_SLOW`/`rule_low_and_slow` was the other disqualifying candidate for
 this slot — credential stuffing was picked because a burst-of-many-accounts
 pattern plausibly reads as a traffic spike to someone motivated to see it
@@ -218,15 +239,18 @@ that way, which is the cover story; low-and-slow's whole design is the
   "predicate": "has_discrepancy:encrypted_payload",
   "severity": "weighted",
   "mutability": "dark_web",
-  "justification": "Here's today's gift from upstairs: encryption isn't a crime. A payload being encrypted doesn't prove intent, and I'm done pretending it does. It's a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me."
+  "justification": "Here's today's gift from upstairs: encryption isn't a crime. A payload being encrypted doesn't prove intent, and I'm done pretending it does. It's a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me.",
+  "supersedes": "rule_encrypted_payload"
 }
 ```
 
-Day 11's `removed_rules` should include `"rule_encrypted_payload"`. Note the
-tone shift from DW-01/02 (bureaucratic, "compliance says") through DW-03
-(weary) to DW-04 (openly sarcastic, deflecting blame) — this is the escalation
-the design calls for on the run-up to day 11's openly-hostile Overseer and
-day 12's White Hat encounter.
+Day 11's `added_rules`: `[DW-01, DW-02, DW-03, DW-04]`. Note the tone shift
+from DW-01/02 (bureaucratic, "compliance says") through DW-03 (weary) to
+DW-04 (openly sarcastic, deflecting blame) — this is the escalation the
+design calls for on the run-up to day 11's openly-hostile Overseer and day
+12's White Hat encounter. Day 12 onward should keep re-listing all four
+until/unless a later task gives the campaign a real "sticky directive"
+mechanism (see the warning above).
 
 > **Design note (why `TYPOSQUAT_HANDLE` isn't DW-01):** the original brief
 > for DW-01 named `TYPOSQUAT_HANDLE` as the identity-fraud rule to supersede.

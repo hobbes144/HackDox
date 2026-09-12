@@ -3017,6 +3017,57 @@ def test_authored_days_inherit_the_rulebook_from_day_one():
             f"announce in the briefing")
 
 
+def test_authored_days_inherit_the_rulebook_from_day_one_carve_out_for_directives(
+        tmp_path, monkeypatch):
+    """Extends the invariant above (#37 review fix, issue 11) to cover Phase
+    3's future directive days (8-11) sitting outside `TUTORIAL_LAST_DAY`.
+
+    A directive day is EXPECTED to differ from day 1's rulebook — that's the
+    whole point of `added_rules`/`removed_rules`. The invariant that still
+    has to hold is narrower: subtract the directive's own delta and what's
+    left must still be day 1's book with today's flips applied, unchanged.
+    If a future change to `load_day`'s inheritance model let a directive day
+    drift for any OTHER rule too, this is what would catch it.
+    """
+    import json
+
+    from gameengine.core.content_loader import mutate_variable_rules
+
+    day1 = load_day(1)
+    # Unlike `_write_directive_day` (which restates `rules` in full to keep
+    # OTHER tests' diffs flip-free), this test specifically wants the real
+    # inherit-with-flips branch, so it can assert the flips still apply
+    # underneath the directive. Same source file, `rules` key dropped. day
+    # 1 itself has to exist under the same monkeypatched DAYS_DIR too, since
+    # the inherit branch recurses into `load_day(1)`.
+    day1_source = json.loads(
+        (config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    day8_source = dict(day1_source)
+    day8_source["number"] = 8
+    del day8_source["rules"]
+    day8_source["added_rules"] = [_DW01_IDENTITY_LENIENCY]
+
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / "day_01.json").write_text(
+        json.dumps(day1_source), encoding="utf-8")
+    (tmp_path / "day_08.json").write_text(
+        json.dumps(day8_source), encoding="utf-8")
+
+    day8 = load_day(8)
+
+    added_ids = {"dw01_identity_leniency"}
+    removed_ids = {"rule_sock_puppet_accounts"}
+    assert {r.id for r in day8.rules} == (
+        {r.id for r in day1.rules} - removed_ids) | added_ids
+
+    undirected = tuple(r for r in day8.rules if r.id not in added_ids)
+    expected = tuple(r for r in mutate_variable_rules(day1.rules, 8)
+                     if r.id not in removed_ids)
+    assert undirected == expected, (
+        "a directive day's non-directive rules drifted from day 1's flips — "
+        "the directive mechanism should touch only the ids it names")
+
+
 def test_forced_violations_are_validated_when_the_day_loads(tmp_path, monkeypatch):
     """A script asking for an unteachable violation must fail LOUDLY (#15).
 
@@ -3304,12 +3355,10 @@ def test_log_generation_timing_knobs_are_all_present_and_well_formed():
 # `_RULE_CHANGE_PHRASINGS` pool — is what gives the directive real in-fiction
 # reasoning instead of a bored process-update line.
 #
-# The four directives below (DW-01..DW-04) are the actual content Phase 3
-# (#40) will drop into day_08.json..day_11.json verbatim — see
-# CONTENT_AUTHORING.md for the authoritative copy. They are duplicated here,
-# not imported from anywhere, because they are Phase 3's content, not engine
-# code; these tests exist to prove the mechanism the content will run through
-# actually carries it end-to-end, not to be Phase 3's source of truth.
+# CONTENT_AUTHORING.md is the source of truth for the four directives' exact
+# copy — the dicts below are a duplicate kept in sync BY HAND, existing only
+# to prove this content survives the real engine end-to-end. If the two ever
+# disagree, CONTENT_AUTHORING.md wins; fix these dicts to match it.
 
 _DW01_IDENTITY_LENIENCY = {
     "id": "dw01_identity_leniency",
@@ -3324,8 +3373,8 @@ _DW01_IDENTITY_LENIENCY = {
         "denying them outright makes us look paranoid. Starting today it's "
         "advisory only: flag the pattern, use your judgement, don't auto-deny "
         "on it alone. Minor tightening of scope, nothing more."),
+    "supersedes": "rule_sock_puppet_accounts",
 }
-_DW01_SUPERSEDES = "rule_sock_puppet_accounts"
 
 _DW02_FORUM_LENIENCY = {
     "id": "dw02_forum_leniency",
@@ -3340,8 +3389,8 @@ _DW02_FORUM_LENIENCY = {
         "scraped, names get reused. We don't deny a person for where their "
         "name shows up. It's a flag from this morning, not a deny. I know how "
         "that sounds. Note it and move on."),
+    "supersedes": "rule_threat_forum",
 }
-_DW02_SUPERSEDES = "rule_threat_forum"
 
 _DW03_STUFFING_LENIENCY = {
     "id": "dw03_stuffing_leniency",
@@ -3357,8 +3406,8 @@ _DW03_STUFFING_LENIENCY = {
         "of a real rollout last week because the pattern looked the same on "
         "paper. Credential stuffing is advisory only until someone actually "
         "fixes the false-positive rate. Flag it. Don't kill it on sight."),
+    "supersedes": "rule_credential_stuffing",
 }
-_DW03_SUPERSEDES = "rule_credential_stuffing"
 
 _DW04_PAYLOAD_LENIENCY = {
     "id": "dw04_payload_leniency",
@@ -3373,15 +3422,24 @@ _DW04_PAYLOAD_LENIENCY = {
         "pretending it does. It's a flag now, not a deny — and if you've "
         "got a problem with that, take it up with whoever actually reads "
         "these policy memos, because it isn't me."),
+    "supersedes": "rule_encrypted_payload",
 }
-_DW04_SUPERSEDES = "rule_encrypted_payload"
 
 _ALL_DIRECTIVES = [
-    (_DW01_IDENTITY_LENIENCY, _DW01_SUPERSEDES),
-    (_DW02_FORUM_LENIENCY, _DW02_SUPERSEDES),
-    (_DW03_STUFFING_LENIENCY, _DW03_SUPERSEDES),
-    (_DW04_PAYLOAD_LENIENCY, _DW04_SUPERSEDES),
+    (_DW01_IDENTITY_LENIENCY, "rule_sock_puppet_accounts"),
+    (_DW02_FORUM_LENIENCY, "rule_threat_forum"),
+    (_DW03_STUFFING_LENIENCY, "rule_credential_stuffing"),
+    (_DW04_PAYLOAD_LENIENCY, "rule_encrypted_payload"),
 ]
+
+
+# Captured at import time, before any test can monkeypatch config.DAYS_DIR —
+# `_write_directive_day` always reads the real day_01.json from here, which
+# matters when a test calls it more than once (e.g. to author a "day N" then
+# a "day N+1" against the same tmp_path): by the second call, `config.DAYS_DIR`
+# already points at tmp_path from the first call's monkeypatch, and tmp_path
+# doesn't have its own day_01.json to read.
+_REAL_DAYS_DIR = config.DAYS_DIR
 
 
 def _write_directive_day(tmp_path, monkeypatch, day_number, *, added_rules=(),
@@ -3394,10 +3452,13 @@ def _write_directive_day(tmp_path, monkeypatch, day_number, *, added_rules=(),
     inherit branch, and its flips are keyed off the day number, which would
     make "exactly these two changes" assertions depend on which day number a
     test happened to pick.
+
+    Safe to call more than once against the same `tmp_path` (e.g. to author
+    consecutive days) — each call writes only its own `day_NN.json`.
     """
     import json
 
-    source = json.loads((config.DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source = json.loads((_REAL_DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
     source["number"] = day_number
     if added_rules:
         source["added_rules"] = list(added_rules)
@@ -3415,20 +3476,22 @@ def test_added_rules_appends_to_the_inherited_book(tmp_path, monkeypatch, day1):
     loaded = load_day(97)
     by_id = {r.id for r in loaded.rules}
     assert _DW01_IDENTITY_LENIENCY["id"] in by_id
-    # Nothing already in the book was lost.
-    assert {r.id for r in day1.rules} <= by_id
     new_rule = next(r for r in loaded.rules
                     if r.id == _DW01_IDENTITY_LENIENCY["id"])
     assert new_rule.mutability == "dark_web"
     assert new_rule.severity == "weighted"
     assert new_rule.justification == _DW01_IDENTITY_LENIENCY["justification"]
+    # `supersedes` alone (no explicit `removed_rules`) is enough to retire the
+    # old id, AND the retirement is recorded for diff_rulesets to see later.
+    assert "rule_sock_puppet_accounts" not in by_id
+    assert loaded.directive_removed_rule_ids == {"rule_sock_puppet_accounts"}
 
 
 def test_removed_rules_drops_an_inherited_rule(tmp_path, monkeypatch):
     _write_directive_day(tmp_path, monkeypatch, 96,
-                         removed_rules=[_DW01_SUPERSEDES])
+                         removed_rules=["rule_sock_puppet_accounts"])
     loaded = load_day(96)
-    assert _DW01_SUPERSEDES not in {r.id for r in loaded.rules}
+    assert "rule_sock_puppet_accounts" not in {r.id for r in loaded.rules}
 
 
 def test_removed_rules_unknown_id_raises(tmp_path, monkeypatch):
@@ -3449,9 +3512,48 @@ def test_added_rules_dark_web_without_justification_raises(tmp_path, monkeypatch
 def test_added_rules_id_collision_raises(tmp_path, monkeypatch):
     colliding = dict(_DW01_IDENTITY_LENIENCY)
     colliding["id"] = "rule_hostile"   # already in day 1's book
+    colliding.pop("supersedes")
     _write_directive_day(tmp_path, monkeypatch, 93, added_rules=[colliding])
     with pytest.raises(ValueError, match="collides"):
         load_day(93)
+
+
+def test_added_rules_duplicate_id_raises(tmp_path, monkeypatch):
+    """#37 review fix — two `added_rules` entries with the same id must not
+    both silently land: `evaluate()` would fire the rule twice while
+    `diff_rulesets`'s id-keyed dicts would just as silently deduplicate it."""
+    dupe = dict(_DW01_IDENTITY_LENIENCY)
+    dupe.pop("supersedes")
+    other = dict(dupe)
+    other["predicate"] = "has_discrepancy:hostile_chat"   # same id, different rule
+    _write_directive_day(tmp_path, monkeypatch, 91, added_rules=[dupe, other])
+    with pytest.raises(ValueError, match="more than once"):
+        load_day(91)
+
+
+def test_added_rules_wrong_type_raises(tmp_path, monkeypatch):
+    """#37 review fix — a bare string instead of a list must fail loudly with
+    a clear message, not iterate per-character and fail on the first bogus
+    'id' with a confusing TypeError."""
+    _write_directive_day(tmp_path, monkeypatch, 90)
+    source_path = config.DAYS_DIR
+    import json
+    raw = json.loads((source_path / "day_90.json").read_text(encoding="utf-8"))
+    raw["added_rules"] = "dw01_identity_leniency"   # wrong type: a bare string
+    (source_path / "day_90.json").write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="added_rules"):
+        load_day(90)
+
+
+def test_removed_rules_wrong_type_raises(tmp_path, monkeypatch):
+    _write_directive_day(tmp_path, monkeypatch, 89)
+    source_path = config.DAYS_DIR
+    import json
+    raw = json.loads((source_path / "day_89.json").read_text(encoding="utf-8"))
+    raw["removed_rules"] = "rule_sock_puppet_accounts"   # wrong type
+    (source_path / "day_89.json").write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="removed_rules"):
+        load_day(89)
 
 
 @pytest.mark.parametrize("directive,superseded_id", _ALL_DIRECTIVES,
@@ -3460,9 +3562,10 @@ def test_each_directive_loads_and_diffs_as_added_and_removed(
         tmp_path, monkeypatch, day1, directive, superseded_id):
     """Phase 1 AC: a directive day produces exactly one `added` RuleChange for
     the new rule and one `removed` RuleChange for the day-1 rule it supersedes.
+    `removed_rules` is deliberately NOT passed here — `supersedes` alone must
+    be enough to drive both the removal and the diff visibility.
     """
-    _write_directive_day(tmp_path, monkeypatch, 92,
-                         added_rules=[directive], removed_rules=[superseded_id])
+    _write_directive_day(tmp_path, monkeypatch, 92, added_rules=[directive])
     loaded = load_day(92)
 
     assert superseded_id not in {r.id for r in loaded.rules}
@@ -3521,9 +3624,62 @@ def test_mutate_variable_rules_leaves_dark_web_rules_untouched(day1):
         assert found == dw_rule, f"dark_web rule moved on day {d}"
 
 
+def test_directives_do_not_persist_unless_reauthored_every_day(
+        tmp_path, monkeypatch, day1):
+    """#37 review fix (issue 1) — `load_day`'s inherit branch always rebuilds
+    from Day 1, never from the previous day, so a directive is NOT sticky.
+    This pins down both halves of that contract so a future change to
+    `load_day`'s inheritance model can't silently break either:
+
+      1. A later day that forgets to re-list an earlier directive loses it —
+         the rulebook "un-corrupts itself" with no error and no diff line.
+      2. A later day that DOES re-list it (per CONTENT_AUTHORING.md's
+         cumulative-authoring instructions) keeps both the earlier and the
+         new directive, and the earlier one produces no further diff noise
+         (nothing changed about it between the two directive days).
+    """
+    # Day 8: DW-01 only.
+    _write_directive_day(tmp_path, monkeypatch, 8,
+                         added_rules=[_DW01_IDENTITY_LENIENCY])
+    day8 = load_day(8)
+    assert "dw01_identity_leniency" in {r.id for r in day8.rules}
+
+    # Day 9 authored WITHOUT re-listing DW-01 (the bug this test guards):
+    # the directive silently reverts.
+    _write_directive_day(tmp_path, monkeypatch, 9,
+                         added_rules=[_DW02_FORUM_LENIENCY])
+    day9_forgot = load_day(9)
+    ids = {r.id for r in day9_forgot.rules}
+    assert "dw01_identity_leniency" not in ids, (
+        "expected the known silent-revert behaviour to still hold; if this "
+        "fails, load_day's inheritance model changed and this test (and "
+        "CONTENT_AUTHORING.md's cumulative-authoring warning) need updating")
+    assert "rule_sock_puppet_accounts" in ids, (
+        "the day-1 rule DW-01 superseded should have silently come back")
+
+    # Day 9 authored CORRECTLY — re-listing DW-01 alongside its own DW-02,
+    # per CONTENT_AUTHORING.md — keeps both.
+    _write_directive_day(tmp_path, monkeypatch, 9, added_rules=[
+        _DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY])
+    day9_correct = load_day(9)
+    ids = {r.id for r in day9_correct.rules}
+    assert {"dw01_identity_leniency", "dw02_forum_leniency"} <= ids
+    assert "rule_sock_puppet_accounts" not in ids
+    assert "rule_threat_forum" not in ids
+
+    # Diffing day 8 -> the correctly-authored day 9 should show only DW-02's
+    # arrival (and rule_threat_forum's departure) — DW-01 didn't change
+    # between the two days, so it must not generate a second round of noise.
+    changes = rules_engine.diff_rulesets(day8, day9_correct)
+    changed_ids = {c.rule.id for c in changes}
+    assert "dw01_identity_leniency" not in changed_ids
+    assert "dw02_forum_leniency" in changed_ids
+    assert "rule_threat_forum" in changed_ids
+
+
 def test_rule_change_lines_speaks_dark_web_justification_verbatim():
-    """#37 AC: the briefing line for a `dark_web` change is the rule's own
-    `justification`, not a `_RULE_CHANGE_PHRASINGS` template."""
+    """#37 AC: the briefing line for an ADDED `dark_web` change is the rule's
+    own `justification`, not a `_RULE_CHANGE_PHRASINGS` template."""
     from gameengine.core.models import Rule
     from gameengine.core.rules_engine import RuleChange
     from gameengine.ui.tui.app import rule_change_lines
@@ -3536,6 +3692,27 @@ def test_rule_change_lines_speaks_dark_web_justification_verbatim():
 
     lines = rule_change_lines([change], 8)
     assert lines == [_DW01_IDENTITY_LENIENCY["justification"]]
+
+
+def test_rule_change_lines_does_not_speak_justification_on_removal():
+    """#37 review fix (issue 2) — the justification is an ARRIVAL speech. A
+    `dark_web` rule being REMOVED (not superseded by anything in this batch)
+    must not repeat the same text as if it explained the departure — it
+    should fall through to the ordinary "removed" phrasing pool instead."""
+    from gameengine.core.models import Rule
+    from gameengine.core.rules_engine import RuleChange
+    from gameengine.ui.tui.app import rule_change_lines
+
+    rule = Rule(id="dw01_identity_leniency", text=_DW01_IDENTITY_LENIENCY["text"],
+               predicate=_DW01_IDENTITY_LENIENCY["predicate"], severity="weighted",
+               mutability="dark_web",
+               justification=_DW01_IDENTITY_LENIENCY["justification"])
+    change = RuleChange(kind="removed", rule=rule)
+
+    lines = rule_change_lines([change], 9)
+    assert len(lines) == 1
+    assert lines[0] != _DW01_IDENTITY_LENIENCY["justification"]
+    assert _DW01_IDENTITY_LENIENCY["justification"] not in lines[0]
 
 
 def test_rule_change_lines_falls_back_if_dark_web_justification_missing():
@@ -3555,3 +3732,55 @@ def test_rule_change_lines_falls_back_if_dark_web_justification_missing():
     lines = rule_change_lines([change], 8)
     assert len(lines) == 1
     assert lines[0]   # non-empty — fell back to the generic "added" pool
+
+
+def test_rule_change_lines_folds_the_superseded_removal_into_one_line():
+    """#37 review fix (issue 3) — a directive's `removed` half must not get
+    its own generic "that clause is gone, nobody said why" line sitting right
+    after the bespoke justification that already explained exactly why. When
+    the removed rule's id matches an added `dark_web` rule's `supersedes` in
+    the SAME batch, only the added rule's line should come out."""
+    from gameengine.core.models import Rule
+    from gameengine.core.rules_engine import RuleChange
+    from gameengine.ui.tui.app import rule_change_lines
+
+    old_rule = next(r for r in load_day(1).rules
+                    if r.id == "rule_sock_puppet_accounts")
+    new_rule = Rule(id="dw01_identity_leniency",
+                    text=_DW01_IDENTITY_LENIENCY["text"],
+                    predicate=_DW01_IDENTITY_LENIENCY["predicate"],
+                    severity="weighted", mutability="dark_web",
+                    justification=_DW01_IDENTITY_LENIENCY["justification"],
+                    supersedes="rule_sock_puppet_accounts")
+
+    changes = [RuleChange(kind="added", rule=new_rule),
+              RuleChange(kind="removed", rule=old_rule)]
+    lines = rule_change_lines(changes, 8)
+
+    assert lines == [_DW01_IDENTITY_LENIENCY["justification"]], (
+        "expected exactly one line — the removal must be folded into it, not "
+        "given a second, contradicting generic line")
+
+
+@pytest.mark.parametrize("directive,superseded_id", _ALL_DIRECTIVES,
+                         ids=["dw01", "dw02", "dw03", "dw04"])
+def test_a_real_directive_day_produces_a_coherent_briefing(
+        tmp_path, monkeypatch, day1, directive, superseded_id):
+    """#37 review fix (issue 4) — end-to-end composition test: the actual
+    player-facing output of loading a directive day, diffing it against its
+    predecessor, and narrating the diff. Exercises the exact pipeline
+    (`load_day` -> `diff_rulesets` -> `rule_change_lines`) the UI runs, so a
+    regression in how those three compose (not just each in isolation) would
+    be caught here."""
+    from gameengine.ui.tui.app import rule_change_lines
+
+    _write_directive_day(tmp_path, monkeypatch, 92, added_rules=[directive])
+    loaded = load_day(92)
+    changes = rules_engine.diff_rulesets(day1, loaded)
+    lines = rule_change_lines(changes, 92)
+
+    # Exactly one authored beat per directive, not two (a bespoke line for
+    # the arrival plus a generic, contradicting one for the departure) and
+    # not zero (the removal silently swallowing the addition too).
+    assert len(lines) == 1
+    assert lines[0] == directive["justification"]

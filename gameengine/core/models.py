@@ -287,6 +287,14 @@ class Rule:
     # rule (all "fixed"/"overseer_variable" today) loads byte-identically;
     # content_loader enforces that a `dark_web` rule always sets this.
     justification: str | None = None
+    # Issue #37. The id of the rule THIS rule replaces (set on the new,
+    # `added_rules` rule — not on the old one). `content_loader` uses it to
+    # automatically retire that id from the day's book, and `rule_change_lines`
+    # uses it to suppress a separate, generic "that clause is gone" line for
+    # the superseded rule — one directive should read as one authored beat,
+    # not a bespoke line immediately followed by a contradicting generic one.
+    # None (the default) means "doesn't replace anything".
+    supersedes: str | None = None
 
 
 @dataclass(frozen=True)

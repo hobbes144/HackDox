@@ -122,7 +122,7 @@ def rule_change_lines(changes, day_number: int) -> list[str]:
     Deterministic in the day number and the rule id, so replaying a day
     reproduces the same briefing rather than re-rolling the Overseer's phrasing.
 
-    Issue #37 — a `dark_web`-mutability change gets the rule's OWN
+    Issue #37 — an `added` `dark_web`-mutability change gets the rule's OWN
     `justification` text, spoken verbatim, instead of a pick from
     `_RULE_CHANGE_PHRASINGS`. The whole point of a Dark Web directive is that
     it comes with real in-fiction reasoning, not the bored, interchangeable
@@ -130,11 +130,28 @@ def rule_change_lines(changes, day_number: int) -> list[str]:
     pool here would flatten that distinction right back out. `content_loader`
     guarantees a `dark_web` rule always has a justification at load time; the
     fallback to the generic pool below is defensive only and should be
-    unreachable in practice.
+    unreachable in practice. Gated on `kind == "added"` specifically: the
+    justification is an ARRIVAL speech, not a farewell — if a `dark_web` rule
+    is ever itself removed later, that removal must not repeat the same
+    "here's why this showed up" text as if it explained the rule leaving.
+
+    A `removed` change whose rule is named by an `added` rule's `supersedes`
+    in this SAME batch is dropped entirely, not given the generic "that
+    clause is gone" line — the arriving rule's justification already explains
+    why the old one is gone, and printing a second, generic line right after
+    it would read as a contradiction (bespoke reason given, then "nobody
+    said why").
     """
+    superseded_ids = {
+        change.rule.supersedes for change in changes
+        if change.kind == "added" and change.rule.supersedes
+    }
     lines: list[str] = []
     for change in changes:
-        if change.rule.mutability == "dark_web" and change.rule.justification:
+        if change.kind == "removed" and change.rule.id in superseded_ids:
+            continue
+        if (change.kind == "added" and change.rule.mutability == "dark_web"
+                and change.rule.justification):
             lines.append(change.rule.justification)
             continue
         if change.kind == "severity":

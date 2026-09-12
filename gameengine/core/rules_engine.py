@@ -150,7 +150,12 @@ def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
     That filter is what keeps the broadcast in the "minor process update"
     register the design asks for instead of a diff dump: a rule the player was
     told is permanent policy never generates a line, even in the pathological
-    case where two day files disagree about it.
+    case where two day files disagree about it. EXCEPTION (issue #37): a
+    `fixed` rule named in `current.directive_removed_rule_ids` IS reported as
+    removed, because that set only ever holds ids a Dark Web directive
+    deliberately retired via `removed_rules` — an accidental gap between two
+    hand-authored days never sets it, so the "no line for a Fixed rule" intent
+    still holds for everything that isn't an authored directive.
 
     Ordering follows today's rulebook so the Overseer's lines come out in the
     same order the player reads the rules page in.

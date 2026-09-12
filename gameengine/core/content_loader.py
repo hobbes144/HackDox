@@ -52,6 +52,12 @@ def _parse_rule(raw_rule: dict) -> Rule:
         # book — see `_apply_rule_overrides` — not here, because a rule dict
         # parsed in isolation doesn't yet know it's being added as a directive.
         justification=raw_rule.get("justification"),
+        # Issue #37 — the id of the rule this one replaces, when authored in
+        # `added_rules`. Drives both the automatic removal of that id (see
+        # `_apply_rule_overrides`) and the narration fold in `rule_change_lines`
+        # (a superseded rule doesn't get its own generic "that clause is gone"
+        # line — it's folded into this rule's own justification).
+        supersedes=raw_rule.get("supersedes"),
     )
 
 
@@ -305,93 +311,87 @@ def synthesize_day(day_number: int) -> Day:
 
 
 def _apply_rule_overrides(
-    rules: tuple[Rule, ...], raw: dict, day_number: int,
+    rules: tuple[Rule, ...], added_raw: object, removed_raw: object,
+    day_number: int,
 ) -> tuple[tuple[Rule, ...], frozenset[str]]:
-    """Apply `removed_rules` then `added_rules` on top of a day's base rulebook.
+    """Apply `added_rules` and `removed_rules` on top of a day's base rulebook.
+
+    Issue #37 — lets a Dark Web directive ADD a new, laxer rule while
+    REMOVING the rule it supersedes, without restating the whole ~28-entry
+    book. Both inputs are optional (pass `[]` for an absent key) and
+    absent-safe, so every pre-#37 day file loads byte-identically.
+
+    A rule is removed if its id is in `removed_raw`, OR it is named by an
+    added rule's own `supersedes` field — the latter is what lets
+    `rule_change_lines` fold the removal into the new rule's justification
+    instead of emitting a second, contradicting generic line (see that
+    function). Every removed id — from either source — must already be in
+    the inherited book, and every `added_rules` id must NOT be (same-id
+    "replace" is rejected: `diff_rulesets` compares severity only, so a
+    same-id swap could silently vanish from the briefing). Duplicate ids
+    within `added_rules` itself are also rejected. A `dark_web`-mutability
+    added rule must carry a `justification` — this check is scoped to
+    `added_rules` specifically, not the whole rulebook (a `dark_web` rule
+    hand-authored directly in a full `rules` restatement predates this and
+    is not held to it; see `test_rule_mutability_survives_a_day_json_round_trip`).
+
+    IMPORTANT — this does not itself make directives cumulative across days.
+    `load_day`'s inherit branch always inherits from Day 1, not from the
+    previous day, so a directive's `added_rules`/`removed_rules` must be
+    RE-AUTHORED on every later day that should still carry it. See
+    CONTENT_AUTHORING.md's Dark Web directives section.
 
     Returns `(final_rules, directive_removed_rule_ids)` — the second element
     is threaded onto `Day.directive_removed_rule_ids` so `diff_rulesets` can
-    tell a deliberate retirement apart from an accidental gap (see that
-    field's docstring on `Day` and the comment on `diff_rulesets` itself for
-    why a bare "is this rule `fixed`" check on the old rule isn't enough once
-    a directive can retire a rule that was `fixed` right up until today).
-
-    Issue #37 — Dark Web directives need to ADD a new (laxer) rule to an
-    inherited book while the rule it supersedes is separately REMOVED, without
-    forcing every day past the one that introduces a directive to restate the
-    entire ~28-entry array (see the big comment on `load_day` about why that
-    restatement path is a merge-conflict generator). Both keys are optional and
-    absent-safe, so every pre-#37 day file loads byte-identically.
-
-    `removed_rules` is a bare list of rule ids — checked against how removal
-    already works elsewhere. There was no existing "drop one inherited rule"
-    path: `mutate_variable_rules` only ever flips a rule's severity in place,
-    and the only way to change the ID *set* of a day's book pre-#37 was to
-    restate `rules` in full. So this is a genuinely new, minimal field, not a
-    rediscovery of an existing mechanism.
-
-    Ordering and validation, both deliberate:
-
-      1. Collisions for `added_rules` are checked against the rulebook BEFORE
-         removal — i.e. against every id this day inherited, not just the ones
-         that survive. Reusing an id in the same day it was retired is the
-         "replace" shape that was explicitly rejected in favour of add+remove:
-         `diff_rulesets` compares severity only, so a same-id swap can net out
-         to "no change" and silently vanish from the Overseer's briefing. That
-         failure mode doesn't care whether the removal happened in the same
-         call — so the check runs before removal, not after.
-      2. `removed_rules` runs before `added_rules` is appended either way, so
-         a directive can retire rule X and add a *different* new rule in the
-         same call without the two ever touching.
-      3. This composes on top of BOTH of `load_day`'s existing branches — a
-         day that restates `rules` in full may still carry `added_rules`. There
-         is no reason to forbid it (a fully-restated day is still a valid base
-         to layer a directive onto), so it isn't special-cased away.
-      4. Every `added_rules` entry with `mutability: "dark_web"` must set
-         `justification` — checked HERE, scoped to `added_rules` specifically,
-         not to the rulebook as a whole. A rule authored directly in a day's
-         full `rules` restatement with `mutability: "dark_web"` is deliberately
-         NOT held to this (see `test_rule_mutability_survives_a_day_json_round_trip`,
-         which predates #37 and authors exactly that shape with no
-         justification, to prove mutability alone round-trips). `added_rules`
-         is specifically the Dark Web DIRECTIVE mechanism — a rule arriving
-         through it without a reason a player will actually hear is the
-         authoring bug #37 exists to catch; a bare `dark_web` tag sitting in a
-         hand-restated `rules` array is a different, pre-existing, and
-         intentionally softer contract.
+    report a deliberately-retired `fixed` rule instead of staying silent as
+    it does for an accidental gap between two day files.
     """
+    if not isinstance(added_raw, list):
+        raise ValueError(
+            f"day {day_number}: added_rules must be a list of rule objects, "
+            f"got {type(added_raw).__name__}")
+    if not isinstance(removed_raw, list):
+        raise ValueError(
+            f"day {day_number}: removed_rules must be a list of rule ids, "
+            f"got {type(removed_raw).__name__}")
+
     inherited_ids = {r.id for r in rules}
 
-    removed_ids = raw.get("removed_rules", [])
+    added_rules: list[Rule] = []
+    seen_added_ids: set[str] = set()
+    for r in added_raw:
+        rule = _parse_rule(r)
+        if rule.id in seen_added_ids:
+            raise ValueError(
+                f"day {day_number}: added_rules lists {rule.id!r} more than "
+                f"once")
+        seen_added_ids.add(rule.id)
+        if rule.id in inherited_ids:
+            raise ValueError(
+                f"day {day_number}: added_rules id {rule.id!r} collides "
+                f"with a rule already in the inherited rulebook — same-id "
+                f"replacement isn't supported (diff_rulesets compares "
+                f"severity only, so a same-id swap could silently vanish "
+                f"from the Overseer's briefing); give the new rule its own "
+                f"id and use removed_rules/supersedes to retire the old one")
+        if rule.mutability == "dark_web" and not rule.justification:
+            raise ValueError(
+                f"day {day_number}: added_rules {rule.id!r} is "
+                f"mutability=dark_web but has no justification — a Dark "
+                f"Web directive must always carry in-fiction "
+                f"justification text (see Rule.justification)")
+        added_rules.append(rule)
+
+    removed_ids = set(removed_raw) | {
+        r.supersedes for r in added_rules if r.supersedes
+    }
     for rid in removed_ids:
         if rid not in inherited_ids:
             raise ValueError(
-                f"day {day_number}: removed_rules names {rid!r}, which is not "
-                f"in this day's rulebook before removal")
-    if removed_ids:
-        removed_set = set(removed_ids)
-        rules = tuple(r for r in rules if r.id not in removed_set)
+                f"day {day_number}: removed_rules/supersedes names {rid!r}, "
+                f"which is not in this day's rulebook before removal")
 
-    added_raw = raw.get("added_rules", [])
-    if added_raw:
-        added_rules = tuple(_parse_rule(r) for r in added_raw)
-        for rule in added_rules:
-            if rule.id in inherited_ids:
-                raise ValueError(
-                    f"day {day_number}: added_rules id {rule.id!r} collides "
-                    f"with a rule already in the inherited rulebook — same-id "
-                    f"replacement isn't supported (diff_rulesets compares "
-                    f"severity only, so a same-id swap could silently vanish "
-                    f"from the Overseer's briefing); give the new rule its own "
-                    f"id and use removed_rules to retire the old one")
-            if rule.mutability == "dark_web" and not rule.justification:
-                raise ValueError(
-                    f"day {day_number}: added_rules {rule.id!r} is "
-                    f"mutability=dark_web but has no justification — a Dark "
-                    f"Web directive must always carry in-fiction "
-                    f"justification text (see Rule.justification)")
-        rules = rules + added_rules
-
+    rules = tuple(r for r in rules if r.id not in removed_ids) + tuple(added_rules)
     return rules, frozenset(removed_ids)
 
 
@@ -429,9 +429,12 @@ def load_day(day_number: int) -> Day:
         rules = mutate_variable_rules(load_day(1).rules, raw["number"])
     # Issue #37 — Dark Web directives (and any other future content that needs
     # to add/retire one rule without restating the whole book) layer on top of
-    # whichever base the two branches above produced.
+    # whichever base the two branches above produced. NOTE: this does NOT make
+    # a directive persist to the next day on its own — see the warning in
+    # `_apply_rule_overrides`'s docstring and CONTENT_AUTHORING.md.
     rules, directive_removed_rule_ids = _apply_rule_overrides(
-        rules, raw, raw["number"])
+        rules, raw.get("added_rules", []), raw.get("removed_rules", []),
+        raw["number"])
     archetype_mix = {
         Archetype(key): count for key, count in raw["archetype_mix"].items()
     }
