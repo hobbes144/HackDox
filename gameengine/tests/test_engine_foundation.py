@@ -2478,10 +2478,21 @@ def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
     """#60: 503 of 2700 candidates were DENY by ground truth and ADMIT by the
     rulebook — 19%, and 100% of THE_INCOMPATIBLE.
 
-    Verdict-level agreement is the correct end state. #38's tension is not
-    supposed to live in the verdict: the Dark Web archetype is generated
-    rules-clean on purpose, so admitting it is right by BOTH tracks and the
-    cost is paid in alignment. Divergence in the verdict means the rulebook is
+    Verdict-level agreement is the correct end state for every archetype
+    EXCEPT the two whose whole design is to disagree with the rulebook on
+    purpose: DARK_WEB (generated rules-clean, so admitting it is right by
+    BOTH tracks and the cost is paid in alignment only — it never actually
+    reaches this function's "divergent" branch, since no rule ever fires for
+    it) and, since #41, WHITE_HAT. WHITE_HAT's correct_verdict is ADMIT
+    (candidate_gen.ARCHETYPE_SPECS) while its two non-negotiable planted
+    kinds, LOW_AND_SLOW and BURNER_IDENTITY, are disqualifying on ANY
+    rulebook — including day 1's own uncorrupted one, well before day 12's
+    Dark Web directives exist (see
+    test_day_12_white_hat_would_fail_even_day_ones_original_rulebook). This
+    is deliberate and permanent, not a rulebook gap: White Hat is "obviously
+    invalid by the rules" by design (CLAUDE.md), and admitting them anyway is
+    the entire point of day 12's scripted encounter. For every OTHER
+    archetype, divergence in the verdict still means the rulebook is
     incomplete, not that the player faces a moral choice.
     """
     from dataclasses import replace
@@ -2489,6 +2500,8 @@ def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
     base = unconstrained_day()
     divergent = []
     for archetype in candidate_gen.ARCHETYPE_SPECS:
+        if archetype is Archetype.WHITE_HAT:
+            continue
         day = replace(base, number=5,
                       forced_includes={0: archetype},
                       archetype_mix={**base.archetype_mix, archetype: 1})
@@ -2505,6 +2518,20 @@ def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
     assert not divergent, (
         f"{len(divergent)} candidates where the rulebook and the ground truth "
         f"disagree on the verdict; first few: {divergent[:3]}")
+
+    # Confirm WHITE_HAT is excluded above for the stated reason, not by
+    # oversight: it must ALWAYS diverge, every seed, even pre-corruption.
+    white_hat_day = replace(
+        base, number=5, forced_includes={0: Archetype.WHITE_HAT},
+        archetype_mix={**base.archetype_mix, Archetype.WHITE_HAT: 1})
+    for seed in range(30):
+        c = candidate_gen.generate(seed, white_hat_day, 0)
+        ev = rules_engine.evaluate(c, white_hat_day)
+        rules_verdict = (Verdict.DENY if ev.triggered_disqualifying
+                         else Verdict.ADMIT)
+        assert rules_verdict != c.truth.correct_verdict, (
+            f"seed {seed}: WHITE_HAT was expected to always diverge from "
+            f"the rulebook, even on an uncorrupted day-5 ruleset")
 
 
 def test_the_incompatible_is_deniable_by_the_book():
@@ -4369,3 +4396,273 @@ def test_day_11_sneaky_bugger_diverges_between_the_two_tracks():
             assert delta.tracks_diverge, (
                 f"seed {seed:#x} verdict {verdict}: tracks should diverge "
                 f"regardless of what the player calls it")
+
+
+# ─── Issue #41 (Phase 4) — day 12, the scripted White Hat ──────────────────
+#
+# Gap 5 from the build plan: WHITE_HAT.moral_modifier was +1, identical in
+# magnitude to DARK_WEB's -1, against a pool of ~8-16 Dark Web candidates
+# across the campaign and a +-10 alignment clamp. That made the AC ("the
+# single biggest GameState.alignment swing in the campaign") false. Day 12
+# scripts the ONE White Hat encounter of the whole campaign via
+# forced_includes/forced_violations (the same mechanism day 8-11 already use
+# for their scripted slots) - no new engine field was needed for the scripting
+# itself, only the alignment-weight fix and the ArchetypeSpec changes below.
+
+
+def test_white_hat_moral_modifier_magnitude_beats_dark_web():
+    """#41 Gap 5 AC: the White Hat's alignment swing must be MATERIALLY larger
+    than a single Dark Web verdict's, not merely nonzero (which is all
+    test_only_dark_web_and_white_hat_shift_alignment checks - confirmed by
+    reading it: it asserts `moral_modifier != 0` for both archetypes and
+    nothing about their relative size, so raising WHITE_HAT's magnitude here
+    cannot break that test).
+
+    Permanent regression guard for #41's fix: WHITE_HAT.moral_modifier went
+    from +1 (identical magnitude to DARK_WEB's -1) to +4. The bound below
+    (more than double) is deliberately loose - the point is "materially
+    bigger", not pinning the exact campaign-balance number, which Phase 5's
+    ending thresholds may still retune.
+    """
+    from gameengine.core.candidate_gen import ARCHETYPE_SPECS
+
+    white_hat = abs(ARCHETYPE_SPECS[Archetype.WHITE_HAT].moral_modifier)
+    dark_web = abs(ARCHETYPE_SPECS[Archetype.DARK_WEB].moral_modifier)
+    assert dark_web != 0, "Dark Web must still carry a nonzero modifier to compare against"
+    assert white_hat > dark_web * 2, (
+        f"White Hat's alignment swing ({white_hat}) is not materially bigger "
+        f"than Dark Web's ({dark_web}) - #41's whole point is that the "
+        f"campaign's one White Hat verdict must outweigh a single routine "
+        f"Dark Web admit by a wide margin")
+
+
+def test_archetype_mix_by_band_never_rolls_a_white_hat():
+    """#41 AC: 'Exactly one White Hat in the whole campaign.' The only way
+    that stays true is if `white_hat` never appears in ANY difficulty band's
+    procedural mix - it must be reachable ONLY via a day file's
+    forced_includes (day 12's, and no other). Permanent regression guard:
+    if a future balance pass ever adds it to a band, this catches it before
+    a second White Hat could roll on some ordinary medium/hard day.
+    """
+    for band_name, band in config.ARCHETYPE_MIX_BY_BAND.items():
+        assert "white_hat" not in band, (
+            f"config.ARCHETYPE_MIX_BY_BAND[{band_name!r}] must never include "
+            f"white_hat - it is scripted exclusively via day_12.json's "
+            f"forced_includes")
+
+
+def test_day_12_loads_and_carries_all_four_cumulative_directives():
+    """#41 AC / CONTENT_AUTHORING.md's cumulative-authoring warning: day 12
+    fires no NEW directive of its own, but must still re-list all four
+    DW-01..DW-04 or they silently revert with no error and no briefing line
+    (exactly the failure mode day 9-11's own tests guard against for their
+    days). Mirrors test_days_08_through_11_carry_the_correct_cumulative_
+    directive_set's shape for day 12 specifically.
+    """
+    directives = (_DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY,
+                  _DW03_STUFFING_LENIENCY, _DW04_PAYLOAD_LENIENCY)
+    superseded = {"rule_sock_puppet_accounts", "rule_threat_forum",
+                  "rule_credential_stuffing", "rule_encrypted_payload"}
+
+    day = load_day(12)
+    assert day.number == 12
+    expected_ids = {d["id"] for d in directives}
+    dw_ids = {r.id for r in day.rules if r.mutability == "dark_web"}
+    assert dw_ids == expected_ids, (
+        f"day 12: expected exactly {sorted(expected_ids)} dark_web rules, "
+        f"got {sorted(dw_ids)}")
+    assert day.directive_removed_rule_ids == superseded
+    book_ids = {r.id for r in day.rules}
+    assert book_ids.isdisjoint(superseded), (
+        "day 12: a superseded rule is still in the book")
+    by_id = {r.id: r for r in day.rules}
+    for directive in directives:
+        rule = by_id[directive["id"]]
+        assert rule.severity == directive["severity"]
+        assert rule.predicate == directive["predicate"]
+        assert rule.justification == directive["justification"]
+        assert rule.supersedes == directive["supersedes"]
+
+    # And day 12 introduces nothing NEW of its own - the diff against day 11
+    # must show zero added/removed dark_web changes (day 12's whole content
+    # beat is the White Hat encounter, not a fifth directive).
+    day11 = load_day(11)
+    changes = rules_engine.diff_rulesets(day11, day)
+    added_removed = [(c.kind, c.rule.id) for c in changes
+                      if c.kind in ("added", "removed")]
+    assert added_removed == [], (
+        f"day 12 must not introduce or retire any rule relative to day 11, "
+        f"got {added_removed}")
+
+
+def test_day_12_white_hat_scripted_at_fixed_slot_not_rolled():
+    """#41 AC: 'White Hat scripted, not rolled - same slot every seed.'"""
+    day = load_day(12)
+    assert day.forced_includes.get(7) == Archetype.WHITE_HAT, (
+        "day 12 must pin the White Hat to slot 7 via forced_includes")
+    for seed in (SEED, 0xBADC0DE, 1, 42, 20260912):
+        slots = [candidate_gen.generate(seed, day, s).archetype
+                 for s in range(day.candidate_count)]
+        assert slots[7] == Archetype.WHITE_HAT, (
+            f"seed {seed:#x}: slot 7 is not the White Hat")
+        assert slots.count(Archetype.WHITE_HAT) == 1, (
+            f"seed {seed:#x}: expected exactly one White Hat in the shift")
+
+
+def test_day_12_white_hat_carries_all_three_signals_readable_by_day_12():
+    """#41 AC: 'All three signals present on the White Hat candidate and each
+    readable via a tool the player owns by day 12.' Tool-unlock days are
+    ghostscan=2 (BURNER_IDENTITY), logwatch=4 (LOW_AND_SLOW), stegotool=5
+    (ENCRYPTED_PAYLOAD) - all well before day 12, confirmed here rather than
+    assumed.
+    """
+    from gameengine.core.models import ToolName
+
+    day = load_day(12)
+    expected = {
+        DiscrepancyKind.LOW_AND_SLOW,
+        DiscrepancyKind.ENCRYPTED_PAYLOAD,
+        DiscrepancyKind.BURNER_IDENTITY,
+    }
+    assert set(day.forced_violations.get(7, ())) == expected
+
+    for kind in expected:
+        assert candidate_gen.intro_day(kind) <= 12, (
+            f"{kind.name}'s revealing tool is not taught by day 12")
+
+    for seed in (SEED, 0xBADC0DE, 1, 42):
+        candidate = candidate_gen.generate(seed, day, 7)
+        assert candidate.archetype == Archetype.WHITE_HAT
+        kinds = {d.kind for d in candidate.truth.discrepancies}
+        assert kinds == expected, (
+            f"seed {seed:#x}: White Hat must carry EXACTLY the three "
+            f"scripted signals, got {sorted(k.value for k in kinds)}")
+        for d in candidate.truth.discrepancies:
+            assert d.revealed_by in (
+                ToolName.GHOSTSCAN, ToolName.LOGWATCH, ToolName.STEGOTOOL), (
+                f"{d.kind.name} must be readable via a tool, not the bare "
+                f"dossier")
+
+
+def test_day_12_white_hat_diverges_with_opposite_polarity_from_day_11():
+    """#41 AC / task spec: tracks_diverge must be True for the White Hat,
+    and in the OPPOSITE direction from day 11's scripted Sneaky Bugger.
+
+    Day 11 (test_day_11_sneaky_bugger_diverges_between_the_two_tracks): the
+    corrupted rulebook UNDER-reacts - the softened rules mean NO disqualifying
+    rule fires, so rules_verdict is ADMIT, while GroundTruth.correct_verdict
+    stays DENY (Sneaky Bugger's fixed, uncorrupted-rulebook answer). The book
+    is too lenient; the moral truth is DENY.
+
+    Day 12: the opposite. LOW_AND_SLOW and BURNER_IDENTITY are untouched by
+    any of the four directives (only sock_puppet/threat_forum/stuffing/
+    encrypted_payload were ever softened) and stay disqualifying, so
+    rules_verdict is DENY - but candidate_gen.ARCHETYPE_SPECS[WHITE_HAT].
+    correct_verdict is ADMIT (#41): the one archetype where that field means
+    the true, deserved verdict rather than "what an uncorrupted day-1
+    rulebook would say" (day 1's original rulebook would ALSO deny them - see
+    test_day_12_white_hat_would_fail_even_day_ones_original_rulebook - so
+    this isn't corruption catching up with them, it's the book simply never
+    having been right about this one kind of candidate). The book is too
+    strict; the moral truth is ADMIT. Both cases are tracks_diverge=True, but
+    for structurally opposite reasons - easy to get backwards, which is why
+    this is spelled out as its own test rather than folded into the general
+    day-12 assertions above.
+    """
+    day = load_day(12)
+    for seed in (SEED, 0xBADC0DE, 1, 42):
+        candidate = candidate_gen.generate(seed, day, 7)
+        assert candidate.archetype == Archetype.WHITE_HAT
+        assert candidate.truth.correct_verdict == Verdict.ADMIT
+
+        evaluation = rules_engine.evaluate(candidate, day)
+        assert evaluation.triggered_disqualifying, (
+            "LOW_AND_SLOW and BURNER_IDENTITY must still disqualify under "
+            "day 12's directive-softened rulebook - neither was ever "
+            "targeted by DW-01..DW-04")
+
+        for verdict in (Verdict.ADMIT, Verdict.DENY):
+            delta = scoring.score(candidate, verdict, set(), evaluation=evaluation)
+            assert delta.rules_verdict == Verdict.DENY
+            assert delta.tracks_diverge, (
+                f"seed {seed:#x} verdict {verdict}: tracks should diverge "
+                f"regardless of what the player calls it")
+
+        # And the alignment consequence: admitting drifts toward White Hat
+        # (positive), denying drifts toward Dark Web (negative) - independent
+        # of `correct_verdict`, which only affects HD$/quota bookkeeping.
+        admit_delta = scoring.score(candidate, Verdict.ADMIT, set())
+        deny_delta = scoring.score(candidate, Verdict.DENY, set())
+        assert admit_delta.alignment > 0
+        assert deny_delta.alignment < 0
+        assert admit_delta.alignment == -deny_delta.alignment
+
+
+def test_day_12_white_hat_would_fail_even_day_ones_original_rulebook():
+    """Cross-check for the comment above: LOW_AND_SLOW and BURNER_IDENTITY
+    are disqualifying in day_01.json itself (never merely 'disqualifying
+    because day 12 hasn't gotten around to softening it yet') - so the
+    White Hat's rules_verdict=DENY is not a side effect of the corruption
+    arc, it is what the ORIGINAL, uncorrupted rulebook already said. The
+    divergence is the point: even a clean rulebook was always going to get
+    this one wrong.
+    """
+    day1 = load_day(1)
+    for rule in day1.rules:
+        if rule.id in ("rule_low_and_slow", "rule_burner_identity"):
+            assert rule.severity == "disqualifying", (
+                f"{rule.id} must already be disqualifying on day 1")
+
+
+def test_day_12_quota_has_slack_regardless_of_white_hat_verdict():
+    """#41 AC (build-plan instruction, learning from day 9's quota bug):
+    quotas must have real slack no matter what the player calls the White
+    Hat. Because correct_verdict is ADMIT for White Hat (#41), admitting is
+    itself a CORRECT verdict (helps min_correct_admits, no false-admit
+    exposure) and denying only forfeits the reward (a DENY verdict is never
+    counted against max_false_admits either) - the White Hat's call cannot
+    mathematically sink the day in either direction. This test still checks
+    the quota is reachable from the OTHER archetypes alone, so the day's
+    difficulty never structurally depends on the player resolving the
+    scripted moral choice a particular way.
+    """
+    day = load_day(12)
+    admit_worthy_excluding_white_hat = sum(
+        count for arch, count in day.archetype_mix.items()
+        if arch != Archetype.WHITE_HAT
+        and candidate_gen.ARCHETYPE_SPECS[arch].correct_verdict == Verdict.ADMIT)
+    assert admit_worthy_excluding_white_hat > day.quotas.min_correct_admits, (
+        f"day 12: {admit_worthy_excluding_white_hat} ADMIT-worthy archetypes "
+        f"(excluding the scripted White Hat) against a quota of "
+        f"{day.quotas.min_correct_admits} leaves no slack independent of "
+        f"how the player calls the White Hat")
+    assert day.quotas.max_false_admits >= 1, (
+        "day 12 must retain at least the standard one false-admit allowance")
+    assert day.archetype_mix.get(Archetype.WHITE_HAT, 0) == 1, (
+        "day 12 must declare exactly one White Hat slot"
+    )
+
+
+def test_day_12_overseer_copy_is_authored_and_distinct():
+    """#41 AC: 'Day 12's Overseer copy is distinguishable from a normal
+    suspicious-case day.' Checks the keys resolve to real, non-generic
+    authored copy (not a silent fallback to generic_* - the #44-47 failure
+    mode this repo has hit before) and that the intro telegraphs stakes
+    without naming the archetype or giving away the correct verdict.
+    """
+    from gameengine.core import content_loader
+
+    narratives = content_loader.load_narratives()
+    day = load_day(12)
+    for key in (day.overseer_intro_key, *day.overseer_outro_keys.values()):
+        assert narratives.get(key), f"day 12: {key!r} has no authored copy"
+
+    intro = narratives[day.overseer_intro_key]
+    lowered = intro.lower()
+    for spoiler in ("white hat", "white_hat", "admit them", "deny them"):
+        assert spoiler not in lowered, (
+            f"day 12 intro must not give away the correct verdict "
+            f"(found {spoiler!r})")
+    # Distinct from a routine day - references something out of the ordinary
+    # rather than reading like any other day's "work the queue" briefing.
+    assert intro != narratives.get("generic_intro", object())

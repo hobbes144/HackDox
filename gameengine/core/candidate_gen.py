@@ -430,9 +430,51 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
     ),
     Archetype.WHITE_HAT: ArchetypeSpec(
         archetype=Archetype.WHITE_HAT,
-        correct_verdict=Verdict.DENY,   # by the rules, deny.
-        moral_modifier=+1,              # but admitting them helps the cause.
-        budget=DiscrepancyBudget(critical=1),
+        # #41: GroundTruth.correct_verdict is ADMIT, not DENY — this is the
+        # one archetype where the field means the true, deserved answer
+        # rather than "whatever an uncorrupted day-1 rulebook would compute."
+        # By day 12's LITERAL rulebook (rules_engine.evaluate against
+        # day_12.json) they are still DENY: LOW_AND_SLOW and BURNER_IDENTITY
+        # are untouched by any of the four Dark Web directives and stay
+        # disqualifying (see CONTENT_AUTHORING.md and
+        # config.ARCHETYPE_HEALTH_WEIGHTS's own "rules-invalid, but they
+        # help the site" comment on "white_hat"). Setting correct_verdict to
+        # ADMIT is what makes CandidateResult.tracks_diverge actually True
+        # for this candidate (rules_verdict DENY != correct_verdict ADMIT),
+        # in the OPPOSITE direction from day 11's Sneaky Bugger (there the
+        # corrupted rulebook under-reacted — rules said ADMIT while ground
+        # truth stayed DENY; here an rulebook that never softened on this
+        # candidate's kinds over-reacts — rules say DENY while ground truth
+        # is ADMIT). See test_day_12_white_hat_diverges_with_opposite_polarity_
+        # from_day_11 in test_engine_foundation.py.
+        correct_verdict=Verdict.ADMIT,
+        # #41 (Gap 5): was +1, IDENTICAL in magnitude to DARK_WEB's -1 below,
+        # against a pool of ~8-16 Dark Web candidates across the campaign and
+        # a +-10 clamp. The build plan's own AC ("the single biggest
+        # GameState.alignment swing in the campaign") was therefore false —
+        # the one scripted White Hat verdict (day 12 only, see day_12.json)
+        # moved alignment exactly as much as one routine Dark Web admit.
+        # +4 makes it worth roughly four ordinary days of Dark Web drift:
+        # decisive without being able to single-handedly pin the ending
+        # (still short of the +-10 clamp on its own). See
+        # test_white_hat_alignment_swing_dwarfs_a_single_dark_web_admit.
+        moral_modifier=+4,              # but admitting them helps the cause.
+        # #41: widened from critical=1. The day-12 script pins EXACTLY
+        # LOW_AND_SLOW (critical), ENCRYPTED_PAYLOAD (critical) and
+        # BURNER_IDENTITY (major) via forced_violations — all three at once.
+        # _roll_discrepancies' forced-kind loop still gates every forced kind
+        # against ITS OWN severity's budget slot (see the loop's
+        # `forced_taken[kind_sev] >= budget_for_sev` check), so a budget of
+        # critical=1/major=0 would silently drop two of the three: the
+        # forced_violations loader validates tier/expressibility/whitelist
+        # but never budget capacity, so this would NOT fail loudly at load
+        # time — it would just quietly ship a White Hat missing two of their
+        # three signals. major=1/critical=2 gives each forced kind its own
+        # slot with nothing left over for `take()` to fill randomly
+        # afterward (minor stays 0 — MISSING_PUBLIC_PROFILE/
+        # AFFILIATION_NOT_STATED below are eligible but never actually
+        # rolled, same as before this change).
+        budget=DiscrepancyBudget(major=1, critical=2),
         eligible_kinds=(
             DiscrepancyKind.MISSING_PUBLIC_PROFILE,
             DiscrepancyKind.AFFILIATION_NOT_STATED,
