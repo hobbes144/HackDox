@@ -45,6 +45,7 @@ from gameengine.ui.tui.glitch import (
     coverage_for,
 )
 from gameengine.ui.tui.screens.briefing import BriefingScreen
+from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
 from gameengine.ui.tui.screens.intro import IntroScreen
 from gameengine.ui.tui.screens.transition import TransitionScreen
 
@@ -437,6 +438,31 @@ def test_the_whole_day_loop_transitions_and_rebalances():
                 assert len(app.screen_stack) == 2, (
                     name, [type(s).__name__ for s in app.screen_stack])
             assert app._state.current_day == 2, "the day never advanced"
+
+    asyncio.run(go())
+
+
+def test_advance_day_past_campaign_last_day_triggers_the_explicit_ending():
+    """Issue #42: `advance_day`'s `current_day > CAMPAIGN_LAST_DAY` check is
+    now the PRIMARY path to `CampaignEndScreen`, checked before `load_day`
+    is even attempted — not a side effect of catching `FileNotFoundError`.
+    Driving `current_day` to `CAMPAIGN_LAST_DAY` and calling `advance_day()`
+    once must land on `CampaignEndScreen` carrying the incremented (past-
+    ceiling) state, through the normal transition machinery like every other
+    step in the day loop.
+    """
+    async def go():
+        app = HackDoxApp(seed=SEED)
+        async with app.run_test(size=(150, 46)) as pilot:
+            await pilot.pause()
+            app.start_new_game()
+            await _settle(app)
+            app._state.current_day = config.CAMPAIGN_LAST_DAY
+            app.advance_day()
+            assert isinstance(app.screen, TransitionScreen)
+            await _settle(app)
+            assert isinstance(app.screen, CampaignEndScreen)
+            assert app._state.current_day == config.CAMPAIGN_LAST_DAY + 1
 
     asyncio.run(go())
 

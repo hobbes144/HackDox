@@ -36,6 +36,22 @@ STARTING_ALIGNMENT = 0     # range: ALIGNMENT_MIN .. ALIGNMENT_MAX
 ALIGNMENT_MIN      = -10
 ALIGNMENT_MAX      = +10
 
+# Alignment bands (issue #42) — the three-ending structure (Game Design →
+# "Player Alignment") needs a way to classify a running GameState.alignment
+# value as leaning White Hat, leaning Dark Web, or neither. See
+# `core/overseer.py` for the selector this feeds and the full reasoning;
+# short version: scoring.score() moves alignment by the candidate's
+# moral_modifier (Dark Web = -1 per verdict, White Hat = +4 once on day 12),
+# so a player who resists the Overseer's Dark Web pressure across even a
+# handful of encounters — or who makes the single White Hat call — clears
+# +4 well before day 20; a player who complies clears -4 the same way. A
+# threshold set at the White Hat's own single-encounter magnitude means one
+# unambiguous act of resistance (or complicity) is enough to be recognized,
+# while a genuinely mixed record — some resisted, some not — stays neutral
+# rather than tipping on noise. Symmetric around STARTING_ALIGNMENT (0).
+ALIGNMENT_BAND_WHITE_HAT_THRESHOLD = 4    # alignment >= this -> "whitehat"
+ALIGNMENT_BAND_DARK_WEB_THRESHOLD  = -4   # alignment <= this -> "darkweb"
+
 # Daily-budget difficulty formula (issue #27). Later days bring more
 # candidates, so the pool grows a little each day — but slower than the
 # workload does, tightening scarcity as the campaign progresses.

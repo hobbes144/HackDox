@@ -2,7 +2,7 @@
 
 Everything the player reads, and which file to open to change it. Written 2026-08-18, verified against `batch-3-UserFeedback-ContentGeneration` @ `9806dd4`.
 
-**The one-line version:** Overseer dialogue is in `overseer.json`. What a day contains is in `day_NN.json`. The rules-overlay reference pages are Python in `rules_content.py`. Post-verdict candidate reactions are in `reactions.py`. Everything else is a word bank in `candidate_gen.py` or `tools_bridge.py`.
+**The one-line version:** Overseer dialogue is in `overseer.json`. What a day contains is in `day_NN.json`. Alignment-banded Overseer reactions and the three campaign endings are in `core/overseer.py`. The rules-overlay reference pages are Python in `rules_content.py`. Post-verdict candidate reactions are in `reactions.py`. Everything else is a word bank in `candidate_gen.py` or `tools_bridge.py`.
 
 ---
 
@@ -41,11 +41,46 @@ Both are re-exported from `ui/tui/app.py` for convenience, but that file just im
 
 ---
 
+## 1a. Alignment-banded Overseer dialogue — `gameengine/core/overseer.py` (#42)
+
+The Overseer's alignment-conditional voice, for content that should react to how the player has actually been playing (leaning White Hat, leaning Dark Web, or neither), still in the same `overseer.json` file — no new file to open.
+
+**The three bands** (`core/overseer.alignment_band(alignment)`):
+
+| Band | Condition |
+|---|---|
+| `whitehat` | `alignment >= config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD` (currently **+4**) |
+| `darkweb`  | `alignment <= config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD` (currently **-4**) |
+| `neutral`  | everything in between |
+
+Both thresholds are in `gameengine/config.py`, symmetric around `STARTING_ALIGNMENT` (0), and set at the magnitude of the day-12 White Hat's own single-encounter `moral_modifier` (+4) — one unambiguous act of resistance or complicity is enough to be recognized as leaning; a genuinely mixed record stays `neutral`, which is its own real ending, not a weaker version of the other two. See the module docstring in `overseer.py` for the full reasoning if you're re-tuning these.
+
+**Key convention** — for any narrative key of the shape `day<N>_<rest>` or `generic_<rest>`, its banded variant splices the band token in right after that prefix:
+
+```
+day14_intro            ->  day14_whitehat_intro   / day14_neutral_intro   / day14_darkweb_intro
+day14_outro_excellent  ->  day14_whitehat_outro_excellent / day14_neutral_outro_excellent / day14_darkweb_outro_excellent
+day14_between          ->  day14_whitehat_between / day14_neutral_between / day14_darkweb_between
+generic_intro          ->  generic_whitehat_intro / generic_neutral_intro / generic_darkweb_intro
+```
+
+**Resolution order** (`core.overseer.resolve_aligned_narrative`, called instead of `content_loader.resolve_narrative` wherever the Overseer's line should react to alignment):
+
+```
+day+band key  →  day key  →  generic+band key  →  generic key  →  hard-coded last resort
+```
+
+**Authoring a band-specific line is entirely optional, one key at a time.** A day that authors nothing but `day14_intro` (every day today, including 1–12) behaves exactly as it did before this mechanism existed — the band keys are absent, so the chain falls straight through to the plain day key. This is verified by a dedicated backward-compatibility test (`test_alignment_band_keys_dont_change_days_1_through_12`); don't remove it.
+
+**To give day 14 a reaction that only fires for a Dark-Web-leaning player**, add `day14_darkweb_intro` to `overseer.json`. Leave `day14_whitehat_intro` / `day14_neutral_intro` unauthored (or write those too) and they each independently fall back through the same chain. Nothing else needs to change — `resolve_aligned_narrative` is the only thing that needs to be called at that site instead of `resolve_narrative`.
+
+---
+
 ## 2. What a day contains — `gameengine/content/days/day_NN.json`
 
 **Days 1–5 are authored. Days 6–20 are synthesized** by `content_loader.synthesize_day()` from Day 1's rules plus the config curves. **An authored file always wins** — drop in a `day_09.json` and it takes over completely, no code change.
 
-Past day 20 (`config.CAMPAIGN_LAST_DAY`) the campaign-end screen fires.
+Past day 20 (`config.CAMPAIGN_LAST_DAY`), `app.py`'s `advance_day` fires `CampaignEndScreen` explicitly (before ever attempting to load a day-21 file) and renders one of three authored epilogues — White Hat / Neutral / Dark Web — chosen by the final `GameState.alignment`'s band (see §1a). The three epilogues themselves live in `core/overseer.py`'s `ENDINGS` — that's where to edit their prose.
 
 ### Fields
 
@@ -367,7 +402,8 @@ Window timing lives in `config.py`: `VERDICT_REVEAL_ENABLED`,
 | `TOOL_UNLOCK_DAY` | Which tool unlocks when. **Single source of truth** — drives the UI unlock, the Overseer's narration, and the generator's evidence gate. |
 | `BREACH_DB_UNLOCK_DAY` | Which breach corpus unlocks when (#61). Same role. |
 | `MIN_BREACH_DBS_FOR_REUSE` | Below this, cross-breach reuse can't be planted. |
-| `CAMPAIGN_LAST_DAY` (20) | End of campaign. |
+| `CAMPAIGN_LAST_DAY` (20) | End of campaign — see §1a for what fires past it. |
+| `ALIGNMENT_BAND_WHITE_HAT_THRESHOLD` / `_DARK_WEB_THRESHOLD` (±4) | Alignment-band cutoffs for §1a's dialogue tier and the three campaign endings. |
 | `TUTORIAL_LAST_DAY` (5) | Teaching days; difficulty levers stay flat across them. |
 | `DAY_CANDIDATE_COUNT` | Shift-length curve. |
 | `DAY_MIN_CORRECT_ADMITS`, `QUOTA_ADMIT_RATIO` | Quota scaling. |
@@ -385,6 +421,10 @@ Window timing lives in `config.py`: `VERDICT_REVEAL_ENABLED`,
 **Give day 9 real dialogue** → add `day9_intro` / `day9_outro_*` / `day9_between` to `overseer.json`. Nothing else.
 
 **Author day 9 properly** → create `content/days/day_09.json`. Copy `day_05.json`, change `number`/`title`, omit `rules`. It takes over from the synthesizer immediately.
+
+**Give day 15 a reaction that only fires for a Dark-Web-leaning player** → `overseer.json`, key `day15_darkweb_intro` (and/or `_outro_*` / `_between`). No code change — but the SITE that resolves `day15_intro` must call `core.overseer.resolve_aligned_narrative` rather than plain `content_loader.resolve_narrative` for the band tier to be consulted at all; see §1a.
+
+**Reword one of the three campaign endings** → `core/overseer.py`, `ENDINGS[<band>].paragraphs`. Pure Python, no day file involved — the ending is chosen once, at the very end of the campaign, off the final `GameState.alignment`.
 
 **Guarantee a specific violation appears** → `forced_includes` for the archetype + `forced_violations` for the kind. It'll refuse to load if the day can't express it.
 

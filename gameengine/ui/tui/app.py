@@ -293,7 +293,7 @@ class HackDoxApp(App):
         prev_day = self._day
         if self._lab_day is not None:
             # One shift, then out — a lab run has no day 2.
-            self._transition(CampaignEndScreen(st.current_day))
+            self._transition(CampaignEndScreen(st))
             return
         st.current_day += 1
         st.current_slot_index = 0
@@ -303,10 +303,20 @@ class HackDoxApp(App):
         st.compute_hours = config.daily_compute_budget(
             st.current_day, st.compute_capacity)
         persistence.save(st)
+        if st.current_day > config.CAMPAIGN_LAST_DAY:
+            # Issue #42: the explicit end-of-campaign trigger. Reached
+            # deliberately now that every day through CAMPAIGN_LAST_DAY is
+            # (once #42's Phase 5b lands) authored content, rather than by
+            # waiting for load_day to raise. The except below stays as a
+            # defensive fallback only — it should be unreachable given this
+            # check, since load_day raises FileNotFoundError under exactly
+            # this same condition (day_number > CAMPAIGN_LAST_DAY).
+            self._transition(CampaignEndScreen(st))
+            return
         try:
             self._day = load_day(st.current_day)
         except FileNotFoundError:
-            self._transition(CampaignEndScreen(st.current_day))
+            self._transition(CampaignEndScreen(st))
             return
         self._day_start_health = st.site_health
         # #15: falls through to generic copy rather than an empty panel — days

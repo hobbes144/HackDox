@@ -4732,3 +4732,251 @@ def test_day_12_overseer_copy_is_authored_and_distinct():
     assert other_day_intros, "sanity: no other dayN_intro keys found to compare against"
     assert intro not in other_day_intros.values(), (
         "day 12's intro is byte-identical to another authored day's intro")
+
+
+# ─── Issue #42 (Phase 5a) — Overseer alignment bands + campaign endings ──────
+
+
+def test_alignment_band_boundaries():
+    """Boundary values land exactly where config says (>=/<=, not >/<) —
+    a player who lands precisely on a threshold is recognized as leaning,
+    not one nudge short of it."""
+    from gameengine.core import overseer
+
+    wh = config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD
+    dw = config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD
+    assert overseer.alignment_band(wh) == overseer.BAND_WHITE_HAT
+    assert overseer.alignment_band(wh - 1) == overseer.BAND_NEUTRAL
+    assert overseer.alignment_band(wh + 1) == overseer.BAND_WHITE_HAT
+    assert overseer.alignment_band(config.ALIGNMENT_MAX) == overseer.BAND_WHITE_HAT
+    assert overseer.alignment_band(dw) == overseer.BAND_DARK_WEB
+    assert overseer.alignment_band(dw + 1) == overseer.BAND_NEUTRAL
+    assert overseer.alignment_band(dw - 1) == overseer.BAND_DARK_WEB
+    assert overseer.alignment_band(config.ALIGNMENT_MIN) == overseer.BAND_DARK_WEB
+    assert overseer.alignment_band(config.STARTING_ALIGNMENT) == overseer.BAND_NEUTRAL
+    assert overseer.alignment_band(0) == overseer.BAND_NEUTRAL
+
+
+def test_alignment_bands_are_reachable_and_symmetric():
+    """Sanity check on the threshold choice itself: both non-neutral bands
+    sit strictly inside the ±10 clamp (reachable, not just equal to it), and
+    the thresholds are symmetric around STARTING_ALIGNMENT (0) so neither
+    band gets a structural head start. See core/overseer.py's module
+    docstring for the full reasoning behind the specific magnitude chosen.
+    """
+    assert config.ALIGNMENT_MIN < config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD < 0
+    assert 0 < config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD < config.ALIGNMENT_MAX
+    assert (config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD
+            == -config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD)
+
+
+def test_banded_key_convention():
+    """The exact key convention Phase 5b authors against (documented in
+    core/overseer.py's module docstring and CONTENT_AUTHORING.md): the band
+    token is spliced in right after the `dayN` or `generic` prefix.
+    """
+    from gameengine.core import overseer
+
+    assert overseer.banded_key("day14_intro", "whitehat") == "day14_whitehat_intro"
+    assert overseer.banded_key("day14_intro", "neutral") == "day14_neutral_intro"
+    assert overseer.banded_key("day14_intro", "darkweb") == "day14_darkweb_intro"
+    assert (overseer.banded_key("day14_outro_excellent", "whitehat")
+            == "day14_whitehat_outro_excellent")
+    assert (overseer.banded_key("day14_between", "darkweb")
+            == "day14_darkweb_between")
+    assert overseer.banded_key("generic_intro", "whitehat") == "generic_whitehat_intro"
+    assert (overseer.banded_key("generic_outro_poor", "darkweb")
+            == "generic_darkweb_outro_poor")
+    assert (overseer.banded_key("generic_between", "neutral")
+            == "generic_neutral_between")
+
+
+def test_banded_key_rejects_a_key_outside_the_convention():
+    from gameengine.core import overseer
+
+    with pytest.raises(ValueError):
+        overseer.banded_key("not_a_recognised_shape", "whitehat")
+
+
+def test_resolve_aligned_narrative_fallback_chain():
+    """Every level of the chain, tested in isolation: day+band -> day ->
+    generic+band -> generic -> hard-coded last resort. Each case removes
+    exactly the keys above the level under test, so a bug that skipped a
+    level (rather than falling all the way through it) would still be
+    caught rather than accidentally passing anyway.
+    """
+    from gameengine.core import overseer
+
+    wh = config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD
+
+    # (a) day+band present -> used, even with day/generic keys also present.
+    narratives = {
+        "day14_whitehat_intro": "band-day copy",
+        "day14_intro": "plain-day copy",
+        "generic_whitehat_intro": "band-generic copy",
+        "generic_intro": "generic copy",
+    }
+    assert overseer.resolve_aligned_narrative(
+        narratives, wh, "day14_intro", "generic_intro") == "band-day copy"
+
+    # (b) day+band absent, day present -> used.
+    narratives = {
+        "day14_intro": "plain-day copy",
+        "generic_whitehat_intro": "band-generic copy",
+        "generic_intro": "generic copy",
+    }
+    assert overseer.resolve_aligned_narrative(
+        narratives, wh, "day14_intro", "generic_intro") == "plain-day copy"
+
+    # (c) day+band and day both absent, generic+band present -> used.
+    narratives = {
+        "generic_whitehat_intro": "band-generic copy",
+        "generic_intro": "generic copy",
+    }
+    assert overseer.resolve_aligned_narrative(
+        narratives, wh, "day14_intro", "generic_intro") == "band-generic copy"
+
+    # (d) only the plain generic key present -> used.
+    narratives = {"generic_intro": "generic copy"}
+    assert overseer.resolve_aligned_narrative(
+        narratives, wh, "day14_intro", "generic_intro") == "generic copy"
+
+    # (e) nothing at all -> the same hard-coded last resort
+    # content_loader.resolve_narrative itself falls back to (shared, not
+    # duplicated — see overseer.py's docstring).
+    from gameengine.core import content_loader
+    assert (overseer.resolve_aligned_narrative(
+                {}, wh, "day14_intro", "generic_intro")
+            == content_loader.resolve_narrative(
+                {}, "generic_intro", "generic_intro"))
+
+
+def test_resolve_aligned_narrative_blank_values_fall_through():
+    """An authored-but-blank band key means 'not written for this band yet',
+    matching resolve_narrative's existing empty-string fallthrough."""
+    from gameengine.core import overseer
+
+    narratives = {
+        "day14_whitehat_intro": "",
+        "day14_intro": "plain-day copy",
+    }
+    assert overseer.resolve_aligned_narrative(
+        narratives, config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD,
+        "day14_intro", "generic_intro") == "plain-day copy"
+
+
+def test_alignment_band_keys_dont_change_days_1_through_12():
+    """Backward compatibility (build-plan AC): days 1-12 author no
+    band-specific keys, so `resolve_aligned_narrative` must resolve
+    BYTE-IDENTICALLY to the plain `resolve_narrative` chain, for every band,
+    across every intro/outro/between key those days actually use.
+    """
+    from gameengine.core import content_loader, overseer
+    from gameengine.core.models import Performance
+
+    narratives = content_loader.load_narratives()
+    for day_n in range(1, 13):
+        day = load_day(day_n)
+        for band_alignment in (
+            config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD,
+            0,
+            config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD,
+        ):
+            plain_intro = content_loader.resolve_narrative(
+                narratives, day.overseer_intro_key, "generic_intro")
+            banded_intro = overseer.resolve_aligned_narrative(
+                narratives, band_alignment, day.overseer_intro_key,
+                "generic_intro")
+            assert banded_intro == plain_intro, (day_n, band_alignment)
+
+            for perf in Performance:
+                outro_key = day.overseer_outro_keys[perf]
+                generic_key = content_loader.generic_outro_key(perf)
+                plain_outro = content_loader.resolve_narrative(
+                    narratives, outro_key, generic_key)
+                banded_outro = overseer.resolve_aligned_narrative(
+                    narratives, band_alignment, outro_key, generic_key)
+                assert banded_outro == plain_outro, (day_n, perf, band_alignment)
+
+            between_key = f"day{day_n}_between"
+            plain_between = content_loader.resolve_narrative(
+                narratives, between_key, "generic_between")
+            banded_between = overseer.resolve_aligned_narrative(
+                narratives, band_alignment, between_key, "generic_between")
+            assert banded_between == plain_between, (day_n, band_alignment)
+
+
+def test_ending_for_state_selects_the_correct_band():
+    from gameengine.core import overseer
+
+    white = GameState(seed=SEED, alignment=config.ALIGNMENT_MAX)
+    neutral = GameState(seed=SEED, alignment=0)
+    dark = GameState(seed=SEED, alignment=config.ALIGNMENT_MIN)
+
+    assert overseer.ending_for_state(white).band == overseer.BAND_WHITE_HAT
+    assert overseer.ending_for_state(neutral).band == overseer.BAND_NEUTRAL
+    assert overseer.ending_for_state(dark).band == overseer.BAND_DARK_WEB
+
+
+def test_all_three_endings_are_authored_and_distinct():
+    """Real content, not placeholders: nonempty, multi-paragraph, and no two
+    endings share a title or any paragraph text."""
+    from gameengine.core import overseer
+
+    assert set(overseer.ENDINGS) == {
+        overseer.BAND_WHITE_HAT, overseer.BAND_NEUTRAL, overseer.BAND_DARK_WEB}
+
+    titles = set()
+    all_paragraphs = []
+    for band, ending in overseer.ENDINGS.items():
+        assert ending.band == band
+        assert ending.title.strip()
+        assert len(ending.paragraphs) >= 2, (
+            f"{band} ending should be a few real paragraphs, not one line")
+        for paragraph in ending.paragraphs:
+            assert len(paragraph.strip()) > 80, (
+                f"{band} ending paragraph reads like a placeholder: "
+                f"{paragraph!r}")
+        titles.add(ending.title)
+        all_paragraphs.extend(ending.paragraphs)
+
+    assert len(titles) == 3, "endings must not share a title"
+    assert len(set(all_paragraphs)) == len(all_paragraphs), (
+        "endings must not share paragraph text")
+
+
+def test_campaign_end_screen_selects_the_ending_for_synthetic_states():
+    """CampaignEndScreen's `ending`/`is_stub` properties are the pure
+    selection logic `compose()` renders (issue #42's testability
+    requirement) — exercised directly here with synthetic GameStates, no
+    Textual app required.
+    """
+    from gameengine.core import overseer
+    from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
+
+    for alignment, expected_band in (
+        (config.ALIGNMENT_MAX, overseer.BAND_WHITE_HAT),
+        (0, overseer.BAND_NEUTRAL),
+        (config.ALIGNMENT_MIN, overseer.BAND_DARK_WEB),
+    ):
+        state = GameState(
+            seed=SEED, current_day=config.CAMPAIGN_LAST_DAY + 1,
+            alignment=alignment)
+        screen = CampaignEndScreen(state)
+        assert not screen.is_stub
+        assert screen.ending == overseer.ENDINGS[expected_band]
+
+
+def test_campaign_end_screen_is_a_stub_before_the_campaign_ends():
+    """A day at or before the ceiling (a lab run cut short, or the
+    defensive FileNotFoundError fallback for a genuine pre-ceiling gap)
+    must stay the pre-#42 'not written yet' stub, never a false ending —
+    even with an alignment that would otherwise select a real one."""
+    from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
+
+    state = GameState(
+        seed=SEED, current_day=config.CAMPAIGN_LAST_DAY,
+        alignment=config.ALIGNMENT_MAX)
+    screen = CampaignEndScreen(state)
+    assert screen.is_stub
+    assert screen.ending is None

@@ -448,7 +448,7 @@ ContentSwitcher {
 }
 
 #splash .title    { color: #00ff9f; text-style: bold; }
-#splash .subtitle { color: #7dd3c0; }
+#splash .subtitle { color: #7dd3c0; margin: 0 0 1 0; max-width: 80; }
 #splash .hint     { color: #6b7785; margin: 2 0 0 0; }
 
 .screen-title {
