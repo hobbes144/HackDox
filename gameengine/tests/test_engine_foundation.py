@@ -2521,10 +2521,14 @@ def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
 
     # Confirm WHITE_HAT is excluded above for the stated reason, not by
     # oversight: it must ALWAYS diverge, every seed, even pre-corruption.
+    # Same seed count as the main loop above, for consistency (not because
+    # 120 seeds is load-bearing here — the two forced kinds are fixed by
+    # budget/eligibility and never vary by seed, so even one seed would
+    # prove the point).
     white_hat_day = replace(
         base, number=5, forced_includes={0: Archetype.WHITE_HAT},
         archetype_mix={**base.archetype_mix, Archetype.WHITE_HAT: 1})
-    for seed in range(30):
+    for seed in range(120):
         c = candidate_gen.generate(seed, white_hat_day, 0)
         ev = rules_engine.evaluate(c, white_hat_day)
         rules_verdict = (Verdict.DENY if ev.triggered_disqualifying
@@ -4663,6 +4667,15 @@ def test_day_12_overseer_copy_is_authored_and_distinct():
         assert spoiler not in lowered, (
             f"day 12 intro must not give away the correct verdict "
             f"(found {spoiler!r})")
-    # Distinct from a routine day - references something out of the ordinary
-    # rather than reading like any other day's "work the queue" briefing.
-    assert intro != narratives.get("generic_intro", object())
+    # Distinct from EVERY other authored day's intro (not merely "not the
+    # generic fallback", which any nonempty string would trivially satisfy)
+    # - this is what actually backs the "distinguishable from a normal
+    # suspicious-case day" AC.
+    import re
+    other_day_intros = {
+        key: value for key, value in narratives.items()
+        if re.fullmatch(r"day\d+_intro", key) and key != day.overseer_intro_key
+    }
+    assert other_day_intros, "sanity: no other dayN_intro keys found to compare against"
+    assert intro not in other_day_intros.values(), (
+        "day 12's intro is byte-identical to another authored day's intro")

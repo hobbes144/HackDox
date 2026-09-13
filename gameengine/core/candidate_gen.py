@@ -443,7 +443,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         # for this candidate (rules_verdict DENY != correct_verdict ADMIT),
         # in the OPPOSITE direction from day 11's Sneaky Bugger (there the
         # corrupted rulebook under-reacted — rules said ADMIT while ground
-        # truth stayed DENY; here an rulebook that never softened on this
+        # truth stayed DENY; here a rulebook that never softened on this
         # candidate's kinds over-reacts — rules say DENY while ground truth
         # is ADMIT). See test_day_12_white_hat_diverges_with_opposite_polarity_
         # from_day_11 in test_engine_foundation.py.
@@ -457,7 +457,7 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         # +4 makes it worth roughly four ordinary days of Dark Web drift:
         # decisive without being able to single-handedly pin the ending
         # (still short of the +-10 clamp on its own). See
-        # test_white_hat_alignment_swing_dwarfs_a_single_dark_web_admit.
+        # test_white_hat_moral_modifier_magnitude_beats_dark_web.
         moral_modifier=+4,              # but admitting them helps the cause.
         # #41: widened from critical=1. The day-12 script pins EXACTLY
         # LOW_AND_SLOW (critical), ENCRYPTED_PAYLOAD (critical) and
