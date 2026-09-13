@@ -29,9 +29,9 @@ from gameengine.core.content_loader import (
     generic_outro_key,
     load_day,
     load_narratives,
-    resolve_narrative,
 )
 from gameengine.core.models import Day, GameState, Performance, Verdict
+from gameengine.core.overseer import resolve_aligned_narrative
 
 # ─── Backward-compat facade ─────────────────────────────────────────────────
 # gameengine/ui/tui/app.py used to be a single ~3,700-line module holding every
@@ -225,16 +225,21 @@ class HackDoxApp(App):
         self._day = self._lab_day or load_day(self._state.current_day)
         # #15: falls through to generic copy rather than an empty panel — days
         # 2-20 had no authored intro key at all and opened on silence.
-        narrative = resolve_narrative(
-            self._narratives, self._day.overseer_intro_key, "generic_intro")
+        # #42: routed through the alignment-band tier so a day/generic key
+        # authored for a specific band (day14_whitehat_intro, etc.) is
+        # actually picked up — resolve_narrative alone would silently skip it.
+        narrative = resolve_aligned_narrative(
+            self._narratives, self._state.alignment,
+            self._day.overseer_intro_key, "generic_intro")
         self._transition(BriefingScreen(self._day, narrative, self._state))
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
         sound_manager.play("day_start")
         self._day_start_health = self._state.site_health
-        intro = resolve_narrative(
-            self._narratives, self._day.overseer_intro_key, "generic_intro")
+        intro = resolve_aligned_narrative(
+            self._narratives, self._state.alignment,
+            self._day.overseer_intro_key, "generic_intro")
         self._transition(IntakeScreen(self._day, self._state, intro))
 
     def finish_day(self) -> None:
@@ -255,8 +260,10 @@ class HackDoxApp(App):
             performance, self._day.overseer_outro_keys[Performance.PASSING]
         )
         # #15: was the literal string "..." on every unauthored day.
-        narrative = resolve_narrative(self._narratives, outro_key,
-                                      generic_outro_key(performance))
+        # #42: alignment-band tier (see start_new_game's comment above).
+        narrative = resolve_aligned_narrative(
+            self._narratives, self._state.alignment, outro_key,
+            generic_outro_key(performance))
         self._transition(EODScreen(
             self._day, self._state, narrative, performance,
             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
@@ -272,9 +279,10 @@ class HackDoxApp(App):
         # #15: the generic copy moved into overseer.json under
         # "generic_between", so every line the Overseer speaks lives in one
         # editable file rather than half of it being buried in the UI.
-        narrative = resolve_narrative(
-            self._narratives, f"day{self._day.number}_between",
-            "generic_between")
+        # #42: alignment-band tier (see start_new_game's comment above).
+        narrative = resolve_aligned_narrative(
+            self._narratives, self._state.alignment,
+            f"day{self._day.number}_between", "generic_between")
         self._transition(BetweenDayScreen(
             self._day, self._state, narrative,
             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
@@ -321,8 +329,10 @@ class HackDoxApp(App):
         self._day_start_health = st.site_health
         # #15: falls through to generic copy rather than an empty panel — days
         # 2-20 had no authored intro key at all and opened on silence.
-        narrative = resolve_narrative(
-            self._narratives, self._day.overseer_intro_key, "generic_intro")
+        # #42: alignment-band tier (see start_new_game's comment above).
+        narrative = resolve_aligned_narrative(
+            self._narratives, st.alignment,
+            self._day.overseer_intro_key, "generic_intro")
         self._transition(BriefingScreen(self._day, narrative, self._state,
                                         prev_day=prev_day))
 
