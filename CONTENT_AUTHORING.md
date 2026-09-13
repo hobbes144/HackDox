@@ -187,6 +187,20 @@ automatically.
 > restating the ~28-entry rulebook, and it keeps each day file an honest,
 > literal statement of "everything different about today's book" (see the
 > per-directive blocks below for the exact cumulative lists to use).
+>
+> **Chained supersession (#42/Phase 5b-1):** a `supersedes`/`removed_rules`
+> target may name either a Day-1-inherited id, **or an id introduced earlier
+> in the SAME day's `added_rules` array.** This is what lets DW-05 (below)
+> retire DW-04 *directly* — DW-04 only exists at all on a day that re-lists
+> it in that day's own `added_rules` (see above), so without this, a later
+> directive could only ever re-target the original Day-1 rule the whole
+> chain traces back to, never a previous directive itself. Practically: to
+> supersede a previous directive, re-list it in `added_rules` one entry
+> ahead of the new directive that supersedes it — the loader drops the
+> re-listed entry from the final book once the new one supersedes it, so it
+> never actually goes live again, it's only there to give the new entry
+> something in-batch to name. See `content_loader._apply_rule_overrides`'s
+> docstring for the implementation detail.
 
 - `added_rules` is parsed exactly like `rules` (same `_parse_rule`), and is
   appended to whichever base the day already computed — inherited-plus-flips,
@@ -220,7 +234,7 @@ automatically.
   authored beat, not a specific reason immediately followed by a
   contradicting "nobody said why."
 
-#### The four directives (DW-01 → DW-04)
+#### The five directives (DW-01 → DW-05)
 
 **This section is the source of truth for the directive copy.** The Python
 copies in `tests/test_engine_foundation.py` (`_DW01_IDENTITY_LENIENCY` etc.)
@@ -304,9 +318,46 @@ Day 11's `added_rules`: `[DW-01, DW-02, DW-03, DW-04]`. Note the tone shift
 from DW-01/02 (bureaucratic, "compliance says") through DW-03 (weary) to
 DW-04 (openly sarcastic, deflecting blame) — this is the escalation the
 design calls for on the run-up to day 11's openly-hostile Overseer and day
-12's White Hat encounter. Day 12 onward should keep re-listing all four
-until/unless a later task gives the campaign a real "sticky directive"
-mechanism (see the warning above).
+12's White Hat encounter. Day 12 keeps re-listing all four unchanged (it
+fires no directive of its own — its content beat is the White Hat
+encounter).
+
+**DW-05 — fires day 13 — supersedes `dw04_payload_leniency` (chained)**
+
+```json
+{
+  "id": "dw05_payload_crackdown",
+  "text": "Deny any candidate who submits an image hiding an encrypted or obfuscated payload — no flag-only exception, no benefit of the doubt.",
+  "predicate": "has_discrepancy:encrypted_payload",
+  "severity": "disqualifying",
+  "mutability": "dark_web",
+  "justification": "Forget what I told you about encryption not being a crime. Whoever we almost missed last week knew exactly how to hide behind that policy, and upstairs is not interested in finding out it works twice. Effective immediately: an encrypted payload is an automatic deny again, full stop — no flag, no judgement call, no benefit of the doubt. If that catches someone who would've walked through clean under the old rule, upstairs has already decided that's an acceptable cost. I didn't argue with it. I'm not going to pretend that's the same as agreeing with it.",
+  "supersedes": "dw04_payload_leniency"
+}
+```
+
+Day 13's `added_rules`: `[DW-01, DW-02, DW-03, DW-04, DW-05]` — DW-01/02/03
+re-listed verbatim as always, and DW-04 re-listed **one entry ahead of
+DW-05** purely so DW-05's own `supersedes` has a same-batch id to name (the
+chained-supersession case described in the warning above). The loader drops
+`dw04_payload_leniency` from day 13's final book once DW-05 supersedes it,
+so the day's actually-*active* dark_web rules are DW-01/02/03/05 — four, not
+five — even though five directive objects appear in the file's `added_rules`
+array.
+
+DW-05 is the corruption arc's first **reversal** rather than another
+softening: after day 12's near-miss with the White Hat (who evaded
+detection partly by hiding behind `ENCRYPTED_PAYLOAD`'s DW-04 leniency),
+the Dark Web gets paranoid and re-tightens that exact rule back to
+disqualifying, specifically to hunt down anyone else using the same evasion
+craft — not out of any renewed principle. `rule_change_lines` speaks DW-05's
+justification verbatim and folds DW-04's removal into it, same as every
+other directive; `diff_rulesets(day12, day13)` reports exactly `{added:
+dw05_payload_crackdown, removed: dw04_payload_leniency}`. Days 14 onward
+must keep re-listing all five (DW-01..DW-05, with DW-04 still one entry
+ahead of DW-05) for as long as DW-05 stays in force — confirmed unchanged
+through day 20 as of Phase 5b-1; Phase 5b-2 (days 14-16/18-19) inherits the
+same obligation.
 
 > **Design note (why `TYPOSQUAT_HANDLE` isn't DW-01):** the original brief
 > for DW-01 named `TYPOSQUAT_HANDLE` as the identity-fraud rule to supersede.

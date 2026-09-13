@@ -404,14 +404,27 @@ def _apply_rule_overrides(
     `rule_change_lines` fold the removal into the new rule's justification
     instead of emitting a second, contradicting generic line (see that
     function). Every removed id — from either source — must already be in
-    the inherited book, and every `added_rules` id must NOT be (same-id
-    "replace" is rejected: `diff_rulesets` compares severity only, so a
-    same-id swap could silently vanish from the briefing). Duplicate ids
-    within `added_rules` itself are also rejected. A `dark_web`-mutability
-    added rule must carry a `justification` — this check is scoped to
-    `added_rules` specifically, not the whole rulebook (a `dark_web` rule
-    hand-authored directly in a full `rules` restatement predates this and
-    is not held to it; see `test_rule_mutability_survives_a_day_json_round_trip`).
+    the inherited book OR be another id introduced earlier in this SAME
+    `added_rules` batch (issue #42/Phase 5b-1: this is what lets one
+    directive supersede a PREVIOUS directive directly, e.g. day 13's
+    `dw05_payload_crackdown` naming `dw04_payload_leniency` in its own
+    `supersedes` field, rather than only ever being able to re-target the
+    original day-1 rule a whole chain of directives eventually traces back
+    to — `load_day` always rebuilds a day's book fresh from Day 1, so
+    `dw04_payload_leniency` only exists at all on a day that re-lists it in
+    that same day's `added_rules`). An `added_rules` entry that is itself
+    named by a later entry's `supersedes` is silently dropped from the final
+    book — it was only re-listed so there was something for the new entry to
+    supersede, mirroring how an inherited rule named by `supersedes` never
+    survives into the final book either. Every `added_rules` id must NOT
+    already be in the inherited book (same-id "replace" is rejected:
+    `diff_rulesets` compares severity only, so a same-id swap could silently
+    vanish from the briefing). Duplicate ids within `added_rules` itself are
+    also rejected. A `dark_web`-mutability added rule must carry a
+    `justification` — this check is scoped to `added_rules` specifically,
+    not the whole rulebook (a `dark_web` rule hand-authored directly in a
+    full `rules` restatement predates this and is not held to it; see
+    `test_rule_mutability_survives_a_day_json_round_trip`).
 
     IMPORTANT — this does not itself make directives cumulative across days.
     `load_day`'s inherit branch always inherits from Day 1, not from the
@@ -463,13 +476,26 @@ def _apply_rule_overrides(
     removed_ids = set(removed_raw) | {
         r.supersedes for r in added_rules if r.supersedes
     }
+    # #42/Phase 5b-1: a removal/supersedes target may be either an inherited
+    # (pre-`added_rules`) id, or an id introduced earlier in THIS SAME
+    # `added_rules` batch — the latter is the chained-supersession case (a
+    # later directive retiring an earlier one that was re-listed only so
+    # there was something to retire; see the docstring above).
+    addable_ids = inherited_ids | seen_added_ids
     for rid in removed_ids:
-        if rid not in inherited_ids:
+        if rid not in addable_ids:
             raise ValueError(
                 f"day {day_number}: removed_rules/supersedes names {rid!r}, "
                 f"which is not in this day's rulebook before removal")
 
-    rules = tuple(r for r in rules if r.id not in removed_ids) + tuple(added_rules)
+    rules = (
+        tuple(r for r in rules if r.id not in removed_ids)
+        # An added_rules entry named by another added entry's `supersedes`
+        # (chained supersession, above) is dropped here too — it was only
+        # re-listed to give the new entry something to retire, and must not
+        # survive into the final book alongside its own replacement.
+        + tuple(r for r in added_rules if r.id not in removed_ids)
+    )
     return rules, frozenset(removed_ids)
 
 

@@ -4980,3 +4980,357 @@ def test_campaign_end_screen_is_a_stub_before_the_campaign_ends():
     screen = CampaignEndScreen(state)
     assert screen.is_stub
     assert screen.ending is None
+
+
+# ─── Issue #42 (Phase 5b-1) — DW-05 (day 13) + hard-band days 13/17/20 ──────
+#
+# DW-05 is the corruption arc's first REVERSAL rather than another softening:
+# after day 12's White Hat near-miss (partly enabled by DW-04's own
+# ENCRYPTED_PAYLOAD leniency), the Dark Web gets paranoid and re-tightens
+# that exact rule back to disqualifying. Mechanically it's also the first
+# directive that supersedes a PREVIOUS directive rather than an original
+# day-1 rule — `content_loader._apply_rule_overrides` was extended this task
+# to allow a `supersedes`/`removed_rules` target to name either an inherited
+# (pre-`added_rules`) id, OR an id introduced earlier in the SAME
+# `added_rules` batch (the "chained supersession" case; see
+# CONTENT_AUTHORING.md's Dark Web directives section, which is this
+# content's source of truth — the dict below is a duplicate kept in sync by
+# hand, same convention as `_DW01_IDENTITY_LENIENCY` etc. above).
+
+_DW05_PAYLOAD_CRACKDOWN = {
+    "id": "dw05_payload_crackdown",
+    "text": ("Deny any candidate who submits an image hiding an encrypted "
+             "or obfuscated payload — no flag-only exception, no benefit "
+             "of the doubt."),
+    "predicate": "has_discrepancy:encrypted_payload",
+    "severity": "disqualifying",
+    "mutability": "dark_web",
+    "justification": (
+        "Forget what I told you about encryption not being a crime. "
+        "Whoever we almost missed last week knew exactly how to hide "
+        "behind that policy, and upstairs is not interested in finding out "
+        "it works twice. Effective immediately: an encrypted payload is an "
+        "automatic deny again, full stop — no flag, no judgement call, no "
+        "benefit of the doubt. If that catches someone who would've walked "
+        "through clean under the old rule, upstairs has already decided "
+        "that's an acceptable cost. I didn't argue with it. I'm not going "
+        "to pretend that's the same as agreeing with it."),
+    "supersedes": "dw04_payload_leniency",
+}
+
+_PHASE5B1_ACTIVE_DW_IDS = {
+    "dw01_identity_leniency", "dw02_forum_leniency",
+    "dw03_stuffing_leniency", "dw05_payload_crackdown",
+}
+_PHASE5B1_SUPERSEDED = {
+    "rule_sock_puppet_accounts", "rule_threat_forum",
+    "rule_credential_stuffing", "rule_encrypted_payload",
+    "dw04_payload_leniency",
+}
+
+
+def test_days_13_17_20_load_and_carry_the_dw05_cumulative_directive_set():
+    """Days 13/17/20 must each resolve to EXACTLY dw01/dw02/dw03/dw05 as the
+    active dark_web rules — dw04 is re-listed in every one of these day
+    files' own `added_rules` (per CONTENT_AUTHORING.md's cumulative-
+    authoring warning) purely to give dw05's `supersedes` a same-batch
+    target; it must never itself survive into the resolved book. Mirrors
+    test_days_08_through_11_carry_the_correct_cumulative_directive_set's
+    shape and test_day_12_loads_and_carries_all_four_cumulative_directives.
+    """
+    for n in (13, 17, 20):
+        day = load_day(n)
+        assert day.number == n
+        assert day.difficulty_band == "hard", (
+            f"day {n} must be in the hard difficulty band "
+            f"(config.DIFFICULTY_BAND_LAST_MEDIUM=12)")
+        assert day.candidate_count == sum(day.archetype_mix.values()), (
+            f"day {n}: declared archetype_mix does not sum to its own "
+            f"candidate_count")
+
+        dw_ids = {r.id for r in day.rules if r.mutability == "dark_web"}
+        assert dw_ids == _PHASE5B1_ACTIVE_DW_IDS, (
+            f"day {n}: expected exactly {sorted(_PHASE5B1_ACTIVE_DW_IDS)} "
+            f"dark_web rules, got {sorted(dw_ids)}")
+        assert day.directive_removed_rule_ids == _PHASE5B1_SUPERSEDED, (
+            f"day {n}: directive_removed_rule_ids mismatch, got "
+            f"{sorted(day.directive_removed_rule_ids)}")
+        book_ids = {r.id for r in day.rules}
+        assert book_ids.isdisjoint(_PHASE5B1_SUPERSEDED), (
+            f"day {n}: a superseded rule (including dw04_payload_leniency "
+            f"itself) is still in the resolved book")
+
+        by_id = {r.id: r for r in day.rules}
+        dw05 = by_id["dw05_payload_crackdown"]
+        assert dw05.severity == _DW05_PAYLOAD_CRACKDOWN["severity"]
+        assert dw05.predicate == _DW05_PAYLOAD_CRACKDOWN["predicate"]
+        assert dw05.text == _DW05_PAYLOAD_CRACKDOWN["text"]
+        assert dw05.justification == _DW05_PAYLOAD_CRACKDOWN["justification"]
+        assert dw05.supersedes == _DW05_PAYLOAD_CRACKDOWN["supersedes"]
+        for directive in (_DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY,
+                          _DW03_STUFFING_LENIENCY):
+            rule = by_id[directive["id"]]
+            assert rule.severity == directive["severity"]
+            assert rule.justification == directive["justification"]
+
+
+def test_day_13_introduces_dw05_against_day_12():
+    """`diff_rulesets(day12, day13)` must show EXACTLY dw05's arrival and
+    dw04's departure — the one authored beat DW-05 is supposed to be, same
+    shape as the days-8-11 diff test for their own directives."""
+    day12 = load_day(12)
+    day13 = load_day(13)
+    changes = rules_engine.diff_rulesets(day12, day13)
+    added_removed = {(c.kind, c.rule.id) for c in changes
+                     if c.kind in ("added", "removed")}
+    assert added_removed == {
+        ("added", "dw05_payload_crackdown"),
+        ("removed", "dw04_payload_leniency"),
+    }, f"day 13: expected exactly dw05 in / dw04 out, got {added_removed}"
+
+
+def test_day_13_rule_change_lines_speak_dw05_justification():
+    """The morning briefing announces DW-05 with its own justification,
+    verbatim — not a generic phrasing, and not a second, contradicting line
+    for dw04's departure (the #37 review-fix fold rule)."""
+    from gameengine.ui.tui.app import rule_change_lines
+
+    day12 = load_day(12)
+    day13 = load_day(13)
+    changes = rules_engine.diff_rulesets(day12, day13)
+    lines = rule_change_lines(changes, 13)
+    assert lines == [_DW05_PAYLOAD_CRACKDOWN["justification"]], (
+        "expected exactly one line — dw04's removal must fold into dw05's "
+        "own justification, not get a second generic line")
+
+
+def test_day_17_introduces_no_new_directive():
+    """Day 17 fires no NEW directive — its content beat is the Overseer's
+    own resolve visibly cracking, not a rulebook change. `diff_rulesets(
+    day13, day17)` must show no ADDED/REMOVED rule at all (both days resolve
+    to the identical active dark_web set). Ordinary overseer_variable
+    SEVERITY flips ARE expected background noise here — mutate_variable_rules
+    is keyed off each day's own number, independent of the directive
+    mechanism, exactly as the days-8-11 diff test already documents — so
+    this restricts kind to ("added", "removed"), same convention.
+    """
+    day13 = load_day(13)
+    day17 = load_day(17)
+    changes = rules_engine.diff_rulesets(day13, day17)
+    added_removed = {(c.kind, c.rule.id) for c in changes
+                     if c.kind in ("added", "removed")}
+    assert added_removed == set(), (
+        f"day 17 must not introduce or retire any rule relative to day 13, "
+        f"got {added_removed}")
+    # And the dark_web set itself really is identical, not merely "no diff
+    # noise" by coincidence.
+    dw13 = {r.id: r for r in day13.rules if r.mutability == "dark_web"}
+    dw17 = {r.id: r for r in day17.rules if r.mutability == "dark_web"}
+    assert dw13 == dw17
+
+
+def test_day_20_carries_the_same_resolved_book_as_day_17():
+    """Day 20 (the campaign finale) fires no new directive either — same
+    no-new-directive shape as day 17, one day pair later. Mirrors
+    test_day_17_introduces_no_new_directive exactly."""
+    day17 = load_day(17)
+    day20 = load_day(20)
+    changes = rules_engine.diff_rulesets(day17, day20)
+    added_removed = {(c.kind, c.rule.id) for c in changes
+                     if c.kind in ("added", "removed")}
+    assert added_removed == set(), (
+        f"day 20 must not introduce or retire any rule relative to day 17, "
+        f"got {added_removed}")
+    dw17 = {r.id: r for r in day17.rules if r.mutability == "dark_web"}
+    dw20 = {r.id: r for r in day20.rules if r.mutability == "dark_web"}
+    assert dw17 == dw20
+
+
+def _assert_quota_has_genuine_slack(day):
+    """Shared body for the three days-13/17/20 quota-slack tests: reachable
+    with a real margin even if BOTH Dark Web candidates in the mix are
+    denied — not merely bare reachability (day 9's original zero-margin
+    bug; day 12's decoy-slack pattern is the "real margin" convention these
+    three days follow instead — see test_day_09_has_slack_to_deny_the_
+    dark_web_candidate and test_day_12_quota_has_slack_regardless_of_
+    white_hat_verdict for the two precedents)."""
+    admit_worthy = sum(
+        count for arch, count in day.archetype_mix.items()
+        if candidate_gen.ARCHETYPE_SPECS[arch].correct_verdict == Verdict.ADMIT)
+    dark_web_count = day.archetype_mix.get(Archetype.DARK_WEB, 0)
+    quota = day.quotas.min_correct_admits
+    assert admit_worthy > quota, (
+        f"day {day.number}: {admit_worthy} ADMIT-worthy archetypes against "
+        f"a quota of {quota} leaves no slack at all")
+    assert admit_worthy - dark_web_count >= quota + 1, (
+        f"day {day.number}: quota must still be reachable WITH a real "
+        f"margin (not bare reachability) after denying every Dark Web "
+        f"candidate in the mix — got {admit_worthy - dark_web_count} "
+        f"against quota {quota}")
+    assert dark_web_count >= 2, (
+        f"day {day.number} must declare at least two Dark Web slots (the "
+        f"hard band's own weighting) to actually exercise this margin")
+
+
+def test_day_13_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack(load_day(13))
+
+
+def test_day_17_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack(load_day(17))
+
+
+def test_day_20_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack(load_day(20))
+
+
+def test_day_13_dw05_closes_a_literal_rules_loophole_on_the_pinned_decoy():
+    """Day 13's own `_comment_teeth`: slot 4 is pinned to sneaky_bugger and
+    forced to roll EXACTLY encrypted_payload as one of its discrepancies.
+    Before DW-05, this candidate's other two (randomly-rolled) discrepancies
+    could land entirely on kinds DW-01/02/03 — already softened to weighted
+    — which would make the LITERAL day-12-style rulebook (DW-04 still
+    active, encrypted_payload merely weighted) call the candidate a clean
+    ADMIT on some seeds — exactly the loophole a rules-literalist (or a
+    future White-Hat-style evader) could walk through. DW-05 (disqualifying
+    on encrypted_payload) must force `triggered_disqualifying` on EVERY seed
+    for this slot, independent of what else does or doesn't fire —
+    demonstrated here with the actual seed-level comparison against the
+    pre-DW-05 book, not asserted in the abstract (same standard day 12's own
+    decoy-coverage test set, per its docstring's complaint about spot-
+    checking 3-4 seeds not being evidence for a claim across every seed).
+    """
+    from dataclasses import replace
+
+    day13 = load_day(13)
+    day12 = load_day(12)  # DW-04 still active (weighted); no DW-05 yet.
+    pre_dw05_book = replace(day13, rules=day12.rules)
+
+    saw_loophole = False
+    for seed in range(200):
+        candidate = candidate_gen.generate(seed, day13, 4)
+        assert candidate.archetype == Archetype.SNEAKY_BUGGER, (
+            f"seed {seed}: slot 4 must be the pinned decoy")
+        kinds = {d.kind for d in candidate.truth.discrepancies}
+        assert DiscrepancyKind.ENCRYPTED_PAYLOAD in kinds, (
+            f"seed {seed}: the pinned decoy must carry encrypted_payload")
+
+        real_eval = rules_engine.evaluate(candidate, day13)
+        assert real_eval.triggered_disqualifying, (
+            f"seed {seed}: DW-05 must force a disqualifying trigger on the "
+            f"pinned decoy on every seed")
+
+        pre_eval = rules_engine.evaluate(candidate, pre_dw05_book)
+        if not pre_eval.triggered_disqualifying:
+            saw_loophole = True
+
+    assert saw_loophole, (
+        "expected at least one seed (of 200) where the pre-DW-05 book would "
+        "have let the pinned decoy read as a literal ADMIT — if this never "
+        "happens, the loophole DW-05 is supposed to close may no longer be "
+        "reachable and the day's own _comment_teeth needs revisiting")
+
+
+def test_day_20_overseer_copy_does_not_presume_an_ending():
+    """Day 20's own `_comment_beat`: the send-off must not presume which of
+    the three alignment-banded endings (core.overseer.ENDINGS) the player is
+    actually heading toward — that reveal belongs entirely to
+    CampaignEndScreen, selected once at the very end off the final
+    GameState.alignment. Checks the intro/outro copy for the telltale band
+    tokens and the endings' own (very distinctive) titles.
+    """
+    from gameengine.core import content_loader, overseer
+
+    narratives = content_loader.load_narratives()
+    day = load_day(20)
+    banned = {"white hat", "dark web", "whitehat", "darkweb",
+             "aligned with", "your alignment"}
+    banned |= {ending.title.lower() for ending in overseer.ENDINGS.values()}
+
+    for key in (day.overseer_intro_key, *day.overseer_outro_keys.values()):
+        text = narratives.get(key)
+        assert text, f"day 20: {key!r} has no authored copy"
+        lowered = text.lower()
+        for phrase in banned:
+            assert phrase not in lowered, (
+                f"day 20 {key!r} presumes an ending via {phrase!r}: {text!r}")
+
+    # Day 20 deliberately authors no day20_between (see day_20.json's own
+    # _comment) — there's no day-21 shop trip to write bespoke copy for, so
+    # it falls through to the shared generic_between fallback like any other
+    # unauthored between-day key.
+    assert not narratives.get("day20_between"), (
+        "day 20 should not author a bespoke between-day key")
+    plain = content_loader.resolve_narrative(
+        narratives, "day20_between", "generic_between")
+    assert plain == narratives["generic_between"]
+
+
+def test_chained_supersession_lets_a_directive_supersede_a_previous_directive(
+        tmp_path, monkeypatch, day1):
+    """Dedicated regression coverage for the `content_loader.
+    _apply_rule_overrides` extension itself (#42/Phase 5b-1), independent of
+    day 13's real content: a later `added_rules` entry can supersede an id
+    introduced EARLIER IN THE SAME BATCH, not only an inherited (Day-1) id.
+
+    Before this task, `_apply_rule_overrides` only accepted a `supersedes`/
+    `removed_rules` target that was already in the INHERITED book —
+    superseding a same-batch directive would have raised "which is not in
+    this day's rulebook before removal", since `load_day` always rebuilds a
+    day's book fresh from Day 1 and an earlier directive doesn't exist in
+    that inherited book at all unless it's also re-listed. This test authors
+    exactly that shape directly (bypassing day_13.json entirely) to prove
+    the mechanism itself, not just day 13's specific use of it.
+    """
+    first = dict(_DW04_PAYLOAD_LENIENCY)  # supersedes the Day-1 rule, as usual
+    second = {
+        "id": "dw_test_chained_crackdown",
+        "text": "Deny any candidate who submits an image hiding an "
+                "encrypted or obfuscated payload — test chain.",
+        "predicate": "has_discrepancy:encrypted_payload",
+        "severity": "disqualifying",
+        "mutability": "dark_web",
+        "justification": "Test-only justification for the chained-"
+                         "supersession regression guard.",
+        "supersedes": first["id"],  # chained: names a SAME-BATCH id, not day-1
+    }
+
+    _write_directive_day(tmp_path, monkeypatch, 87,
+                         added_rules=[first, second])
+    loaded = load_day(87)
+    ids = {r.id for r in loaded.rules}
+
+    # `first` was only re-listed to give `second` something to supersede —
+    # it must not itself survive into the final book.
+    assert first["id"] not in ids, (
+        "the re-listed intermediate directive must be dropped from the "
+        "final book once a later same-batch entry supersedes it")
+    assert second["id"] in ids, "the new directive must be in the final book"
+    # The ORIGINAL day-1 rule (first's own supersedes target) is still gone
+    # too — the chain has to reach all the way back, not just one link.
+    assert "rule_encrypted_payload" not in ids
+    assert loaded.directive_removed_rule_ids == {
+        "rule_encrypted_payload", first["id"]}
+
+    resolved = next(r for r in loaded.rules if r.id == second["id"])
+    assert resolved.severity == "disqualifying"
+    assert resolved.supersedes == first["id"]
+
+
+def test_chained_supersession_unknown_target_still_raises(
+        tmp_path, monkeypatch, day1):
+    """The chained case must not accidentally loosen the existing "unknown
+    id" guard — naming an id that is in NEITHER the inherited book NOR this
+    batch is still a load-time error."""
+    bad = {
+        "id": "dw_test_bad_chain",
+        "text": "Deny something.",
+        "predicate": "has_discrepancy:encrypted_payload",
+        "severity": "disqualifying",
+        "mutability": "dark_web",
+        "justification": "Test-only justification.",
+        "supersedes": "some_id_never_introduced_anywhere",
+    }
+    _write_directive_day(tmp_path, monkeypatch, 86, added_rules=[bad])
+    with pytest.raises(ValueError, match="removed_rules/supersedes"):
+        load_day(86)
