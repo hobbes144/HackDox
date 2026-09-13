@@ -5199,12 +5199,29 @@ def test_day_13_dw05_closes_a_literal_rules_loophole_on_the_pinned_decoy():
     pre-DW-05 book, not asserted in the abstract (same standard day 12's own
     decoy-coverage test set, per its docstring's complaint about spot-
     checking 3-4 seeds not being evidence for a claim across every seed).
+
+    Code-review fix (post-2b431b1): the control book used to be day 12's
+    ENTIRE rulebook (`replace(day13, rules=day12.rules)`), which only
+    happened to be a valid "day 13 minus DW-05" stand-in because days 12 and
+    13 have zero coincidental overseer_variable severity flips between them
+    — fragile by luck, not by construction (mutate_variable_rules is keyed
+    off the day number, so a future retune of RULE_FLIP_PERIOD or an
+    intervening day's flip schedule could make day 12's book diverge from
+    day 13's in some OTHER rule, corrupting this control for reasons that
+    have nothing to do with DW-05). The control is now built from day 13's
+    OWN resolved rules, swapping only dw05_payload_crackdown back out for
+    dw04_payload_leniency — everything else about day 13's actual rulebook
+    is preserved exactly.
     """
     from dataclasses import replace
 
     day13 = load_day(13)
-    day12 = load_day(12)  # DW-04 still active (weighted); no DW-05 yet.
-    pre_dw05_book = replace(day13, rules=day12.rules)
+    day12 = load_day(12)  # source of the pre-crackdown dw04 Rule object
+    dw04_rule = next(r for r in day12.rules if r.id == "dw04_payload_leniency")
+    pre_dw05_rules = tuple(
+        r for r in day13.rules if r.id != "dw05_payload_crackdown"
+    ) + (dw04_rule,)
+    pre_dw05_book = replace(day13, rules=pre_dw05_rules)
 
     saw_loophole = False
     for seed in range(200):
@@ -5232,19 +5249,23 @@ def test_day_13_dw05_closes_a_literal_rules_loophole_on_the_pinned_decoy():
 
 
 def test_day_20_overseer_copy_does_not_presume_an_ending():
-    """Day 20's own `_comment_beat`: the send-off must not presume which of
-    the three alignment-banded endings (core.overseer.ENDINGS) the player is
-    actually heading toward — that reveal belongs entirely to
+    """Day 20's own `_comment_beat`: the send-off should not presume which
+    of the three alignment-banded endings (core.overseer.ENDINGS) the player
+    is actually heading toward — that reveal belongs entirely to
     CampaignEndScreen, selected once at the very end off the final
-    GameState.alignment. Checks the intro/outro copy for the telltale band
-    tokens and the endings' own (very distinctive) titles.
+    GameState.alignment. This is a substring blacklist against the obvious
+    band tokens and the endings' own (very distinctive) titles — it catches
+    an obvious slip (naming a band or quoting an ending's title outright),
+    not prose that presumes an ending without using any of these tokens;
+    that's a judgement call for whoever authors or reviews the copy, not
+    something a blacklist can verify.
     """
     from gameengine.core import content_loader, overseer
 
     narratives = content_loader.load_narratives()
     day = load_day(20)
     banned = {"white hat", "dark web", "whitehat", "darkweb",
-             "aligned with", "your alignment"}
+              "aligned with", "your alignment"}
     banned |= {ending.title.lower() for ending in overseer.ENDINGS.values()}
 
     for key in (day.overseer_intro_key, *day.overseer_outro_keys.values()):
@@ -5332,5 +5353,145 @@ def test_chained_supersession_unknown_target_still_raises(
         "supersedes": "some_id_never_introduced_anywhere",
     }
     _write_directive_day(tmp_path, monkeypatch, 86, added_rules=[bad])
-    with pytest.raises(ValueError, match="removed_rules/supersedes"):
+    with pytest.raises(ValueError, match="supersedes"):
         load_day(86)
+
+
+def test_chained_supersession_rejects_self_supersession(
+        tmp_path, monkeypatch, day1):
+    """Code-review fix (post-2b431b1): before this fix, `_apply_rule_
+    overrides` validated every `supersedes` target against the FULL
+    post-loop union of inherited-plus-added ids, so an entry naming its OWN
+    id passed validation (its own id is trivially a member of that union)
+    and then silently vanished from the final book — added and immediately
+    removed, with no error and no briefing line. The fix checks each entry's
+    `supersedes` against only the ids seen STRICTLY BEFORE it in the array,
+    which an entry's own id never is."""
+    self_superseding = {
+        "id": "dw_test_self_supersede",
+        "text": "Deny something.",
+        "predicate": "has_discrepancy:encrypted_payload",
+        "severity": "disqualifying",
+        "mutability": "dark_web",
+        "justification": "Test-only justification.",
+        "supersedes": "dw_test_self_supersede",   # names itself
+    }
+    _write_directive_day(tmp_path, monkeypatch, 85,
+                         added_rules=[self_superseding])
+    with pytest.raises(ValueError, match="supersedes"):
+        load_day(85)
+
+
+def test_chained_supersession_rejects_mutual_supersession(
+        tmp_path, monkeypatch, day1):
+    """Code-review fix (post-2b431b1): two `added_rules` entries each naming
+    the OTHER in `supersedes` used to pass the old post-loop validation (both
+    ids are members of the full added-batch set) and then both vanish from
+    the final book — a rulebook that silently lost two rules with no error.
+    Positional validation makes this impossible: whichever entry is listed
+    first has its `supersedes` checked before the second entry's id has been
+    seen at all, so it fails regardless of which order the two are written
+    in (checked both ways here)."""
+    rule_a = {
+        "id": "dw_test_mutual_a",
+        "text": "Deny something A.",
+        "predicate": "has_discrepancy:encrypted_payload",
+        "severity": "disqualifying",
+        "mutability": "dark_web",
+        "justification": "Test-only justification A.",
+        "supersedes": "dw_test_mutual_b",
+    }
+    rule_b = {
+        "id": "dw_test_mutual_b",
+        "text": "Deny something B.",
+        "predicate": "has_discrepancy:credential_stuffing",
+        "severity": "disqualifying",
+        "mutability": "dark_web",
+        "justification": "Test-only justification B.",
+        "supersedes": "dw_test_mutual_a",
+    }
+    _write_directive_day(tmp_path, monkeypatch, 84,
+                         added_rules=[rule_a, rule_b])
+    with pytest.raises(ValueError, match="supersedes"):
+        load_day(84)
+
+    _write_directive_day(tmp_path, monkeypatch, 83,
+                         added_rules=[rule_b, rule_a])
+    with pytest.raises(ValueError, match="supersedes"):
+        load_day(83)
+
+
+def test_removed_rules_rejects_an_id_added_in_the_same_batch(
+        tmp_path, monkeypatch, day1):
+    """Code-review fix (post-2b431b1): `removed_rules` naming an id this
+    same file's own `added_rules` just introduced used to pass the old
+    post-loop validation (the added id is a member of the full addable-ids
+    union) and net out to a silent no-op — the new rule quietly never
+    actually lands, with no error. `removed_rules` now validates only
+    against the INHERITED book; naming a same-batch `added_rules` id is
+    rejected outright, since there is nothing legitimate for it to mean."""
+    added = dict(_DW01_IDENTITY_LENIENCY)
+    added.pop("supersedes")   # isolate this case from the supersedes path
+    _write_directive_day(tmp_path, monkeypatch, 82,
+                         added_rules=[added],
+                         removed_rules=[added["id"]])
+    with pytest.raises(ValueError, match="removed_rules"):
+        load_day(82)
+
+
+_ALL_KNOWN_DIRECTIVES_BY_ID = {
+    d["id"]: d for d in (
+        _DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY,
+        _DW03_STUFFING_LENIENCY, _DW04_PAYLOAD_LENIENCY,
+        _DW05_PAYLOAD_CRACKDOWN,
+    )
+}
+
+
+def test_every_authored_day_file_matches_the_canonical_directive_copy():
+    """Code-review followup (post-2b431b1): DW-01..05's copy is duplicated
+    verbatim across every real day file that re-lists it, PLUS
+    CONTENT_AUTHORING.md, PLUS these test constants — and until now,
+    cross-consistency was only checked for the specific days each phase's
+    tests happened to enumerate (days 8-12 via _PHASE3_DIRECTIVE_DAYS and
+    day 12's own test; days 13/17/20 via the #42/Phase-5b-1 tests above). A
+    typo introduced while re-listing a directive on some OTHER day — one
+    none of those enumerated tests happens to cover — would silently drift
+    and never be caught by any existing test.
+
+    This sweeps EVERY real day_*.json in config.DAYS_DIR, and for every
+    `added_rules` entry whose id names a KNOWN directive (one of the five
+    canonical dicts above, kept in sync with CONTENT_AUTHORING.md by hand —
+    see the #37/#40 section's own docstring for that convention), asserts
+    the entry is byte-identical to the canonical copy: full dict equality,
+    not just the handful of fields other tests happen to spot-check. This
+    also automatically covers Phase 5b-2's upcoming day files (14-16/18-19)
+    once they exist, with no test changes required on that end — any day
+    file that re-lists a known directive id gets checked, full stop.
+    """
+    import json
+
+    day_files = sorted(config.DAYS_DIR.glob("day_*.json"))
+    assert len(day_files) >= 8, (
+        "sanity: expected at least the days-8-13/17/20 directive-carrying "
+        "files to exist under config.DAYS_DIR")
+
+    checked_any = False
+    for path in day_files:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for entry in raw.get("added_rules", []):
+            canonical = _ALL_KNOWN_DIRECTIVES_BY_ID.get(entry.get("id"))
+            if canonical is None:
+                continue
+            checked_any = True
+            assert entry == canonical, (
+                f"{path.name}: added_rules entry {entry.get('id')!r} has "
+                f"drifted from the canonical directive copy in "
+                f"CONTENT_AUTHORING.md / test_engine_foundation.py — "
+                f"got {entry!r}, expected {canonical!r}")
+
+    assert checked_any, (
+        "sanity: no day file's added_rules matched any known directive id — "
+        "if this fires, either the day files or "
+        "_ALL_KNOWN_DIRECTIVES_BY_ID have drifted apart in id naming, and "
+        "this test is silently checking nothing")

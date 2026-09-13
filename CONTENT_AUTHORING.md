@@ -188,19 +188,27 @@ automatically.
 > literal statement of "everything different about today's book" (see the
 > per-directive blocks below for the exact cumulative lists to use).
 >
-> **Chained supersession (#42/Phase 5b-1):** a `supersedes`/`removed_rules`
-> target may name either a Day-1-inherited id, **or an id introduced earlier
-> in the SAME day's `added_rules` array.** This is what lets DW-05 (below)
-> retire DW-04 *directly* — DW-04 only exists at all on a day that re-lists
-> it in that day's own `added_rules` (see above), so without this, a later
-> directive could only ever re-target the original Day-1 rule the whole
-> chain traces back to, never a previous directive itself. Practically: to
-> supersede a previous directive, re-list it in `added_rules` one entry
-> ahead of the new directive that supersedes it — the loader drops the
-> re-listed entry from the final book once the new one supersedes it, so it
-> never actually goes live again, it's only there to give the new entry
-> something in-batch to name. See `content_loader._apply_rule_overrides`'s
-> docstring for the implementation detail.
+> **Chained supersession (#42/Phase 5b-1):** an `added_rules` entry's own
+> `supersedes` field may name either a Day-1-inherited id, **or an id
+> introduced STRICTLY EARLIER in the SAME day's `added_rules` array** — this
+> is checked positionally, not just "anywhere in the batch": an entry may
+> only name an id that came before it in the array, never its own id or a
+> later one, so self- and mutual-supersession are load-time errors rather
+> than silent rule drops. This is what lets DW-05 (below) retire DW-04
+> *directly* — DW-04 only exists at all on a day that re-lists it in that
+> day's own `added_rules` (see above), so without this, a later directive
+> could only ever re-target the original Day-1 rule the whole chain traces
+> back to, never a previous directive itself. Practically: to supersede a
+> previous directive, re-list it in `added_rules` one entry ahead of the new
+> directive that supersedes it — the loader drops the re-listed entry from
+> the final book once the new one supersedes it, so it never actually goes
+> live again, it's only there to give the new entry something in-batch to
+> name. **Bare `removed_rules` entries do NOT get this same-batch allowance**
+> — a plain `removed_rules` id must already be in the INHERITED book; naming
+> an id this same file's own `added_rules` just introduced has no legitimate
+> meaning and is rejected outright, not silently treated as a no-op. See
+> `content_loader._apply_rule_overrides`'s docstring for the implementation
+> detail.
 
 - `added_rules` is parsed exactly like `rules` (same `_parse_rule`), and is
   appended to whichever base the day already computed — inherited-plus-flips,

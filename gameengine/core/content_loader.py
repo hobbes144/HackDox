@@ -403,24 +403,35 @@ def _apply_rule_overrides(
     added rule's own `supersedes` field — the latter is what lets
     `rule_change_lines` fold the removal into the new rule's justification
     instead of emitting a second, contradicting generic line (see that
-    function). Every removed id — from either source — must already be in
-    the inherited book OR be another id introduced earlier in this SAME
-    `added_rules` batch (issue #42/Phase 5b-1: this is what lets one
-    directive supersede a PREVIOUS directive directly, e.g. day 13's
+    function). `supersedes` on an `added_rules` entry must name either an id
+    already in the inherited book, OR an id introduced STRICTLY EARLIER in
+    this SAME `added_rules` batch (issue #42/Phase 5b-1: this is what lets
+    one directive supersede a PREVIOUS directive directly, e.g. day 13's
     `dw05_payload_crackdown` naming `dw04_payload_leniency` in its own
     `supersedes` field, rather than only ever being able to re-target the
     original day-1 rule a whole chain of directives eventually traces back
     to — `load_day` always rebuilds a day's book fresh from Day 1, so
     `dw04_payload_leniency` only exists at all on a day that re-lists it in
-    that same day's `added_rules`). An `added_rules` entry that is itself
-    named by a later entry's `supersedes` is silently dropped from the final
-    book — it was only re-listed so there was something for the new entry to
-    supersede, mirroring how an inherited rule named by `supersedes` never
-    survives into the final book either. Every `added_rules` id must NOT
-    already be in the inherited book (same-id "replace" is rejected:
-    `diff_rulesets` compares severity only, so a same-id swap could silently
-    vanish from the briefing). Duplicate ids within `added_rules` itself are
-    also rejected. A `dark_web`-mutability added rule must carry a
+    that same day's `added_rules`). The "strictly earlier" part is load-time
+    enforced, not just documented: each entry's `supersedes` is checked
+    against only the ids already seen at that point in the array, before
+    that entry's own id is added to the seen set — so self-supersession
+    (an entry naming its own id) and mutual supersession (two entries each
+    naming the other) both fail loudly instead of both silently vanishing
+    from the book with no error and no briefing line. `removed_rules`, by
+    contrast, may only name an id already in the inherited book — naming an
+    id this same file's own `added_rules` just introduced has no legitimate
+    meaning (there's nothing to "remove" that this file didn't also just
+    add) and is rejected rather than silently netting out to a no-op.
+    An `added_rules` entry that is itself named by a later entry's
+    `supersedes` is silently dropped from the final book — it was only
+    re-listed so there was something for the new entry to supersede,
+    mirroring how an inherited rule named by `supersedes` never survives
+    into the final book either. Every `added_rules` id must NOT already be
+    in the inherited book (same-id "replace" is rejected: `diff_rulesets`
+    compares severity only, so a same-id swap could silently vanish from
+    the briefing). Duplicate ids within `added_rules` itself are also
+    rejected. A `dark_web`-mutability added rule must carry a
     `justification` — this check is scoped to `added_rules` specifically,
     not the whole rulebook (a `dark_web` rule hand-authored directly in a
     full `rules` restatement predates this and is not held to it; see
@@ -447,6 +458,15 @@ def _apply_rule_overrides(
             f"got {type(removed_raw).__name__}")
 
     inherited_ids = {r.id for r in rules}
+    # The set of ids a `removed_rules`/`supersedes` reference is legal
+    # against — only the inherited book plus whatever `added_rules` entries
+    # have already been validated and appended SO FAR in the loop below.
+    # Grown incrementally (not unioned in wholesale after the loop) so that
+    # `supersedes` is checked positionally: an entry may only name an id
+    # that came strictly before it in this same batch, never itself or a
+    # later one (see the docstring above — this is what makes self- and
+    # mutual-supersession load-time errors instead of silent rule drops).
+    removable_ids = set(inherited_ids)
 
     added_rules: list[Rule] = []
     seen_added_ids: set[str] = set()
@@ -456,7 +476,6 @@ def _apply_rule_overrides(
             raise ValueError(
                 f"day {day_number}: added_rules lists {rule.id!r} more than "
                 f"once")
-        seen_added_ids.add(rule.id)
         if rule.id in inherited_ids:
             raise ValueError(
                 f"day {day_number}: added_rules id {rule.id!r} collides "
@@ -471,22 +490,33 @@ def _apply_rule_overrides(
                 f"mutability=dark_web but has no justification — a Dark "
                 f"Web directive must always carry in-fiction "
                 f"justification text (see Rule.justification)")
+        if rule.supersedes and rule.supersedes not in removable_ids:
+            raise ValueError(
+                f"day {day_number}: added_rules {rule.id!r} supersedes "
+                f"{rule.supersedes!r}, which is neither in this day's "
+                f"inherited rulebook nor introduced earlier in this same "
+                f"added_rules batch — self- or mutual-supersession (an "
+                f"entry naming its own id, or two entries naming each "
+                f"other) is not supported, and a forward reference to a "
+                f"later entry would make the ordering meaningless")
+        seen_added_ids.add(rule.id)
         added_rules.append(rule)
+        removable_ids.add(rule.id)
+
+    # `removed_rules` may only name an id already in the INHERITED book —
+    # naming an id this same file's `added_rules` just introduced has no
+    # legitimate meaning (there is nothing to retire that this file didn't
+    # also just add in the same breath) and is rejected rather than
+    # silently netting out to a no-op that drops the new rule.
+    for rid in removed_raw:
+        if rid not in inherited_ids:
+            raise ValueError(
+                f"day {day_number}: removed_rules names {rid!r}, which is "
+                f"not in this day's inherited rulebook")
 
     removed_ids = set(removed_raw) | {
         r.supersedes for r in added_rules if r.supersedes
     }
-    # #42/Phase 5b-1: a removal/supersedes target may be either an inherited
-    # (pre-`added_rules`) id, or an id introduced earlier in THIS SAME
-    # `added_rules` batch — the latter is the chained-supersession case (a
-    # later directive retiring an earlier one that was re-listed only so
-    # there was something to retire; see the docstring above).
-    addable_ids = inherited_ids | seen_added_ids
-    for rid in removed_ids:
-        if rid not in addable_ids:
-            raise ValueError(
-                f"day {day_number}: removed_rules/supersedes names {rid!r}, "
-                f"which is not in this day's rulebook before removal")
 
     rules = (
         tuple(r for r in rules if r.id not in removed_ids)
