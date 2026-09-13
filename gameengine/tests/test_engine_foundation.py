@@ -4513,6 +4513,59 @@ def test_day_12_white_hat_scripted_at_fixed_slot_not_rolled():
             f"seed {seed:#x}: expected exactly one White Hat in the shift")
 
 
+def test_day_12_at_least_one_decoy_shares_a_white_hat_signal_every_seed():
+    """Review-fix follow-up: restoring sneaky_bugger to the day-12 mix (a
+    prior round of this fix) only made decoy overlap PROBABLE, not
+    guaranteed - a 200-seed sweep found ~11.5% of seeds still had ZERO
+    non-White-Hat candidate sharing any of LOW_AND_SLOW/ENCRYPTED_PAYLOAD/
+    BURNER_IDENTITY, since sneaky_bugger's own roll draws from ~13 eligible
+    kinds and wasn't guaranteed to land on one of these three. Fixed by
+    pinning sneaky_bugger to slot 3 (forced_includes, same mechanism as the
+    White Hat's own slot 7) and forcing it to roll low_and_slow
+    (forced_violations) - so day 12 now has a guaranteed decoy every
+    single seed, not a probabilistic one.
+
+    This test is the permanent statistical guard the build-plan review
+    asked for: spot-checking 3-4 seeds (as the original version of this
+    day's tests did) is not evidence for a claim about camouflage that has
+    to hold across every possible playthrough seed - a real sweep is
+    required, and this checks 100 seeds, not merely that the JSON scripts
+    a decoy in principle.
+    """
+    day = load_day(12)
+    overlap_kinds = {
+        DiscrepancyKind.LOW_AND_SLOW,
+        DiscrepancyKind.ENCRYPTED_PAYLOAD,
+        DiscrepancyKind.BURNER_IDENTITY,
+    }
+    misses = []
+    for seed in range(100):
+        candidates = [candidate_gen.generate(seed, day, s)
+                      for s in range(day.candidate_count)]
+        white_hats = [c for c in candidates if c.archetype == Archetype.WHITE_HAT]
+        assert len(white_hats) == 1, f"seed {seed}: expected exactly one White Hat"
+        decoys = [c for c in candidates if c.archetype != Archetype.WHITE_HAT]
+        has_overlap = any(
+            {d.kind for d in c.truth.discrepancies} & overlap_kinds
+            for c in decoys)
+        if not has_overlap:
+            misses.append(seed)
+    assert not misses, (
+        f"{len(misses)}/100 seeds have NO non-White-Hat candidate sharing "
+        f"any of the three scripted signal types - the White Hat would be "
+        f"findable by elimination on these seeds: {misses[:10]}")
+
+    # And confirm the pin itself, not just its downstream effect: slot 3 is
+    # always sneaky_bugger, and always carries low_and_slow specifically.
+    for seed in (SEED, 0xBADC0DE, 1, 42):
+        decoy = candidate_gen.generate(seed, day, 3)
+        assert decoy.archetype == Archetype.SNEAKY_BUGGER, (
+            f"seed {seed:#x}: slot 3 must be the pinned decoy")
+        kinds = {d.kind for d in decoy.truth.discrepancies}
+        assert DiscrepancyKind.LOW_AND_SLOW in kinds, (
+            f"seed {seed:#x}: the pinned decoy must carry low_and_slow")
+
+
 def test_day_12_white_hat_carries_all_three_signals_readable_by_day_12():
     """#41 AC: 'All three signals present on the White Hat candidate and each
     readable via a tool the player owns by day 12.' Tool-unlock days are
