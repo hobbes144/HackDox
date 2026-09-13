@@ -5460,23 +5460,26 @@ def test_days_14_through_19_banded_copy_does_not_presume_an_ending():
 
 
 def test_every_day_declares_narrative_keys_that_actually_resolve():
-    """Regression guard for a real bug found in code review of a9e5512:
-    `hackdox.py simulate` read `narratives[day.overseer_intro_key]` by raw
-    dict indexing instead of going through `resolve_narrative`/
-    `resolve_aligned_narrative`. Every day 1-13/17/20 authors a plain
-    `dayN_intro` key so that always happened to work — but days 14-16/
-    18-19 (#42 Phase 5b-2) deliberately author ONLY banded keys, no plain
-    fallback, so raw indexing raised `KeyError` for every one of them.
+    """Content-completeness check only — NOT the regression guard for the
+    a9e5512 `hackdox.py simulate` KeyError bug, despite this test's
+    original docstring claiming otherwise. Proven empirically in review:
+    reverting the `hackdox.py` fix back to raw `narratives[...]` indexing
+    and rerunning the suite left this test green, because it only reads
+    `overseer.json`'s content — it never calls `simulate`, never touches
+    `hackdox.py`, and never checks that any consumer actually goes
+    through `resolve_aligned_narrative`. Days 14-16/18-19 always had a
+    complete banded triple (that was never the missing piece — the
+    missing piece was the *code* using it), so this assertion was true
+    before, during, and after the bug's entire lifetime.
 
-    This is the permanent guard for that exact class of bug: every day's
-    intro/outro keys must have EITHER a plain entry a raw-indexing
-    consumer could read directly, OR a complete set of all three banded
-    variants (so a properly-banded consumer never comes up empty). The
-    existing day-sweep tests (e.g.
-    test_no_day_opens_or_closes_on_a_blank_overseer) all go through the
-    forgiving `resolve_narrative`/`resolve_aligned_narrative` chain, which
-    silently falls through to generic copy and would never have caught
-    this — a raw-indexing consumer doesn't get that fallback.
+    Kept anyway because the property it checks is real and worth having
+    (a day whose intro/outro keys have neither a plain entry nor a
+    complete banded triple silently returns generic copy to a
+    band-aware consumer) — but see
+    `test_simulate_command_does_not_crash_on_the_banded_only_days` and
+    `test_simulate_intro_text_resolves_for_every_alignment_band` below
+    for the tests that actually exercise the code path and would have
+    caught the real bug.
     """
     from gameengine.core import content_loader, overseer
 
@@ -5491,6 +5494,65 @@ def test_every_day_declares_narrative_keys_that_actually_resolve():
                 f"day {day_n}: {key!r} has neither a plain entry nor a "
                 f"complete set of banded ones — any consumer indexing it "
                 f"directly breaks")
+
+
+def test_simulate_command_does_not_crash_on_the_banded_only_days():
+    """THE actual regression guard for the a9e5512 review finding: drives
+    `hackdox.py`'s real `simulate` CLI command through typer's CliRunner
+    (same pattern as test_lab_cli.py) for every one of the five days that
+    author ONLY banded narrative keys (#42 Phase 5b-2) — the exact
+    command and the exact days that raised `KeyError: 'day14_intro'` (and
+    day15/16/18/19's equivalents) when `simulate` read
+    `narratives[day.overseer_intro_key]` by raw indexing instead of
+    `resolve_aligned_narrative`.
+
+    Verified to actually catch the regression, not just look like it
+    does: reverting `hackdox.py`'s `_simulate_intro_text` back to the raw
+    `narratives[day.overseer_intro_key]` indexing and rerunning this test
+    alone reproduces `Error: 'day14_intro'` / non-zero exit codes for all
+    five days; restoring the fix makes it green again.
+    """
+    from typer.testing import CliRunner
+
+    from gameengine.hackdox import app
+
+    runner = CliRunner()
+    for day_n in (14, 15, 16, 18, 19):
+        result = runner.invoke(app, ["simulate", "--day", str(day_n)])
+        assert result.exit_code == 0, (
+            f"`simulate --day {day_n}` crashed: {result.output!r}\n"
+            f"{result.exception!r}")
+        assert "Overseer" in result.output, (
+            f"day {day_n}: simulate produced no Overseer panel at all")
+
+
+def test_simulate_intro_text_resolves_for_every_alignment_band():
+    """Calls `hackdox.py`'s own `_simulate_intro_text` helper directly —
+    the exact function `simulate()` calls internally — for all three
+    alignment bands on every banded-only day, since the `simulate` CLI
+    itself has no `--alignment` flag and a CliRunner invocation alone can
+    only ever exercise the neutral band (a freshly-seeded `GameState`
+    starts at `config.STARTING_ALIGNMENT`, which is neutral). This is the
+    'call the underlying function directly' half of the regression
+    guard: it proves the banded resolution is not just non-crashing but
+    correct, picking the right authored string per band.
+    """
+    from gameengine.core import content_loader, overseer
+    from gameengine.hackdox import _simulate_intro_text
+
+    narratives = content_loader.load_narratives()
+    wh = config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD
+    dw = config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD
+
+    for day_n in (14, 15, 16, 18, 19):
+        day = load_day(day_n)
+        for alignment, band in ((wh, "whitehat"), (0, "neutral"), (dw, "darkweb")):
+            text = _simulate_intro_text(day, narratives, alignment)
+            assert text, f"day {day_n} band {band}: empty intro text"
+            expected_key = overseer.banded_key(day.overseer_intro_key, band)
+            assert text == narratives[expected_key], (
+                f"day {day_n} band {band}: resolved text did not match "
+                f"the authored {expected_key!r} entry")
 
 
 def test_chained_supersession_lets_a_directive_supersede_a_previous_directive(

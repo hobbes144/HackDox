@@ -64,6 +64,31 @@ def new_game(seed: int = typer.Option(0xC0FFEE, help="RNG seed for the run.")) -
     ))
 
 
+def _simulate_intro_text(day, narratives: dict, alignment: int) -> str:
+    """The Overseer intro line `simulate` opens with.
+
+    Pulled out of `simulate()` itself so tests can call this exact
+    function for all three alignment bands directly, without needing a
+    CLI flag to vary `GameState.alignment` — `simulate` has no such flag
+    (it always runs a freshly-seeded state at the campaign's starting
+    alignment), so a CliRunner invocation alone can only ever exercise
+    the neutral band. Regression coverage: code review of #42 found that
+    this used to be raw `narratives[day.overseer_intro_key]` dict
+    indexing instead of `resolve_aligned_narrative` — days 1-13/17/20 all
+    author a plain `dayN_intro` fallback key so that happened to work,
+    but days 14-16/18-19 (Phase 5b-2) author ONLY banded keys, so it
+    raised `KeyError` for every one of them. See
+    `test_engine_foundation.test_simulate_command_does_not_crash_on_the_
+    banded_only_days` (CliRunner, the real crashing code path) and
+    `test_simulate_intro_text_resolves_for_every_alignment_band` (this
+    function, called directly, for all three bands) — the completeness-
+    only check that used to stand in for both of those never actually
+    invoked either.
+    """
+    return resolve_aligned_narrative(
+        narratives, alignment, day.overseer_intro_key, "generic_intro")
+
+
 @app.command("simulate")
 def simulate(
     seed: int = typer.Option(0xC0FFEE, help="RNG seed."),
@@ -81,8 +106,7 @@ def simulate(
     state = GameState(seed=seed)
 
     console.print(Panel(
-        resolve_aligned_narrative(
-            narratives, state.alignment, day.overseer_intro_key, "generic_intro"),
+        _simulate_intro_text(day, narratives, state.alignment),
         title=f"[cyan]Overseer — {day.title}",
         border_style="cyan",
     ))
