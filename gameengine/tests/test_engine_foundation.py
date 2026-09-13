@@ -5342,32 +5342,24 @@ def test_days_14_through_19_introduce_no_new_directive_relative_to_day_13():
         assert dw == dw13, f"day {n}: dark_web rule set diverged from day 13"
 
 
-def _assert_quota_has_genuine_slack_phase5b2(day):
-    """Same body as `_assert_quota_has_genuine_slack` (days 13/17/20),
-    applied to the Phase 5b-2 days. Kept as a thin separate wrapper rather
-    than reusing the name directly so a future edit to one convention
-    doesn't silently retarget the other's docstring-documented precedent."""
-    _assert_quota_has_genuine_slack(day)
-
-
 def test_day_14_quota_has_genuine_slack():
-    _assert_quota_has_genuine_slack_phase5b2(load_day(14))
+    _assert_quota_has_genuine_slack(load_day(14))
 
 
 def test_day_15_quota_has_genuine_slack():
-    _assert_quota_has_genuine_slack_phase5b2(load_day(15))
+    _assert_quota_has_genuine_slack(load_day(15))
 
 
 def test_day_16_quota_has_genuine_slack():
-    _assert_quota_has_genuine_slack_phase5b2(load_day(16))
+    _assert_quota_has_genuine_slack(load_day(16))
 
 
 def test_day_18_quota_has_genuine_slack():
-    _assert_quota_has_genuine_slack_phase5b2(load_day(18))
+    _assert_quota_has_genuine_slack(load_day(18))
 
 
 def test_day_19_quota_has_genuine_slack():
-    _assert_quota_has_genuine_slack_phase5b2(load_day(19))
+    _assert_quota_has_genuine_slack(load_day(19))
 
 
 def test_days_14_16_18_19_author_all_90_banded_narrative_keys():
@@ -5465,6 +5457,40 @@ def test_days_14_through_19_banded_copy_does_not_presume_an_ending():
                 for phrase in banned:
                     assert phrase not in text, (
                         f"{key!r} presumes an ending via {phrase!r}")
+
+
+def test_every_day_declares_narrative_keys_that_actually_resolve():
+    """Regression guard for a real bug found in code review of a9e5512:
+    `hackdox.py simulate` read `narratives[day.overseer_intro_key]` by raw
+    dict indexing instead of going through `resolve_narrative`/
+    `resolve_aligned_narrative`. Every day 1-13/17/20 authors a plain
+    `dayN_intro` key so that always happened to work — but days 14-16/
+    18-19 (#42 Phase 5b-2) deliberately author ONLY banded keys, no plain
+    fallback, so raw indexing raised `KeyError` for every one of them.
+
+    This is the permanent guard for that exact class of bug: every day's
+    intro/outro keys must have EITHER a plain entry a raw-indexing
+    consumer could read directly, OR a complete set of all three banded
+    variants (so a properly-banded consumer never comes up empty). The
+    existing day-sweep tests (e.g.
+    test_no_day_opens_or_closes_on_a_blank_overseer) all go through the
+    forgiving `resolve_narrative`/`resolve_aligned_narrative` chain, which
+    silently falls through to generic copy and would never have caught
+    this — a raw-indexing consumer doesn't get that fallback.
+    """
+    from gameengine.core import content_loader, overseer
+
+    narratives = content_loader.load_narratives()
+    for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        day = load_day(day_n)
+        for key in (day.overseer_intro_key, *day.overseer_outro_keys.values()):
+            bands = [overseer.banded_key(key, b) for b in
+                     (overseer.BAND_WHITE_HAT, overseer.BAND_NEUTRAL,
+                      overseer.BAND_DARK_WEB)]
+            assert narratives.get(key) or all(narratives.get(b) for b in bands), (
+                f"day {day_n}: {key!r} has neither a plain entry nor a "
+                f"complete set of banded ones — any consumer indexing it "
+                f"directly breaks")
 
 
 def test_chained_supersession_lets_a_directive_supersede_a_previous_directive(

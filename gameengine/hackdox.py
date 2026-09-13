@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
 from gameengine.core.content_loader import load_day, load_narratives, synthesize_day
+from gameengine.core.overseer import resolve_aligned_narrative
 from gameengine.core.models import (
     Archetype,
     DiscrepancyKind,
@@ -80,7 +81,8 @@ def simulate(
     state = GameState(seed=seed)
 
     console.print(Panel(
-        narratives[day.overseer_intro_key],
+        resolve_aligned_narrative(
+            narratives, state.alignment, day.overseer_intro_key, "generic_intro"),
         title=f"[cyan]Overseer — {day.title}",
         border_style="cyan",
     ))
