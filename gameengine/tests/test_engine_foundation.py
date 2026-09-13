@@ -5287,6 +5287,186 @@ def test_day_20_overseer_copy_does_not_presume_an_ending():
     assert plain == narratives["generic_between"]
 
 
+def test_days_14_16_18_19_load_and_carry_the_dw05_cumulative_directive_set():
+    """Days 14-16/18-19 (#42 Phase 5b-2, the alignment-banded stretch) must
+    each resolve to EXACTLY dw01/dw02/dw03/dw05 as the active dark_web
+    rules, same shape as
+    test_days_13_17_20_load_and_carry_the_dw05_cumulative_directive_set —
+    these five days sit between the bespoke 13/17/20 days and must carry
+    the identical resolved book, having introduced no directive of their
+    own (Phase 5b-2 is content/narrative only, per its own build-plan
+    scope)."""
+    for n in (14, 15, 16, 18, 19):
+        day = load_day(n)
+        assert day.number == n
+        assert day.difficulty_band == "hard", (
+            f"day {n} must be in the hard difficulty band")
+        assert day.candidate_count == sum(day.archetype_mix.values()), (
+            f"day {n}: declared archetype_mix does not sum to its own "
+            f"candidate_count")
+
+        dw_ids = {r.id for r in day.rules if r.mutability == "dark_web"}
+        assert dw_ids == _PHASE5B1_ACTIVE_DW_IDS, (
+            f"day {n}: expected exactly {sorted(_PHASE5B1_ACTIVE_DW_IDS)} "
+            f"dark_web rules, got {sorted(dw_ids)}")
+        assert day.directive_removed_rule_ids == _PHASE5B1_SUPERSEDED, (
+            f"day {n}: directive_removed_rule_ids mismatch, got "
+            f"{sorted(day.directive_removed_rule_ids)}")
+        book_ids = {r.id for r in day.rules}
+        assert book_ids.isdisjoint(_PHASE5B1_SUPERSEDED), (
+            f"day {n}: a superseded rule (including dw04_payload_leniency "
+            f"itself) is still in the resolved book")
+
+        by_id = {r.id: r for r in day.rules}
+        dw05 = by_id["dw05_payload_crackdown"]
+        assert dw05.severity == _DW05_PAYLOAD_CRACKDOWN["severity"]
+        assert dw05.justification == _DW05_PAYLOAD_CRACKDOWN["justification"]
+
+
+def test_days_14_through_19_introduce_no_new_directive_relative_to_day_13():
+    """None of these five days fires a new directive or retires one — the
+    resolved dark_web rule set must be byte-identical to day 13's (and
+    therefore to each other's), matching test_day_17_introduces_no_new_
+    directive's own no-diff shape."""
+    day13 = load_day(13)
+    dw13 = {r.id: r for r in day13.rules if r.mutability == "dark_web"}
+    for n in (14, 15, 16, 18, 19):
+        day = load_day(n)
+        changes = rules_engine.diff_rulesets(day13, day)
+        added_removed = {(c.kind, c.rule.id) for c in changes
+                         if c.kind in ("added", "removed")}
+        assert added_removed == set(), (
+            f"day {n} must not introduce or retire any rule relative to "
+            f"day 13, got {added_removed}")
+        dw = {r.id: r for r in day.rules if r.mutability == "dark_web"}
+        assert dw == dw13, f"day {n}: dark_web rule set diverged from day 13"
+
+
+def _assert_quota_has_genuine_slack_phase5b2(day):
+    """Same body as `_assert_quota_has_genuine_slack` (days 13/17/20),
+    applied to the Phase 5b-2 days. Kept as a thin separate wrapper rather
+    than reusing the name directly so a future edit to one convention
+    doesn't silently retarget the other's docstring-documented precedent."""
+    _assert_quota_has_genuine_slack(day)
+
+
+def test_day_14_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack_phase5b2(load_day(14))
+
+
+def test_day_15_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack_phase5b2(load_day(15))
+
+
+def test_day_16_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack_phase5b2(load_day(16))
+
+
+def test_day_18_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack_phase5b2(load_day(18))
+
+
+def test_day_19_quota_has_genuine_slack():
+    _assert_quota_has_genuine_slack_phase5b2(load_day(19))
+
+
+def test_days_14_16_18_19_author_all_90_banded_narrative_keys():
+    """Completeness check (#42 Phase 5b-2 acceptance criterion): each of
+    the five days must author all 3 bands x 6 keys = 18 keys, none blank —
+    an accidentally-skipped key would otherwise silently fall through to
+    generic copy rather than failing anything. 5 days x 18 = 90 total."""
+    from gameengine.core import content_loader
+
+    narratives = content_loader.load_narratives()
+    missing = []
+    for n in (14, 15, 16, 18, 19):
+        for band in ("whitehat", "neutral", "darkweb"):
+            for suffix in ("intro", "outro_excellent", "outro_passing",
+                           "outro_poor", "outro_failed", "between"):
+                key = f"day{n}_{band}_{suffix}"
+                if not narratives.get(key):
+                    missing.append(key)
+    assert not missing, f"missing/blank banded narrative keys: {missing}"
+
+
+def test_day_14_alignment_bands_resolve_to_different_authored_text():
+    """End-to-end proof that the banded keys are actually wired up, not
+    merely present in the JSON: resolving day 14's intro/outro/between at
+    three different GameState.alignment values must pick three DIFFERENT,
+    correctly-matching authored strings, via the real
+    `resolve_aligned_narrative` call (the same function app.py's five call
+    sites use), not a hand-rolled key lookup.
+    """
+    from gameengine.core import content_loader, overseer
+    from gameengine.core.models import Performance
+
+    narratives = content_loader.load_narratives()
+    day = load_day(14)
+    wh = config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD
+    dw = config.ALIGNMENT_BAND_DARK_WEB_THRESHOLD
+
+    intro_wh = overseer.resolve_aligned_narrative(
+        narratives, wh, day.overseer_intro_key, "generic_intro")
+    intro_neutral = overseer.resolve_aligned_narrative(
+        narratives, 0, day.overseer_intro_key, "generic_intro")
+    intro_dw = overseer.resolve_aligned_narrative(
+        narratives, dw, day.overseer_intro_key, "generic_intro")
+    assert intro_wh == narratives["day14_whitehat_intro"]
+    assert intro_neutral == narratives["day14_neutral_intro"]
+    assert intro_dw == narratives["day14_darkweb_intro"]
+    assert len({intro_wh, intro_neutral, intro_dw}) == 3, (
+        "all three bands must resolve to genuinely different text")
+
+    outro_key = day.overseer_outro_keys[Performance.EXCELLENT]
+    generic_outro = content_loader.generic_outro_key(Performance.EXCELLENT)
+    outro_wh = overseer.resolve_aligned_narrative(
+        narratives, wh, outro_key, generic_outro)
+    outro_neutral = overseer.resolve_aligned_narrative(
+        narratives, 0, outro_key, generic_outro)
+    outro_dw = overseer.resolve_aligned_narrative(
+        narratives, dw, outro_key, generic_outro)
+    assert outro_wh == narratives["day14_whitehat_outro_excellent"]
+    assert outro_neutral == narratives["day14_neutral_outro_excellent"]
+    assert outro_dw == narratives["day14_darkweb_outro_excellent"]
+    assert len({outro_wh, outro_neutral, outro_dw}) == 3
+
+    between_key = f"day{day.number}_between"
+    between_wh = overseer.resolve_aligned_narrative(
+        narratives, wh, between_key, "generic_between")
+    between_neutral = overseer.resolve_aligned_narrative(
+        narratives, 0, between_key, "generic_between")
+    between_dw = overseer.resolve_aligned_narrative(
+        narratives, dw, between_key, "generic_between")
+    assert between_wh == narratives["day14_whitehat_between"]
+    assert between_neutral == narratives["day14_neutral_between"]
+    assert between_dw == narratives["day14_darkweb_between"]
+    assert len({between_wh, between_neutral, between_dw}) == 3
+
+
+def test_days_14_through_19_banded_copy_does_not_presume_an_ending():
+    """Same discipline as test_day_20_overseer_copy_does_not_presume_an_
+    ending, applied to all 90 Phase 5b-2 keys: no banded line should name a
+    band outright or quote an ENDINGS title verbatim. A substring
+    blacklist, not a judgement call — see the day-20 test for the same
+    caveat about what this can and can't catch."""
+    from gameengine.core import content_loader, overseer
+
+    narratives = content_loader.load_narratives()
+    banned = {"white hat", "dark web", "whitehat", "darkweb",
+              "aligned with", "your alignment"}
+    banned |= {ending.title.lower() for ending in overseer.ENDINGS.values()}
+
+    for n in (14, 15, 16, 18, 19):
+        for band in ("whitehat", "neutral", "darkweb"):
+            for suffix in ("intro", "outro_excellent", "outro_passing",
+                           "outro_poor", "outro_failed", "between"):
+                key = f"day{n}_{band}_{suffix}"
+                text = narratives.get(key, "").lower()
+                for phrase in banned:
+                    assert phrase not in text, (
+                        f"{key!r} presumes an ending via {phrase!r}")
+
+
 def test_chained_supersession_lets_a_directive_supersede_a_previous_directive(
         tmp_path, monkeypatch, day1):
     """Dedicated regression coverage for the `content_loader.
