@@ -288,6 +288,35 @@ ContentSwitcher {
     width: 100%;
 }
 
+/* ── Hashcrack page — 3-column override ─────────────────────────────── */
+/* sidebar (26%) | cipher block (40%) | findings terminal (34%)          */
+/* The cipher block takes the centre — it is the aperture-minigame        */
+/* canvas, not a report panel, and the terminal beside it is the running  */
+/* log of what each aperture came back with.                             */
+
+#page-hashcrack #hc-left {
+    width: 26%;
+}
+
+#cipher-block-panel {
+    width: 40%;
+    border: tall #3a4a58;
+    border-title-color: #c084fc;
+    border-title-style: bold;
+    background: #05080c;
+    padding: 0 1;
+    content-align: center middle;
+}
+
+#cipher-block-content {
+    width: 100%;
+    content-align: center middle;
+}
+
+#page-hashcrack #terminal-hc {
+    width: 34%;
+}
+
 /* ── Stegotool page — 3-column override ─────────────────────────────── */
 /* sidebar (26%) | findings terminal (34%) | image viewer (40%)          */
 /* The image viewer dominates the right side — it is the stamp-minigame  */

@@ -1,6 +1,7 @@
 """Widget re-exports — see individual modules for each class."""
 
 from gameengine.ui.tui.widgets.breach_list import BreachListPanel
+from gameengine.ui.tui.widgets.cipher_block import CipherBlockPanel
 from gameengine.ui.tui.widgets.command_bar import CommandBar
 from gameengine.ui.tui.widgets.debug_panel import DebugPanel
 from gameengine.ui.tui.widgets.dossier import CondensedDossier, DossierPanel
@@ -16,6 +17,7 @@ from gameengine.ui.tui.widgets.typewriter import ChatPanel, TypewriterLog, _TWMe
 __all__ = [
     'BreachListPanel',
     'ChatPanel',
+    'CipherBlockPanel',
     'CommandBar',
     'CondensedDossier',
     'DebugPanel',

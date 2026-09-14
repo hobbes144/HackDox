@@ -1066,6 +1066,18 @@ EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.LEAKED_PASSWORD:       "LEAKED_PASSWORD",
     DiscrepancyKind.WEAK_CREDENTIAL:       "WEAK_CREDENTIAL",
     DiscrepancyKind.CROSS_BREACH_REUSE:    "CROSS_BREACH_REUSE",
+    # 2026-09-14: joined this tier when the cipher-block rework moved it off
+    # DOSSIER (the free strength chip that used to be its evidence is gone).
+    #
+    # The token is the DIGEST SHAPE, not the tier name, and that is deliberate.
+    # WEAK_ENCRYPTION is a violation about the algorithm, and the cipher block
+    # only NAMES the algorithm for players who bought Cipher ID HUD. Asserting
+    # on "WEAK — MD5" would have made this guard green while the kind was, for
+    # everyone else, unflaggable — the guard would have been certifying a
+    # paywall. "32 hex characters" is printed unconditionally, is a plain
+    # observation about the artifact, and is exactly what the rules page
+    # teaches the player to match against.
+    DiscrepancyKind.WEAK_ENCRYPTION:       "32 hex characters",
     # ── Logwatch ─────────────────────────────────────────────────────────
     DiscrepancyKind.BRUTE_FORCE_IN_LOG:    "BRUTE_FORCE_IN_LOG",
     DiscrepancyKind.IMPOSSIBLE_TRAVEL:     "IMPOSSIBLE_TRAVEL",
@@ -1113,11 +1125,16 @@ def test_every_tool_revealed_kind_declares_an_evidence_token():
 def _filtered_output(candidate, kind, day, seed) -> str:
     """The filtered output of whichever tool reveals `kind`, as one string.
 
-    `seed` must be the seed the candidate was generated from: the Logwatch and
-    Hashcrack shared day logs are built per (seed, day) and contain a block of
-    entries for each candidate in that day's roster. Passing a different seed
-    silently produces a log the candidate does not appear in — which reads
-    exactly like a rendering bug and isn't one.
+    `seed` must be the seed the candidate was generated from: the Logwatch
+    shared day log is built per (seed, day) and contains a block of entries for
+    each candidate in that day's roster. Passing a different seed silently
+    produces a log the candidate does not appear in — which reads exactly like
+    a rendering bug and isn't one.
+
+    Hashcrack has no filter tier since the cipher-block rework; its equivalent
+    is the aperture minigame's end state, which cipher_full_readout() produces
+    without simulating a sweep (same stance as the Stegotool branch, which
+    takes stamp_signature_lines rather than stamping its way there).
     """
     from gameengine.core import tools_bridge
     from gameengine.core.models import ToolName
@@ -1128,9 +1145,10 @@ def _filtered_output(candidate, kind, day, seed) -> str:
         return "\n".join(tools_bridge.run_ghostscan_filtered_shared(
             candidate, state).raw_lines)
     if tool == ToolName.HASHCRACK:
-        entries = tools_bridge.generate_hashcrack_day_log(seed, day)
-        return "\n".join(tools_bridge.run_hashcrack_filtered_shared(
-            entries, candidate, state).raw_lines)
+        block = tools_bridge.build_cipher_block(candidate, day.number)
+        return "\n".join(tools_bridge.cipher_full_readout(
+            block, candidate, day.number,
+            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT}))
     if tool == ToolName.LOGWATCH:
         entries = tools_bridge.generate_day_log(seed, day)
         return "\n".join(tools_bridge.run_logwatch_filtered_shared(
@@ -1249,6 +1267,27 @@ FOREIGN_CLAIM_TOKENS: dict[DiscrepancyKind, tuple[str, ...]] = {
         "credential stuffing",
         "rapid failure burst",
     ),
+    # 2026-09-14, cipher-block rework. The Hashcrack page's credential audit
+    # log was removed and its HASH_SUBMIT / BREACH_MATCH rows relocated into
+    # the Logwatch day log — so Logwatch now renders rows about credentials
+    # while owning no credential violation at all. That is precisely the
+    # arrangement #62 was filed about, rebuilt on a different page, so both
+    # Hashcrack-owned corpus kinds get policed here from the outset rather
+    # than after someone finds the bug.
+    #
+    # The relocated rows are meant to read as observations ("this account's
+    # email appears in corpus X"). If either of these phrases ever shows up in
+    # Logwatch's output for a candidate that does not carry the kind, the row
+    # has stopped observing and started accusing.
+    DiscrepancyKind.LEAKED_PASSWORD: (
+        "LEAKED_PASSWORD",
+        "plaintext confirmed in breach corpus",
+    ),
+    DiscrepancyKind.CROSS_BREACH_REUSE: (
+        "CROSS_BREACH_REUSE",
+        "reused across breaches",
+        "appears in more than one corpus",
+    ),
 }
 
 _FILTER_SUMMARY_MARK = "violation summary"
@@ -1304,13 +1343,14 @@ def _all_tool_outputs(candidate, day, seed) -> dict[str, str]:
 
     state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
     img = tools_bridge.build_stego_image(candidate, day.number)
+    block = tools_bridge.build_cipher_block(candidate, day.number)
     return {
         "ghostscan": "\n".join(
             tools_bridge.run_ghostscan_filtered_shared(candidate, state).raw_lines),
         "hashcrack": "\n".join(
-            tools_bridge.run_hashcrack_filtered_shared(
-                tools_bridge.generate_hashcrack_day_log(seed, day),
-                candidate, state).raw_lines),
+            tools_bridge.cipher_full_readout(
+                block, candidate, day.number,
+                {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT})),
         "logwatch": "\n".join(
             tools_bridge.run_logwatch_filtered_shared(
                 tools_bridge.generate_day_log(seed, day),
@@ -2187,13 +2227,20 @@ def test_derived_weak_encryption_respects_the_day_whitelist():
         assert kinds <= {DiscrepancyKind.UNSALTED_STORAGE}, kinds
 
 
-def test_password_encryption_chip_gated_behind_cipher_id_hud():
-    """Batch-3 task #4: the [WEAK ENC]/[MEDIUM ENC]/[STRONG ENC] chip on the
-    dossier only auto-labels the algorithm once UPGRADE_CRYPTO_ID is owned.
-    Ungated, the raw hash must still be fully shown (evidence stays
-    observable — see the "planted ground truth" bug class at the top of this
-    file) — the player is just left to recognise it by shape, per the rules
-    page's new reference table.
+def test_dossier_never_labels_the_encryption_tier():
+    """The dossier shows the raw hash and NOTHING about its strength.
+
+    Rewritten from test_password_encryption_chip_gated_behind_cipher_id_hud,
+    which asserted the chip appeared once Cipher ID HUD was owned. The
+    cipher-block rework removed that chip from the dossier outright and
+    retiered WEAK_ENCRYPTION from DOSSIER to HASHCRACK, because a free
+    algorithm label on every candidate meant a violation ABOUT the algorithm
+    was permanently pre-flagged.
+
+    The assertion is now stronger than the old one: not "hidden without the
+    upgrade" but "not there at all, upgrade or not". Naming the tier is the
+    cipher block's job (see the companion test below), and this is what stops
+    it quietly reappearing on the dossier and re-solving the kind for free.
     """
     from gameengine.ui.tui.app import _password_markup
 
@@ -2206,14 +2253,48 @@ def test_password_encryption_chip_gated_behind_cipher_id_hud():
             break
     assert d is not None
 
-    head_ungated, _ = _password_markup(d, None, upgrades=set())
-    head_gated, _ = _password_markup(d, None, upgrades={config.UPGRADE_CRYPTO_ID})
+    for upgrades in (set(), {config.UPGRADE_CRYPTO_ID}, {config.UPGRADE_HC_VERDICT}):
+        head, state = _password_markup(d, None, upgrades=upgrades)
+        assert d.submitted_hash[:14] in head, "raw hash must stay visible"
+        for label in ("WEAK ENC", "MEDIUM ENC", "STRONG ENC",
+                      "MD5", "SHA256", "bcrypt"):
+            assert label not in head and label not in state, (
+                f"{label!r} leaked onto the dossier with upgrades={upgrades} — "
+                f"the encryption tier is the cipher block's to establish")
 
-    assert d.submitted_hash[:14] in head_ungated   # raw hash always visible
-    for label in ("WEAK ENC", "MEDIUM ENC", "STRONG ENC"):
-        assert label not in head_ungated, f"{label!r} leaked without the upgrade"
-    assert any(label in head_gated
-               for label in ("WEAK ENC", "MEDIUM ENC", "STRONG ENC"))
+
+def test_cipher_block_tier_label_gated_behind_cipher_id_hud():
+    """The block always shows the DIGEST SHAPE; only the HUD names the tier.
+
+    This is the replacement gate for the dossier chip removed above, and the
+    split is load-bearing. WEAK_ENCRYPTION has to stay flaggable by a player
+    who owns no upgrades, so the free header must carry a real observation —
+    "32 hex characters" — that the rules page teaches them to interpret. What
+    the 20 HD$ upgrade buys is the conclusion, not the evidence.
+    """
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    md5 = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        if tools_bridge.cipher_tier(c.dossier.submitted_hash) == "weak":
+            md5 = c
+            break
+    assert md5 is not None, "no MD5-tier candidate in 200 seeds"
+
+    block = tools_bridge.build_cipher_block(md5, day.number)
+
+    free = "\n".join(tools_bridge.cipher_header_lines(block, set()))
+    assert "32 hex characters" in free, (
+        "the digest shape must be free — it is WEAK_ENCRYPTION's only "
+        "evidence for a player without Cipher ID HUD")
+    assert "MD5" not in free, "the algorithm was named without the upgrade"
+
+    hud = "\n".join(tools_bridge.cipher_header_lines(
+        block, {config.UPGRADE_CRYPTO_ID}))
+    assert "MD5" in hud and "WEAK" in hud, "Cipher ID HUD did not name the tier"
+    assert "32 hex characters" in hud, "the upgrade must add, not replace"
 
 
 def test_unsalted_password_shows_plaintext_directly_no_crack_prompt():
@@ -2238,21 +2319,43 @@ def test_unsalted_password_shows_plaintext_directly_no_crack_prompt():
     assert "UNSALTED" in head
 
 
-def test_strong_password_verdict_line_gated_behind_crack_verdict_analyzer():
-    """The "strongest tier is always safe" wording is a strength VERDICT, not
-    the plaintext itself, so it's gated behind UPGRADE_HC_VERDICT — same
-    upgrade that gates the equivalent Hashcrack-log wording (#6a), so the two
-    surfaces never disagree about what's told to the player for free.
-    """
-    from gameengine.ui.tui.app import _password_markup
+def test_recovered_password_strength_verdict_gated_behind_crack_verdict_analyzer():
+    """Judging a recovered password is the PLAYER's job unless they buy out.
 
-    # cracked_password == "" is the uncracked-but-attempted (bcrypt) state.
-    d = Dossier(submitted_hash="$2b$12$KIXQ7c5s9j2mR8vN0abcdEfGhIjKlMnOpQrStUvWxYz012345",
-                password_plain=None, credential_unsalted=False)
-    _, state_ungated = _password_markup(d, "", upgrades=set())
-    _, state_gated = _password_markup(d, "", upgrades={config.UPGRADE_HC_VERDICT})
-    assert "always safe" not in state_ungated
-    assert "always safe" in state_gated
+    Moved here from the dossier (_password_markup) when the cipher-block
+    rework made recovering the plaintext the Hashcrack page's whole activity.
+    The property is unchanged and is the core of Nick's brief: the tool hands
+    over the plaintext, and without Crack Verdict Analyzer it says nothing
+    about whether that plaintext is any good.
+    """
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        if (DiscrepancyKind.WEAK_CREDENTIAL in {d.kind for d in c.truth.discrepancies}
+                and c.dossier.password_plain):
+            cand = c
+            break
+    assert cand is not None, "no weak-credential candidate in 200 seeds"
+
+    block = tools_bridge.build_cipher_block(cand, day.number)
+    plaintext = cand.dossier.password_plain
+
+    ungated = "\n".join(tools_bridge.cipher_resolve_lines(
+        block, cand, day.number, set()))
+    assert plaintext in ungated, (
+        "the plaintext must be handed over regardless — only the JUDGEMENT "
+        "is for sale")
+    assert "WEAK_CREDENTIAL" not in ungated, (
+        "the strength verdict leaked without Crack Verdict Analyzer")
+
+    gated = "\n".join(tools_bridge.cipher_resolve_lines(
+        block, cand, day.number, {config.UPGRADE_HC_VERDICT}))
+    assert plaintext in gated
+    assert "WEAK_CREDENTIAL" in gated, (
+        "Crack Verdict Analyzer did not name the credential verdict")
 
 
 def test_breach_auto_upgrade_confirms_hit_on_base_ghostscan_run():
@@ -2288,46 +2391,70 @@ def test_breach_auto_upgrade_confirms_hit_on_base_ghostscan_run():
                   for ln in result_auto.raw_lines)
 
 
-def test_hashcrack_highlighting_actually_gated_by_credential_hud():
-    """Batch-3 task #4d: run_hashcrack_shared used to call _render_hc_log with
-    only annotate=True, so Credential HUD (hash_highlight) never gated
-    anything once the tool was run — any base run already highlighted
-    suspicious lines and injected "▲ why" annotations for free. Also checks
-    Nick's explicit requirement: the crack must still reveal the plaintext
-    without the upgrade, just without the "▲" attention-drawing.
-    """
-    import random as _random
+def test_credential_hud_band_narrows_without_answering():
+    """Credential HUD points at a BAND of the dial, never at the value.
 
+    Rewritten when the cipher block became a two-stage decrypt: the upgrade
+    used to tint a region of a canvas being swept, and now marks a span of the
+    alignment dial instead. The constraint it has to satisfy is unchanged, and
+    it comes from #54 — the stego tint originally covered the payload zone
+    EXACTLY, which solved the minigame for nothing and left a 30 HD$ upgrade
+    selling "the same rectangle, bluer".
+
+    So: the band must CONTAIN the true value and be strictly WIDER than it
+    wherever the dial has room, and it must never collapse to a single
+    position, which would simply be the answer.
+    """
     from gameengine.core import tools_bridge
 
     day = load_day(20)
-    cand = None
-    for seed in range(200):
+    checked = 0
+    for seed in range(120):
         c = candidate_gen.generate(seed, day, 0)
-        kinds = {d.kind for d in c.truth.discrepancies}
-        if kinds & {DiscrepancyKind.WEAK_CREDENTIAL, DiscrepancyKind.LEAKED_PASSWORD,
-                    DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE}:
-            cand = c
-            break
-    assert cand is not None, "no credential-violation candidate in 200 seeds"
+        block = tools_bridge.build_cipher_block(c, day.number)
+        if not block.crackable:
+            continue          # bcrypt — no dial to hint at
+        checked += 1
 
-    entries = tools_bridge._hc_candidate_entries(cand, _random.Random(1), day.number)
-    plaintext = cand.dossier.password_plain
-    assert plaintext
+        band = tools_bridge.hint_band(block, {config.UPGRADE_HASH_HIGHLIGHT})
+        assert band is not None, "the upgrade produced no band on a live dial"
+        lo, hi = band
+        assert lo <= block.align_true <= hi, (
+            f"band {band} does not contain the true alignment "
+            f"{block.align_true}")
+        assert 0 <= lo and hi <= block.align_range, (
+            f"band {band} runs outside the dial 0..{block.align_range}")
+        # Wider than a single position wherever the dial has room to be wider.
+        if block.align_range > 0:
+            assert hi > lo, (
+                f"band {band} is a single dial position — that is the answer, "
+                f"not a hint")
+    assert checked, "guard is inert — no crackable candidate was examined"
 
-    plain_state = GameState(seed=SEED, current_day=20)
-    ungated = tools_bridge.run_hashcrack_shared(entries, cand, plain_state).raw_lines
-    assert not any("▲" in ln for ln in ungated), (
-        "attention-drawing ▲ annotation appeared without Credential HUD")
-    assert any(plaintext in ln for ln in ungated), (
-        "the crack must still reveal the plaintext without the upgrade")
 
-    gated_state = GameState(seed=SEED, current_day=20)
-    gated_state.upgrades = {config.UPGRADE_HASH_HIGHLIGHT}
-    gated = tools_bridge.run_hashcrack_shared(entries, cand, gated_state).raw_lines
-    assert any("▲" in ln for ln in gated), (
-        "Credential HUD did not restore the ▲ annotations")
-    assert any(plaintext in ln for ln in gated)
+def test_cipher_block_marks_no_band_without_the_upgrade():
+    """Without Credential HUD the dial carries no positional hint at all.
+
+    The other half of #54's lesson. A band that exists in the data is harmless;
+    a renderer that draws it for everyone is the bug. hint_band() is the single
+    place that decision is made, and it answers None unless the upgrade is
+    actually owned.
+    """
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    checked = 0
+    for seed in range(120):
+        c = candidate_gen.generate(seed, day, 0)
+        block = tools_bridge.build_cipher_block(c, day.number)
+        if not block.crackable:
+            continue
+        checked += 1
+        assert tools_bridge.hint_band(block, set()) is None, (
+            "the dial marks a band with no upgrade owned — base tier must "
+            "show nothing")
+        assert tools_bridge.hint_band(block, None) is None
+    assert checked, "guard is inert"
 
 
 def test_logwatch_highlighting_actually_gated_by_log_analyzer_hud():
@@ -2370,14 +2497,15 @@ def test_logwatch_highlighting_actually_gated_by_log_analyzer_hud():
         "Log Analyzer HUD did not restore the ▲ annotations")
 
 
-def test_strong_password_verdict_gated_in_hashcrack_log():
-    """Batch-3 task #6a: the "(strong password — no concern)" verdict wording
-    in the Hashcrack log itself (not just the dossier chip, covered by a
-    separate test above) is gated behind UPGRADE_HC_VERDICT. The plaintext
-    must still reveal either way — only the qualitative verdict is paywalled.
-    """
-    import random as _random
+def test_clean_credential_resolves_without_being_called_safe():
+    """A CLEAN credential recovers its plaintext and says nothing reassuring.
 
+    The counterpart to the weak-credential gate above, and the one that
+    actually bites. It is easy to build a tool that stays quiet about bad
+    passwords but volunteers "looks fine" about good ones — which hands the
+    player the same verdict from the other direction and is exactly what this
+    rework set out to stop.
+    """
     from gameengine.core import tools_bridge
 
     day = load_day(20)
@@ -2387,25 +2515,32 @@ def test_strong_password_verdict_gated_in_hashcrack_log():
     for seed in range(200):
         c = candidate_gen.generate(seed, day, 0)
         kinds = {d.kind for d in c.truth.discrepancies}
-        strength = tools_bridge.password_strength(c.dossier.submitted_hash)
-        if (not (kinds & cred_kinds) and strength == "medium"
+        if (not (kinds & cred_kinds)
+                and tools_bridge.cipher_tier(c.dossier.submitted_hash) == "medium"
                 and tools_bridge.crack_password(c)):
             cand = c
             break
     assert cand is not None, "no neutral-crack candidate found in 200 seeds"
 
-    entries = tools_bridge._hc_candidate_entries(cand, _random.Random(1), day.number)
+    block = tools_bridge.build_cipher_block(cand, day.number)
     plaintext = tools_bridge.crack_password(cand)
 
-    plain_state = GameState(seed=SEED, current_day=20)
-    ungated = tools_bridge.run_hashcrack_shared(entries, cand, plain_state).raw_lines
-    assert any(plaintext in ln for ln in ungated), "plaintext must still reveal"
-    assert not any("no concern" in ln for ln in ungated)
+    ungated = "\n".join(tools_bridge.cipher_resolve_lines(
+        block, cand, day.number, set()))
+    assert plaintext in ungated, "plaintext must still be recovered"
+    for reassurance in ("no concern", "always safe", "strong —", "appears secure"):
+        assert reassurance not in ungated, (
+            f"{reassurance!r} volunteered without Crack Verdict Analyzer — "
+            f"judging the password is the player's job")
 
-    gated_state = GameState(seed=SEED, current_day=20)
-    gated_state.upgrades = {config.UPGRADE_HC_VERDICT}
-    gated = tools_bridge.run_hashcrack_shared(entries, cand, gated_state).raw_lines
-    assert any("no concern" in ln for ln in gated)
+    gated = "\n".join(tools_bridge.cipher_resolve_lines(
+        block, cand, day.number, {config.UPGRADE_HC_VERDICT}))
+    assert "verdict:" in gated, "Crack Verdict Analyzer produced no verdict line"
+
+    # A clean candidate must never be handed a violation label either.
+    for label in ("LEAKED_PASSWORD", "CROSS_BREACH_REUSE", "WEAK_CREDENTIAL"):
+        assert label not in gated, (
+            f"{label} named on a candidate that does not carry it")
 
 
 def test_stego_rgb_coloring_gated_behind_channel_colorizer():
@@ -2686,9 +2821,16 @@ def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
     """The two pages must agree about where the candidate is leaked (#61).
 
     This is the actual mechanism the issue is about: _breach_db_for_candidate
-    is shared precisely so the panel and the log cannot diverge, and the
-    second corpus for reuse used to bypass it entirely with its own
+    is shared precisely so the surfaces cannot diverge, and the second corpus
+    for reuse used to bypass it entirely with its own
     `(int(id,16) >> 8) % len(...)` pick.
+
+    2026-09-14: now checks THREE surfaces, not two. The cipher-block rework
+    split the old Hashcrack log in half — the BREACH_MATCH rows went to
+    Logwatch, and the cipher block grew its own corpus readout so Hashcrack
+    stays self-sufficient for these kinds (it unlocks a day before Logwatch
+    does). Three renderers of one fact is three chances to drift, so all three
+    are pinned here.
     """
     import random as _r
 
@@ -2703,11 +2845,20 @@ def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
                     n for n, _y, _cl, entries in
                     tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, day.number)
                     if any(m for _e, m in entries))
-                log = sorted({e.detail for e in tools_bridge._hc_candidate_entries(
+                log = sorted({e.extra for e in tools_bridge._lw_candidate_entries(
                     c, _r.Random(1), day.number) if e.event == "BREACH_MATCH"})
                 assert panel == log, (
                     f"day {day_n} {c.archetype.value}: Ghostscan panel seeds "
-                    f"{panel}, Hashcrack log names {log}")
+                    f"{panel}, Logwatch log names {log}")
+
+                # The cipher block names the same corpora in its own prose.
+                block = tools_bridge.build_cipher_block(c, day.number)
+                readout = "\n".join(tools_bridge.cipher_resolve_lines(
+                    block, c, day.number, set()))
+                for corpus in panel:
+                    assert corpus in readout, (
+                        f"day {day_n} {c.archetype.value}: cipher block omits "
+                        f"{corpus!r}, which the other two surfaces both name")
     assert checked, "guard is inert"
 
 
@@ -3316,8 +3467,16 @@ def test_logwatch_brute_force_burst_size_is_configurable():
         config.LW_BRUTE_BURST_SIZE = original
 
 
-def test_hashcrack_stuffing_burst_size_is_configurable():
-    """Same shape as above, for Hashcrack's HC_STUFFING_BURST_SIZE."""
+def test_credential_stuffing_burst_exists_only_in_the_logwatch_log():
+    """The stuffing burst has exactly one generator, and it is Logwatch's.
+
+    Replaces test_hashcrack_stuffing_burst_size_is_configurable. Until the
+    cipher-block rework there were TWO burst generators for one violation —
+    _lw_candidate_entries and _hc_candidate_entries — each with its own config
+    knob, for a kind (CREDENTIAL_STUFFING) that Logwatch has always owned
+    outright. #62 was the bug that arrangement produced. Removing the Hashcrack
+    log removed the duplicate; this test is what stops it coming back.
+    """
     import random as _random
 
     from gameengine.core import tools_bridge
@@ -3331,17 +3490,22 @@ def test_hashcrack_stuffing_burst_size_is_configurable():
             break
     assert cand is not None, "no credential-stuffing candidate in 200 seeds"
 
-    def _burst_len(seed):
-        entries = tools_bridge._hc_candidate_entries(cand, _random.Random(seed), day.number)
-        return sum(1 for e in entries if e.violation_kind == "stuffing"
-                   and e.event == "AUTH_FAIL")
+    entries = tools_bridge._lw_candidate_entries(
+        cand, _random.Random(1), day.number)
+    assert any(e.violation_kind == "stuffing" for e in entries), (
+        "Logwatch generates no stuffing rows for a CREDENTIAL_STUFFING "
+        "candidate — the burst lost its only remaining generator")
 
-    original = config.HC_STUFFING_BURST_SIZE
-    try:
-        config.HC_STUFFING_BURST_SIZE = (15, 15)
-        assert _burst_len(1) == 15, "HC_STUFFING_BURST_SIZE did not drive the burst count"
-    finally:
-        config.HC_STUFFING_BURST_SIZE = original
+    # The Hashcrack-side generator and its knobs must be gone, not merely
+    # unused: a dormant second generator is what drifted last time.
+    for gone in ("_hc_candidate_entries", "generate_hashcrack_day_log",
+                 "_render_hc_log", "run_hashcrack_shared"):
+        assert not hasattr(tools_bridge, gone), (
+            f"tools_bridge.{gone} is back — the Hashcrack credential log was "
+            f"removed by the cipher-block rework and must not be reinstated")
+    for gone in ("HC_STUFFING_BURST_SIZE", "HC_ENTRIES_BY_DAY"):
+        assert not hasattr(config, gone), (
+            f"config.{gone} is back — it paced a log that no longer exists")
 
 
 def test_log_generation_timing_knobs_are_all_present_and_well_formed():
@@ -3358,9 +3522,12 @@ def test_log_generation_timing_knobs_are_all_present_and_well_formed():
         "LW_TRAVEL_COOLDOWN", "LW_INSIDER_STEP1_GAP",
         "LW_INSIDER_STEP2_GAP", "LW_AFTERHOURS_GAP",
         "LW_SLOW_FIRST_TS", "LW_SLOW_BURST_SIZE", "LW_SLOW_GAP",
-        "LW_NOISE_TIME_WINDOW", "HC_WORKDAY_WINDOW", "HC_NORMAL_LOGIN_GAP",
-        "HC_HASH_SUBMIT_GAP", "HC_BREACH_ROW_GAP", "HC_STUFFING_BURST_SIZE",
-        "HC_STUFFING_COOLDOWN", "HC_STUFFING_POST_GAP", "HC_NOISE_TIME_WINDOW",
+        "LW_NOISE_TIME_WINDOW",
+        # The only HC_* knob left: the cipher-block rework deleted the
+        # Hashcrack credential log and every knob that paced it. This one
+        # survives because the BREACH_MATCH rows it paces were relocated into
+        # the Logwatch log rather than deleted.
+        "HC_BREACH_ROW_GAP",
     ]
     for name in range_knobs:
         val = getattr(config, name)
@@ -3377,8 +3544,7 @@ def test_log_generation_timing_knobs_are_all_present_and_well_formed():
         start, span = val
         assert 0 <= start <= 86400 and span >= 0, f"{name} has an invalid window: {val!r}"
 
-    weight_knobs = ["LW_NOISE_EVENT_WEIGHTS", "HC_NOISE_EVENT_WEIGHTS",
-                    "LW_CLEAN_ACTIVITY_EVENTS"]
+    weight_knobs = ["LW_NOISE_EVENT_WEIGHTS", "LW_CLEAN_ACTIVITY_EVENTS"]
     for name in weight_knobs:
         val = getattr(config, name)
         assert isinstance(val, list) and val, f"{name} is empty or not a list: {val!r}"

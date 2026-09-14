@@ -65,8 +65,6 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
     ("DOSSIER", [
         ("Identity Confirmation",
          ["Affiliation not stated", "Disposable email domain"]),
-        ("Password Security",
-         ["Weak password encryption", "Unsalted / plaintext storage"]),
         ("Personal",
          ["Hostile chat"]),
     ]),
@@ -81,9 +79,11 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
           "Threat-forum handle match"]),
     ]),
     ("CREDENTIAL", [
+        ("Credential Storage",
+         ["Weak password encryption", "Unsalted / plaintext storage"]),
         ("Credential Exposure",
-         ["Weak credential", "Cross-breach password reuse",
-          "Leaked password"]),
+         ["Weak credential", "Leaked password",
+          "Cross-breach password reuse"]),
     ]),
     ("FORENSICS", [
         ("Access Timing",
@@ -270,14 +270,39 @@ def test_categories_stay_inside_their_group_and_follow_group_order():
 
 
 def test_locked_tools_remove_whole_categories_rather_than_leaving_holes():
-    """Early campaign: a category whose every kind is behind a locked tool is
-    dropped entirely, name and all. Rendering the name over an empty row would
-    tell the player something exists — the exact leak #33's gating prevents."""
-    early = rules_content.clustered_catalog({"ghostscan"})
+    """Early campaign: a category with nothing observable in it is dropped
+    entirely, name and all. Rendering the name over an empty row would tell the
+    player something exists — the exact leak #33's gating prevents.
+
+    Restated 2026-09-14. This used to assert a hardcoded set of group names
+    ({"DOSSIER", "OSINT"} with only ghostscan unlocked), which worked only
+    while a group's name and its revealing tool were always the same thing.
+    UNSALTED_STORAGE deliberately breaks that coupling: it is grouped under
+    CREDENTIAL (it IS a credential finding) while staying DOSSIER-tiered (its
+    evidence is free on the dossier), so a one-chip CREDENTIAL category
+    correctly appears from day 1, three days before Hashcrack.
+
+    The actual rule was never about which groups may appear — it is that every
+    RENDERED chip must be observable and every rendered category must be
+    non-empty. Asserted that way, this still catches a genuine leak (a chip for
+    a kind whose tool is locked) while allowing the intended partial
+    category."""
+    unlocked = {"ghostscan"}
+    early = rules_content.clustered_catalog(unlocked)
     assert early, "dossier + ghostscan should still yield categories"
-    for group, cid, _n, items in early:
+    for _group, cid, _n, items in early:
         assert items, f"empty category rendered: {cid}"
-        assert group in {"DOSSIER", "OSINT"}, f"{cid} leaked group {group}"
+        for _g, kind, label in items:
+            tool = rules_content._TOOL.get(kind)
+            assert rules_content._tool_unlocked(tool, unlocked), (
+                f"{cid} renders {label!r}, whose tool "
+                f"{tool.value if tool else '?'} is still locked")
+
+    # And the converse: a category with NOTHING observable must not appear at
+    # all. Stego is the clean case — every one of its kinds needs its tool.
+    names = {cid for _g, cid, _n, _i in early}
+    assert not any(cid.startswith("stego-") for cid in names), (
+        "a fully-locked category leaked its name")
 
 
 def test_authored_rows_still_read_calm_to_alarming():
@@ -860,22 +885,32 @@ def test_the_summary_board_ignores_clicks():
 def test_down_moves_one_grid_row_and_keeps_the_column():
     """Down means down now. The old board walked the flat catalog in reading
     order, so on a grid ↓ stepped sideways — players said navigating it was
-    irritating and that it taught them nothing about how the violations group."""
+    irritating and that it taught them nothing about how the violations group.
+
+    Runs on rows 2 and 3 (OSINT's two 3-wide categories) rather than rows 0
+    and 1. The 2026-09-14 regrouping retired DOSSIER's "Password Security"
+    category, which left row 0 two chips wide and row 1 only one — so pressing
+    ↓ from column 1 there has no column 1 to land on and legitimately falls to
+    column 0. That narrower-row fallback is real behaviour with its own test
+    directly below; this one is about keeping the column when the column
+    exists, so it needs two rows that are both wide enough to prove it."""
     async def run():
         _st, board, app = await _mounted((200, 55))
         async with app.run_test(size=(200, 55)) as pilot:
             await pilot.pause(0.25)
             board.focus()
             await pilot.pause(0.1)
+            await pilot.press("down")           # row 1 — DOSSIER / Personal
+            await pilot.press("down")           # row 2 — OSINT, 3 wide
             await pilot.press("right")          # into column 1
             await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (0, 1)
+            assert board._pos[board._cursor] == (2, 1)
             await pilot.press("down")
             await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (1, 1), "↓ left the column"
+            assert board._pos[board._cursor] == (3, 1), "↓ left the column"
             await pilot.press("up")
             await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (0, 1)
+            assert board._pos[board._cursor] == (2, 1)
     asyncio.run(run())
 
 
@@ -1106,20 +1141,60 @@ def test_the_stego_page_gives_up_its_terminal_and_keeps_the_image():
     asyncio.run(run())
 
 
-def test_the_other_tool_pages_keep_their_terminals():
-    """The stego exception is scoped to stego. Ghostscan, Hashcrack and Logwatch
-    are report panels — their terminal IS the evidence, so the board stands in
-    for the sidebar there and nothing else moves."""
+def test_the_hashcrack_page_gives_up_its_terminal_and_keeps_the_cipher_block():
+    """Hashcrack joined the stego exception in the 2026-09-14 rework.
+
+    Same reasoning, one page over. The cipher block is the aperture minigame's
+    canvas and it carries the signal directly — which cells are open, which
+    came back as plaintext — so it is both the thing the player is working on
+    and their map of where they have already looked. Hiding it to make room for
+    the board would stop them sweeping and recording at the same time. The
+    findings terminal yields instead, exactly as it does on the stego page.
+
+    Both halves are asserted: the block survives AND the terminal actually
+    goes. Checking only the block would pass with nothing hidden at all and the
+    board squeezed into whatever was left."""
     async def run():
-        for page, term_id in ((1, "terminal-gs"), (2, "terminal-hc"),
-                              (3, "terminal-lw")):
+        app = _Host()
+        async with app.run_test(size=(120, 32)) as pilot:
+            scr, board = await _open_board(pilot, app, 2)
+            assert scr.cipher_hc.display, "the cipher block was hidden"
+            assert scr.cipher_hc.size.width > 0
+            assert not scr.term_hc.display, "the findings terminal did not yield"
+            assert not scr.query_one("#hc-left").display
+            assert board.size.width > 0 and board._hit, "board has no grid"
+
+            # The canvas still works: decrypt mode is reachable, with a block.
+            scr._enter_decrypt_mode()
+            await pilot.pause(0.15)
+            assert scr._decrypt_mode
+            assert scr.cipher_hc.block is not None
+
+            scr._exit_decrypt_mode(quiet=True)
+            scr._toggle_evidence()
+            await pilot.pause(0.3)
+            assert scr.term_hc.display, "the terminal never came back"
+            assert scr.query_one("#hc-left").display
+            assert scr.cipher_hc.display
+    asyncio.run(run())
+
+
+def test_the_other_tool_pages_keep_their_terminals():
+    """The canvas exception is scoped to the two pages that have a canvas.
+
+    Ghostscan and Logwatch are report panels — their terminal IS the evidence,
+    so the board stands in for the sidebar there and nothing else moves. (The
+    Hashcrack page used to be in this list; it left when the cipher block
+    replaced its audit log, and it now has its own test above.)"""
+    async def run():
+        for page, term_id in ((1, "terminal-gs"), (3, "terminal-lw")):
             app = _Host()
             async with app.run_test(size=(120, 32)) as pilot:
                 scr, _board = await _open_board(pilot, app, page)
                 term = scr.query_one(f"#{term_id}")
                 assert term.display, (
-                    f"page {page}: {term_id} was hidden — only Stegotool trades "
-                    f"its terminal away")
+                    f"page {page}: {term_id} was hidden — only the canvas "
+                    f"pages (Hashcrack, Stegotool) trade their terminal away")
     asyncio.run(run())
 
 

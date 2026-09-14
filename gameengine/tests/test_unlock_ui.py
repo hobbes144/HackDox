@@ -163,7 +163,10 @@ def test_evidence_boards_are_gated_by_unlocked_tools():
             for board in (scr.board, scr.board_c0, scr.board_gs,
                           scr.board_hc, scr.board_lw, scr.board_st):
                 groups = {g for g, _k, _l in board._items}
-                assert groups == {"DOSSIER", "OSINT"}, groups
+                # CREDENTIAL is present from day 1: UNSALTED_STORAGE is
+                # grouped there while staying DOSSIER-tiered, so it is
+                # observable without Hashcrack. Gating is per-KIND.
+                assert groups == {"DOSSIER", "OSINT", "CREDENTIAL"}, groups
 
             # Fully unlocked -> every group is reachable.
             state2 = GameState(seed=SEED)

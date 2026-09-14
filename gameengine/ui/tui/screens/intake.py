@@ -37,6 +37,7 @@ from gameengine.ui.tui.shared import (
 from gameengine.ui.tui.widgets import (
     BreachListPanel,
     ChatPanel,
+    CipherBlockPanel,
     CommandBar,
     CondensedDossier,
     DebugPanel,
@@ -93,7 +94,11 @@ class IntakeScreen(Screen):
         # than on RulesScreen because that screen is dismissed and rebuilt on
         # every open, so anything it owns is lost between views.
         self._rules_scroll: dict[str, float] = {}
-        self._hc_log:  list = []   # shared credential audit log (hashcrack)
+        # ── Hashcrack cipher-block minigame state ─────────────────────
+        # (the shared credential audit log this page used to own is gone —
+        # its HASH_SUBMIT/BREACH_MATCH rows now live in the Logwatch day log)
+        self._decrypt_mode     = False   # arrows/Enter captured while True
+        self._cipher_resolved  = False   # recovery block printed once
 
         # ── Stegotool stamp minigame state ────────────────────────────
         self._stamp_mode     = False   # arrows/Space captured while True
@@ -176,7 +181,14 @@ class IntakeScreen(Screen):
         # Board 60% + image 40% fills the row, so no width override is needed.
         self._evidence_pairs: list[tuple[EvidenceBoard, tuple[str, ...]]] = [
             (self.board_gs, ("gs-left",)),
-            (self.board_hc, ("hc-left",)),
+            # Hashcrack is the second exception alongside Stegotool below, and
+            # for the same reason: it gives up its findings TERMINAL and keeps
+            # the cipher block. The block is the minigame's canvas and carries
+            # the signal directly (which cells are open, which came back as
+            # plaintext), so hiding it to make room would stop the player
+            # sweeping and recording at the same time — the whole reason the
+            # board opens over a tool page at all.
+            (self.board_hc, ("hc-left", "terminal-hc")),
             (self.board_lw, ("lw-left",)),
             (self.board_st, ("st-left", "terminal-st")),
         ]
@@ -205,6 +217,10 @@ class IntakeScreen(Screen):
         # Interactive image viewer — right column of the Stegotool page
         self.image_st = StegoImagePanel()
         self.image_st.on_stamp_click = self._do_stamp
+
+        # Interactive cipher block — centre column of the Hashcrack page
+        self.cipher_hc = CipherBlockPanel()
+        self.cipher_hc.on_apply_click = self._apply_window
 
         self.debug        = DebugPanel()
         self.command_bar  = CommandBar()
@@ -244,11 +260,16 @@ class IntakeScreen(Screen):
                 yield self.breach_lists
 
             # ── Page 2: Hashcrack ─────────────────────────────────────
+            # 3-column layout: sidebar | cipher block | findings terminal.
+            # The cipher block takes the centre because it is the canvas the
+            # aperture minigame is played on, the same way the image viewer
+            # anchors the Stegotool page.
             with Horizontal(id="page-hashcrack", classes="tool-page"):
                 yield self.board_hc
                 with Vertical(classes="tool-left", id="hc-left"):
                     yield self.cdos_hc
                     yield self.ref_hc
+                yield self.cipher_hc
                 yield self.term_hc
 
             # ── Page 3: Logwatch ──────────────────────────────────────
@@ -279,7 +300,6 @@ class IntakeScreen(Screen):
 
     def on_mount(self) -> None:
         self._day_log = tools_bridge.generate_day_log(self._state.seed, self._day)
-        self._hc_log  = tools_bridge.generate_hashcrack_day_log(self._state.seed, self._day)
         self._apply_evidence_visibility()   # tool boards start hidden
         self._load_current_candidate()
 
@@ -307,6 +327,21 @@ class IntakeScreen(Screen):
                   else "[#00ff9f][b]Tab[/][/] Evidence")
         else:
             ev = "[#00ff9f][b]Tab[/][/] Evidence"
+        if self._decrypt_mode:
+            if self.cipher_hc.state == self.cipher_hc.SELECTING:
+                cost = tools_bridge.window_cost(self._state)
+                return (
+                    "[#00ffd5][b]SELECT WINDOW[/][/]  "
+                    "[dim]←→ Choose[/]  "
+                    f"[#00ffd5][b]Enter[/][/] Apply (−{cost} ⏱)  "
+                    "[#ffb454][b]Esc[/][/] Exit"
+                )
+            return (
+                "[#00ffd5][b]ALIGNMENT DIAL[/][/]  "
+                "[dim]←→ Step  PgUp/PgDn Jump[/]  "
+                "[dim]free[/]  "
+                "[#ffb454][b]Esc[/][/] Exit"
+            )
         if self._stamp_mode:
             return (
                 "[#00ffd5][b]STAMP MODE[/][/]  "
@@ -314,7 +349,9 @@ class IntakeScreen(Screen):
                 f"[#00ffd5][b]Space[/][/] Stamp (−{config.STEGO_STAMP_COST} ⏱)  "
                 "[#ffb454][b]Esc[/][/] Exit"
             )
-        stamp_hint = ("[#00ffd5][b]X[/][/] Stamp  " if self._page_index == 4 else "")
+        stamp_hint = ("[#00ffd5][b]X[/][/] Stamp  " if self._page_index == 4
+                      else "[#00ffd5][b]X[/][/] Decrypt  " if self._page_index == 2
+                      else "")
         return (
             "[#00ff9f][b]1-5[/][/] Pages  "
             "[#00ff9f][b]0[/][/] Rules  "
@@ -399,9 +436,12 @@ class IntakeScreen(Screen):
                 error=False,
             )
             return
-        # Leaving the stego page (or arriving anywhere) drops stamp mode.
+        # Leaving the stego page (or arriving anywhere) drops stamp mode,
+        # and likewise the hashcrack page drops aperture mode.
         if self._stamp_mode and index != 4:
             self._exit_stamp_mode(quiet=True)
+        if self._decrypt_mode and index != 2:
+            self._exit_decrypt_mode(quiet=True)
         self._page_index = index
         if _page_changed:
             sound_manager.play("page_switch")
@@ -473,11 +513,23 @@ class IntakeScreen(Screen):
         self.term_gs.set_initial_content(tools_bridge.get_ghostscan_identity(c))
         self.ref_gs.update_content(_REF_GHOSTSCAN)
         self.breach_lists.load_candidate(c, self._state.seed, self._day)
-        # Hashcrack terminal: shared credential audit log (free, candidate highlighted;
-        # Credential HUD upgrade pre-colours suspicious lines — issue #23)
-        self.term_hc.set_initial_content(tools_bridge.get_hashcrack_shared(
-            self._hc_log, c,
-            upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in ups))
+        # Hashcrack: the cipher block is the page. The findings terminal gets
+        # the free intro (block shape facts, and the tier LABEL only with
+        # Cipher ID HUD); everything else is bought one aperture at a time.
+        self._decrypt_mode    = False
+        self._cipher_resolved = False
+        self.cipher_hc.hint_upgrade = config.UPGRADE_HASH_HIGHLIGHT in ups
+        self.cipher_hc.label_tier = config.UPGRADE_CRYPTO_ID in ups
+        self.cipher_hc.load_candidate(c, self._day.number if self._day else 1)
+        self.term_hc.set_initial_content(
+            tools_bridge.get_cipher_intro(self.cipher_hc.block, ups))
+        # UNSALTED_STORAGE arrives already open, so the credential is resolved
+        # before the player touches anything — reflect that on every dossier
+        # panel immediately rather than waiting for an aperture that is never
+        # going to be spent.
+        if self.cipher_hc.block is not None and self.cipher_hc.block.pre_revealed:
+            self._cipher_resolved = True
+            self._publish_recovered_password(c)
         # Logwatch terminal: shared day log (Log Analyzer HUD upgrade applied
         # when owned — issue #23)
         self.term_lw.set_initial_content(tools_bridge.get_logwatch_shared(
@@ -811,11 +863,22 @@ class IntakeScreen(Screen):
                                      self._day_log, c, s),
                                  lambda c, s: tools_bridge.run_logwatch_filtered_shared(
                                      self._day_log, c, s)),
-            ToolName.HASHCRACK: (lambda c, s: tools_bridge.run_hashcrack_shared(self._hc_log, c, s),
-                                 lambda c, s: tools_bridge.run_hashcrack_filtered_shared(self._hc_log, c, s)),
-            # STEGOTOOL intentionally absent — the stego page uses the
-            # interactive stamp minigame instead of a flat tool run.
+            # HASHCRACK and STEGOTOOL intentionally absent — both pages use
+            # an interactive minigame instead of a flat tool run. Hashcrack
+            # joined them in the 2026-09-14 cipher-block rework; its entry
+            # point is _open_aperture, not this dispatch table.
         }
+        if tool not in runners:
+            # Previously a bare runners[tool], which would raise KeyError and
+            # take the screen down. No path reaches here today — every caller
+            # already routes the minigame tools elsewhere — but that invariant
+            # is held by two call sites rather than by this function, and the
+            # set of tools it excludes has now grown to two. Fail visibly and
+            # harmlessly instead of crashing the shift.
+            self.command_bar.set_response(
+                f"{tool.value.upper()} has no scan/filter run — use its page's "
+                f"minigame (X).", error=False)
+            return
         base_fn, filter_fn = runners[tool]
         try:
             result = filter_fn(self._candidate, self._state) if filtered \
@@ -826,7 +889,6 @@ class IntakeScreen(Screen):
 
         sound_manager.play({
             ToolName.GHOSTSCAN: "tool_run_ghostscan",
-            ToolName.HASHCRACK: "tool_run_hashcrack",
             ToolName.LOGWATCH:  "tool_run_logwatch",
         }[tool])
         if filtered:
@@ -839,7 +901,7 @@ class IntakeScreen(Screen):
         # stacking a second copy.
         term_id = self._TOOL_TERM[tool]
         term = self.query_one(f"#{term_id}", ToolTerminal)
-        if tool in (ToolName.LOGWATCH, ToolName.HASHCRACK):
+        if tool == ToolName.LOGWATCH:
             term.set_initial_content(result.raw_lines)
         elif tool == ToolName.GHOSTSCAN:
             term.set_result(result)
@@ -856,16 +918,6 @@ class IntakeScreen(Screen):
             else:
                 self.breach_lists.highlight_match()
 
-        # Issue #29: a hashcrack run resolves the dossier password field —
-        # cracked plaintext (or a held bcrypt) is reflected on every page.
-        if tool == ToolName.HASHCRACK:
-            plain = tools_bridge.crack_password(self._candidate)
-            resolved = plain if plain is not None else ""
-            for panel in (self.dossier, self.cdos_gs, self.cdos_hc,
-                          self.cdos_lw, self.cdos_st):
-                panel.cracked_password = resolved
-                panel.refresh()
-
         self._spent.add(tool)
         self.status.refresh_status(self._state, self._state.current_slot_index,
                                    self._page_index)
@@ -878,6 +930,143 @@ class IntakeScreen(Screen):
             f"flag findings on the Evidence Board (page 1)",
             error=False,
         )
+
+    # ── Hashcrack cipher-block minigame ───────────────────────────────────
+
+    def _publish_recovered_password(self, candidate) -> None:
+        """Reflect the recovered credential on every dossier panel.
+
+        Kept as one helper because three separate paths reach it — the block
+        resolving, an UNSALTED_STORAGE block that arrives pre-opened, and a
+        bcrypt block established as unrecoverable — and the panel convention
+        ("" means "established, nothing to recover"; a string means recovered)
+        is easy to get subtly wrong in three places.
+        """
+        plain = tools_bridge.crack_password(candidate)
+        resolved = plain if plain is not None else ""
+        for panel in (self.dossier, self.cdos_gs, self.cdos_hc,
+                      self.cdos_lw, self.cdos_st):
+            panel.cracked_password = resolved
+            panel.refresh()
+
+    def _enter_decrypt_mode(self) -> None:
+        # Progressive unlock (#33): the cipher block is the Hashcrack tool's
+        # entire run surface, so it stays inert until Hashcrack is unlocked.
+        # (_goto_page(2) already refuses the page, but the `h`/`crack` command
+        # calls this directly.)
+        if "hashcrack" not in self._state.unlocked_tools:
+            self.command_bar.set_response(
+                "HASHCRACK is locked — not available yet.", error=False)
+            return
+        if self._candidate is None or self._verdict_locked:
+            self.command_bar.set_response(
+                "Verdict locked — the cipher block is closed", error=True)
+            return
+        if self.cipher_hc.locked:
+            self.command_bar.set_response(
+                "This credential is already resolved.", error=False)
+            return
+        self._decrypt_mode = True
+        self.cipher_hc.open_selector()
+        sound_manager.play("tool_run_hashcrack")
+        if self.cipher_hc.state == self.cipher_hc.ENGAGED:
+            self.command_bar.set_response(
+                "ALIGNMENT DIAL — ←→ step · PgUp/PgDn jump · Esc exit")
+        else:
+            cost = tools_bridge.window_cost(self._state)
+            self.command_bar.set_response(
+                f"SELECT WINDOW — ←→ choose · Enter apply (\u2212{cost} \u23f1) "
+                f"· Esc cancel")
+        self._refresh_footer()
+
+    def _exit_decrypt_mode(self, quiet: bool = False) -> None:
+        self._decrypt_mode = False
+        self.cipher_hc.close()
+        if not quiet:
+            self.command_bar.set_response("decrypt mode off")
+        self._refresh_footer()
+
+    def _apply_window(self) -> None:
+        """Stage 1 — buy and apply the selected decryption window.
+
+        The charge happens here rather than in the panel because this is the
+        one place that owns ⏱ and knows about the verdict lock. A refused
+        purchase costs nothing (apply_window deducts only after it has checked
+        affordability), so a player who cannot pay is never left worse off.
+        """
+        if self._candidate is None or self._verdict_locked:
+            return
+        block = self.cipher_hc.block
+        if block is None or self.cipher_hc.state != self.cipher_hc.SELECTING:
+            return
+        try:
+            res = tools_bridge.apply_window(
+                block, self.cipher_hc.selected_tier, self._state)
+        except tools_bridge.InsufficientCompute as e:
+            self.command_bar.set_response(str(e), error=True)
+            return
+
+        self.cipher_hc.apply_result(res)
+        self.term_hc.add_lines(tools_bridge.window_log_lines(block, res))
+        self._spent.add(ToolName.HASHCRACK)
+
+        if res.outcome == tools_bridge.CIPHER_WINDOW_STALLED:
+            # bcrypt established as unrecoverable. That IS the finding — record
+            # it on the dossier so the player is never asked to pay twice to
+            # learn the same fact on another page.
+            self._cipher_resolved = True
+            self._publish_recovered_password(self._candidate)
+            self.command_bar.set_response(
+                "Key-stretched — nothing to recover. The digest said so for free.",
+                error=False)
+            self._exit_decrypt_mode(quiet=True)
+        elif res.outcome == tools_bridge.CIPHER_WINDOW_ENGAGED:
+            sound_manager.play("filter_apply")
+            self.command_bar.set_response(
+                "Decrypt engaged — turn the alignment dial until the text settles")
+        else:
+            self.command_bar.set_response(
+                f"Wrong window — no structure emerged. −{res.cost} ⏱",
+                error=True)
+
+        self.status.refresh_status(self._state, self._state.current_slot_index,
+                                   self._page_index)
+        self._refresh_footer()
+
+    def _turn_dial(self, delta: int) -> None:
+        """Stage 2 — free, live, and the only place the credential resolves."""
+        if self._candidate is None or self.cipher_hc.block is None:
+            return
+        was_locked = self.cipher_hc.locked
+        self.cipher_hc.move_dial(delta)
+        if self.cipher_hc.locked and not was_locked and not self._cipher_resolved:
+            self._cipher_resolved = True
+            sound_manager.play("filter_apply")
+            self.term_hc.add_lines(tools_bridge.cipher_resolve_lines(
+                self.cipher_hc.block, self._candidate,
+                self._day.number if self._day else 1,
+                self._state.upgrades))
+            self._publish_recovered_password(self._candidate)
+            self.command_bar.set_response(
+                "Aligned — credential recovered. Flag it on the Evidence Board.")
+            self._exit_decrypt_mode(quiet=True)
+        self._refresh_footer()
+
+    def _publish_recovered_password(self, candidate) -> None:
+        """Reflect the recovered credential on every dossier panel.
+
+        Kept as one helper because three separate paths reach it — the block
+        locking, an UNSALTED_STORAGE block that arrives already decrypted, and
+        a bcrypt block established as unrecoverable — and the panel convention
+        ("" means "established, nothing to recover"; a string means recovered)
+        is easy to get subtly wrong in three places.
+        """
+        plain = tools_bridge.crack_password(candidate)
+        resolved = plain if plain is not None else ""
+        for panel in (self.dossier, self.cdos_gs, self.cdos_hc,
+                      self.cdos_lw, self.cdos_st):
+            panel.cracked_password = resolved
+            panel.refresh()
 
     # ── Stegotool stamp minigame ──────────────────────────────────────────
 
@@ -1053,6 +1242,36 @@ class IntakeScreen(Screen):
         k  = event.key
         ch = event.character  # empty string for non-printable keys
 
+        # ── Hashcrack decrypt mode — two stages share the arrow keys ─────────
+        # Stage 1 uses them to pick a window, stage 2 to turn the dial. Which
+        # stage is live is the panel's state, not a second flag here, so the
+        # two can never disagree about what an arrow press means.
+        if self._decrypt_mode:
+            stage = self.cipher_hc.state
+            if k in ("escape", config.KEY_BINDINGS["decrypt_mode"]):
+                self._exit_decrypt_mode(); event.stop(); return
+            if stage == self.cipher_hc.SELECTING:
+                if k in ("left", "up"):
+                    self.cipher_hc.move_selection(-1); event.stop(); return
+                if k in ("right", "down"):
+                    self.cipher_hc.move_selection(1); event.stop(); return
+                if k == "enter":
+                    self._apply_window(); event.stop(); return
+            elif stage in (self.cipher_hc.ENGAGED, self.cipher_hc.LOCKED):
+                if k == "left":
+                    self._turn_dial(-1); event.stop(); return
+                if k == "right":
+                    self._turn_dial(1); event.stop(); return
+                if k == "pagedown":
+                    self._turn_dial(-config.CIPHER_DIAL_COARSE_STEP)
+                    event.stop(); return
+                if k == "pageup":
+                    self._turn_dial(config.CIPHER_DIAL_COARSE_STEP)
+                    event.stop(); return
+            if k not in ("1", "2", "3", "4", "5"):
+                event.stop(); return          # swallow everything else
+            self._exit_decrypt_mode(quiet=True)  # page nav below exits it
+
         # ── Stego stamp mode — captures arrows/Space/Esc while active ─────────
         if self._stamp_mode:
             if k in ("up", "down", "left", "right"):
@@ -1093,7 +1312,12 @@ class IntakeScreen(Screen):
         if k == "grave_accent":
             self.debug.display = not self.debug.display; event.stop(); return
 
-        # ── Stamp mode entry — X on the stego page with an empty buffer ────────
+        # ── Minigame entry — X, dispatched on which page you are standing on.
+        # Both modes share the physical key (see config.KEY_BINDINGS) because
+        # they are the same gesture: "engage this page's reveal minigame".
+        if (k == config.KEY_BINDINGS["decrypt_mode"] and self._page_index == 2
+                and not self.command_bar.get_buffer()):
+            self._enter_decrypt_mode(); event.stop(); return
         if (k == config.KEY_BINDINGS["stamp_mode"] and self._page_index == 4
                 and not self.command_bar.get_buffer()):
             self._enter_stamp_mode(); event.stop(); return
@@ -1126,9 +1350,9 @@ class IntakeScreen(Screen):
 
     _FILTER_PAGE_MAP: ClassVar[dict[int, ToolName]] = {
         1: ToolName.GHOSTSCAN,
-        2: ToolName.HASHCRACK,
         3: ToolName.LOGWATCH,
-        # 4 (stegotool) removed — stamp minigame replaced scan/filter there.
+        # 2 (hashcrack) and 4 (stegotool) removed — both pages replaced their
+        # scan/filter tiers with an interactive minigame.
     }
 
     def _execute_command(self, raw: str) -> None:
@@ -1146,7 +1370,14 @@ class IntakeScreen(Screen):
 
         if kind == "tool":
             self._goto_page(self._TOOL_PAGE[arg])
-            self._run_tool(arg)   # sets command_bar response internally
+            if arg is ToolName.HASHCRACK:
+                # `crack` / `h` is the Hashcrack page's minigame entry point,
+                # exactly as `s` is the stego page's — it opens the decryption
+                # window selector rather than running a tool that no longer
+                # exists.
+                self._enter_decrypt_mode()
+            else:
+                self._run_tool(arg)   # sets command_bar response internally
 
         elif kind == "stamp":
             self._goto_page(4)
@@ -1155,6 +1386,11 @@ class IntakeScreen(Screen):
         elif kind == "filter":
             if self._page_index == 4:
                 self._activate_stego_filter()
+                return
+            if self._page_index == 2:
+                self.command_bar.set_response(
+                    "Hashcrack has no filter — decrypt the cipher block (X) "
+                    "to recover the credential.", error=False)
                 return
             tool = self._FILTER_PAGE_MAP.get(self._page_index)
             if tool is None:
@@ -1189,10 +1425,11 @@ class IntakeScreen(Screen):
 
         elif kind == "help":
             self.command_bar.set_response(
-                "COMMANDS:  recon · crack · analyze · stamp (stego) · filter · "
+                "COMMANDS:  recon · crack (cipher block) · analyze · "
+                "stamp (stego) · filter · "
                 "admit · deny · next · rules · evidence · help · quit  "
                 "·  pages 1-5  ·  rules 0  ·  Tab = evidence board (tool pages)  "
-                "·  X = stamp mode (stego page)",
+                "·  X = decrypt (hashcrack) / stamp mode (stego)",
                 error=False,
             )
 

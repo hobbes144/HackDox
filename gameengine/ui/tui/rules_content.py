@@ -37,8 +37,7 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
     ("DOSSIER",     DiscrepancyKind.AFFILIATION_NOT_STATED, "Affiliation not stated"),
     ("DOSSIER",     DiscrepancyKind.DISPOSABLE_EMAIL,       "Disposable email domain"),
-    ("DOSSIER",     DiscrepancyKind.WEAK_ENCRYPTION,        "Weak password encryption"),
-    ("DOSSIER",     DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
+
     # OSINT (Ghostscan)
     # #51: moved out of DOSSIER - confirming it needs the platform sweep.
     ("OSINT",       DiscrepancyKind.MISSING_PUBLIC_PROFILE, "Missing public profile"),
@@ -59,6 +58,28 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("FORENSICS",   DiscrepancyKind.LOW_AND_SLOW,           "Low-and-slow intrusion"),
     ("FORENSICS",   DiscrepancyKind.CLAIMED_IP_MISMATCH,    "Claimed-IP mismatch"),
     # CREDENTIAL (Hashcrack)
+    #
+    # WEAK_ENCRYPTION and UNSALTED_STORAGE moved here from DOSSIER on
+    # 2026-09-14, and they moved for two different reasons.
+    #
+    # WEAK_ENCRYPTION was simply out of date: the cipher-block rework retiered
+    # it DOSSIER -> HASHCRACK in _SEVERITY_REVEAL, but its catalogue entry was
+    # left behind — so the board filed it under a group whose tool no longer
+    # revealed it. That is the drift this catalogue exists to prevent.
+    #
+    # UNSALTED_STORAGE is a deliberate split: its GROUP is CREDENTIAL (it is a
+    # credential finding and belongs beside the other three), while its TIER
+    # stays DOSSIER, because the honest answer to "which tool reveals it" is
+    # still none — an unsalted value sits on the dossier in the clear, and that
+    # exposure IS the violation.
+    #
+    # The split is safe because visible_catalog() gates each kind by its OWN
+    # tool rather than by its group, so UNSALTED_STORAGE correctly shows from
+    # day 1 even though the Hashcrack page does not exist until day 3. The one
+    # gap that opens — a rules tab locked until day 3 documenting a kind
+    # plantable on day 1 — is closed by build_creds_text's locked branch.
+    ("CREDENTIAL",  DiscrepancyKind.WEAK_ENCRYPTION,        "Weak password encryption"),
+    ("CREDENTIAL",  DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
     ("CREDENTIAL",  DiscrepancyKind.LEAKED_PASSWORD,        "Leaked password"),
     ("CREDENTIAL",  DiscrepancyKind.WEAK_CREDENTIAL,        "Weak credential"),
     ("CREDENTIAL",  DiscrepancyKind.CROSS_BREACH_REUSE,     "Cross-breach password reuse"),
@@ -203,9 +224,6 @@ VIOLATION_CLUSTERS: list[
     ("DOSSIER",    "dossier-identity", "Identity Confirmation", (
         DiscrepancyKind.AFFILIATION_NOT_STATED,
         DiscrepancyKind.DISPOSABLE_EMAIL)),
-    ("DOSSIER",    "dossier-password", "Password Security", (
-        DiscrepancyKind.WEAK_ENCRYPTION,
-        DiscrepancyKind.UNSALTED_STORAGE)),
     ("DOSSIER",    "dossier-personal", "Personal", (
         DiscrepancyKind.HOSTILE_CHAT,)),
     # OSINT / Ghostscan — the claim, the fabrication, the trace left elsewhere.
@@ -221,11 +239,18 @@ VIOLATION_CLUSTERS: list[
         DiscrepancyKind.BREACH_HIT,
         DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
         DiscrepancyKind.THREAT_FORUM_MATCH)),
-    # CREDENTIAL / Hashcrack.
+    # CREDENTIAL / Hashcrack. Split in two on 2026-09-14 when the old
+    # "dossier-password" cluster emptied into this group: HOW the credential is
+    # stored is a different question from WHETHER it has already been exposed,
+    # and the player checks them at different moments — storage off the block's
+    # header, exposure off the recovered plaintext.
+    ("CREDENTIAL", "cred-storage", "Credential Storage", (
+        DiscrepancyKind.WEAK_ENCRYPTION,
+        DiscrepancyKind.UNSALTED_STORAGE)),
     ("CREDENTIAL", "cred-exposure", "Credential Exposure", (
         DiscrepancyKind.WEAK_CREDENTIAL,
-        DiscrepancyKind.CROSS_BREACH_REUSE,
-        DiscrepancyKind.LEAKED_PASSWORD)),
+        DiscrepancyKind.LEAKED_PASSWORD,
+        DiscrepancyKind.CROSS_BREACH_REUSE)),
     # FORENSICS / Logwatch — when, where from, and the shape of the attack.
     ("FORENSICS",  "forensics-timing", "Access Timing", (
         DiscrepancyKind.AFTER_HOURS_ACCESS,
@@ -411,8 +436,8 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.HOSTILE_CHAT:           "free — read the chat panel (Sentiment Scanner upgrade ⚠-marks it)",
     DiscrepancyKind.AFFILIATION_NOT_STATED: "DOSSIER — the affiliation field is blank; nothing was claimed",
     DiscrepancyKind.DISPOSABLE_EMAIL:       "free — domain visible on the dossier, no tool needed (quick deny)",
-    DiscrepancyKind.WEAK_ENCRYPTION:        "free — the raw hash is on the dossier (32 hex = MD5, auto-labeled with Cipher ID HUD); a crack (if attempted) reveals a fine password — the algorithm is the problem, not the value",
-    DiscrepancyKind.UNSALTED_STORAGE:       "free — the ⚠ UNSALTED marker on the dossier shows the stored password in the clear; no crack needed at all",
+    DiscrepancyKind.WEAK_ENCRYPTION:        "free — the cipher block states its digest shape on arrival (32 hex = MD5; named for you with Cipher ID HUD). Decrypting it recovers a perfectly good password — the algorithm is the problem, not the value",
+    DiscrepancyKind.UNSALTED_STORAGE:       "free — the ⚠ UNSALTED marker on the dossier shows the stored password in the clear, and the cipher block arrives already decrypted; no window, no dial, nothing to spend",
     DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "base recon shows commit email · filter highlights the mismatch",
     DiscrepancyKind.BREACH_HIT:             "email in a breach panel corpus — exposure, not misconduct; chase it with Hashcrack",
     DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "handle on a CRITICAL forum — blended in base run, filter labels it",
@@ -428,10 +453,9 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.AFTER_HOURS_ACCESS:     "activity outside business hours — benign alone (minor)",
     DiscrepancyKind.LOW_AND_SLOW:           "sub-threshold on purpose — only the filter's correlation finds it",
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free tier highlights AUTH_OK rows that diverge from the dossier's claimed IP — corroborate before denying",
-    DiscrepancyKind.LEAKED_PASSWORD:        "crack reveals plaintext + BREACH_MATCH names the corpus",
-    DiscrepancyKind.WEAK_CREDENTIAL:        "weak encryption (MD5) cracks to a weak plaintext — minor hygiene flag",
-    DiscrepancyKind.CROSS_BREACH_REUSE:     "crack + a SECOND corpus naming the same plaintext — the breach panel lists both",
-    DiscrepancyKind.UNSALTED_STORAGE:       "hash shape is free info; crack is instant — storage hygiene failure",
+    DiscrepancyKind.LEAKED_PASSWORD:        "align the cipher block and the recovery readout names the corpus the plaintext was dumped in; the Logwatch BREACH_MATCH rows corroborate it",
+    DiscrepancyKind.WEAK_CREDENTIAL:        "the recovered plaintext is a dictionary word or keyboard walk — judge it yourself, or buy Crack Verdict Analyzer to have it called",
+    DiscrepancyKind.CROSS_BREACH_REUSE:     "the recovery readout names TWO corpora holding the same plaintext — the breach panel lists both",
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
 
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
@@ -624,15 +648,25 @@ def _rule_status(day: Day | None, kind: DiscrepancyKind) -> tuple[str, str]:
     return "—", "#3d6478"
 
 
-def violation_table(day: Day | None, group: str) -> list[str]:
+def violation_table(day: Day | None, group: str,
+                    unlocked_tools: set[str] | None = None) -> list[str]:
     """The templated violations table for one board group.
 
     Columns: violation (exact enum value) · severity · revealing surface ·
     today's rule status. A dim second line per row carries the trigger and
     how to catch it. Rows sort minor → critical, matching the board.
+
+    `unlocked_tools` filters rows to kinds the player can actually observe
+    today, exactly as visible_catalog() does for the evidence board — pass it
+    and the two surfaces agree by construction. It defaults to None (show
+    everything) so every existing caller inside an already-unlocked tab is
+    unaffected; the one caller that needs it is build_creds_text's LOCKED
+    branch, which documents the dossier-tier credential kind while the tool
+    itself is still days away.
     """
     rows = sorted(
-        [(k, lbl) for g, k, lbl in VIOLATION_CATALOG if g == group],
+        [(k, lbl) for g, k, lbl in VIOLATION_CATALOG
+         if g == group and _tool_unlocked(_TOOL.get(k), unlocked_tools)],
         key=lambda it: _SEV_RANK.get(_SEVERITY.get(it[0], "minor"), 0),
     )
     accent = GROUP_ACCENT.get(group, "#7dd3c0")
@@ -903,29 +937,28 @@ def build_dossier_text(day: Day | None) -> str:
     lines.append("")
     lines += violation_table(day, "DOSSIER")
 
-    # ── Password encryption-strength chip ───────────────────────────────
-    lines += _sub("password encryption strength", "#7dd3c0")
+    # ── The password field ──────────────────────────────────────────────
+    # The dossier no longer labels encryption strength at all — establishing
+    # the algorithm is the cipher block's job, and the full tier table lives on
+    # the CREDENTIALS tab. What stays here is only what the dossier itself
+    # shows: the raw hash, and the one credential violation that needs no tool.
+    lines += _sub("the password field", "#7dd3c0")
     lines += [
-        "[#ff5470]WEAK ENC[/]    MD5 — cracks instantly. On its own this plants",
-        "             WEAK_ENCRYPTION (the algorithm is the problem — the",
-        "             chip alone is enough, no tool needed). Paired with a",
-        "             weak plaintext it's WEAK_CREDENTIAL instead, which",
-        "             Hashcrack has to crack to confirm.",
-        "             [dim]e.g. 5f4dcc3b5aa765d61d8327deb882cf99[/] [#6b7785](32 hex)[/]",
-        "[#ffd93d]MEDIUM ENC[/]  SHA256 — crackable with effort, usually clean.",
-        "             [dim]e.g. a94a8fe5ccb19ba61c4c0873d391e987…[/] [#6b7785](64 hex)[/]",
-        "[#00ff9f]STRONG ENC[/]  bcrypt — always safe; never worth cracking.",
-        "             [dim]e.g. $2b$12$KIXQ7c5s9j2mR8vN…[/] [#6b7785]($2b$ prefix)[/]",
+        "  The dossier prints the submitted credential as a [b]raw hash[/] and",
+        "  says nothing about how strong it is. That is deliberate: the",
+        "  algorithm is something you establish on the Hashcrack page, not",
+        "  something handed to you here.",
+        "             [dim]e.g. 5f4dcc3b5aa765d61d8327deb882cf99…[/]",
         "",
-        "  [dim]Without Cipher ID HUD the chip label above isn't shown — count[/]",
-        "  [dim]hex characters (or spot the $2b$ prefix) against the examples[/]",
-        "  [dim]to tell the tiers apart yourself.[/]",
+        "  Count its characters (or spot a [b]$2b$[/] prefix) and the CREDENTIALS",
+        "  tab's table tells you which algorithm you are looking at, whether it",
+        "  is worth opening, and what it costs to be wrong.",
         "",
-        "  [#ff5470]⚠ UNSALTED[/]  a rarer marker that replaces the hash chip",
-        "             entirely — storage has no salt at all, so the Password",
-        "             entry just IS the plaintext, printed in the clear, no",
-        "             Hashcrack run needed or possible. UNSALTED_STORAGE",
-        "             (major): e.g. [dim]monkey123  ⚠ UNSALTED[/]",
+        "  [#ff5470]⚠ UNSALTED[/]  the one exception, and the only credential",
+        "             violation visible without a tool. Storage has no salt at",
+        "             all, so the Password entry just IS the plaintext, printed",
+        "             in the clear. UNSALTED_STORAGE (major):",
+        "             e.g. [dim]monkey123  ⚠ UNSALTED[/]",
     ]
 
     # ── The day's rule sheet (#49) ─────────────────────────────────────
@@ -1039,10 +1072,12 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [#ff8c42]2. highlighted[/]  after base recon — candidate email marked ►",
         "  [#ff5470]3. confirmed[/]    after filter — red ▲ BREACH_HIT label",
         "",
-        "  [dim]The named databases always match the BREACH_MATCH entries in the",
-        "  Hashcrack audit log. A single corpus is a BREACH_HIT (minor — they",
-        "  were exposed). TWO corpora naming the same cracked plaintext is",
-        "  CROSS_BREACH_REUSE (major — they never changed it).[/]",
+        "  [dim]The named databases always match the BREACH_MATCH rows in the",
+        "  Logwatch day log and the corpus the cipher block names when a",
+        "  credential resolves — all three surfaces agree. A single corpus is a",
+        "  BREACH_HIT (minor — they were exposed). TWO corpora holding the same",
+        "  recovered plaintext is CROSS_BREACH_REUSE (critical — being dumped is",
+        "  misfortune, still reusing it is a choice).[/]",
     ]
     return "\n".join(lines)
 
@@ -1051,69 +1086,132 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
 
 
 def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
-    if not _tool_unlocked(ToolName.HASHCRACK, unlocked_tools):
-        return _locked_tab_text(ToolName.HASHCRACK, "HASHCRACK — CREDENTIAL ANALYSIS")
     hc = config.TOOL_COSTS["hashcrack"]
-    hf = config.FILTER_COSTS["hashcrack"]
+
+    # The tab is LOCKED until Hashcrack is granted — but it must still document
+    # the credential kinds the player can already meet. UNSALTED_STORAGE is
+    # catalogued under CREDENTIAL while staying DOSSIER-tiered (see
+    # VIOLATION_CATALOG), so it is plantable from day 1, three days before this
+    # tab would otherwise open. A violation that is plantable and undocumented
+    # on the same day is unflaggable in practice: the player sees a chip on the
+    # evidence board with nowhere to look it up.
+    #
+    # violation_table() already filters its rows by each kind's own revealing
+    # tool, so passing the locked tab through it prints exactly the subset that
+    # needs documenting, and nothing that would spoil the tool itself.
+    if not _tool_unlocked(ToolName.HASHCRACK, unlocked_tools):
+        lines = _band("HASHCRACK — CREDENTIAL ANALYSIS — LOCKED", "#3d6478")
+        lines += [
+            "",
+            "  [#3d6478][b]⊘  Not authorized yet.[/][/]",
+            (f"  [dim]Hashcrack unlocks on Day "
+             f"{config.TOOL_UNLOCK_DAY['hashcrack']}. Its cipher block, and the"),
+            "  violations only it can establish, open up the day the Overseer",
+            "  grants it.[/]",
+            "",
+            "  [dim]One credential violation needs no tool at all, and you can",
+            "  meet it today — it is listed below.[/]",
+            "",
+        ]
+        lines += violation_table(day, "CREDENTIAL", unlocked_tools=unlocked_tools)
+        return "\n".join(lines)
+
     lines: list[str] = []
-    lines += _band("HASHCRACK — CREDENTIAL ANALYSIS", "#c084fc")
+    lines += _band("HASHCRACK — THE CIPHER BLOCK", "#c084fc")
     lines += [
-        "  Every dossier now carries a PASSWORD field: the candidate's",
-        "  credential in encrypted form, with its encryption strength shown",
-        "  up front. Hashcrack attempts to crack it; on success the plaintext",
-        "  replaces the encrypted value on every page.",
+        "  Every dossier carries a PASSWORD field: the candidate's credential",
+        "  in encrypted form. The dossier shows you the raw hash and nothing",
+        "  else — no strength label, no verdict.",
+        "",
+        "  The Hashcrack page renders that credential as a block of ciphertext",
+        "  and decrypts it in [b]two stages[/]: first you choose the decryption",
+        "  window matching the algorithm, then you tune an alignment dial until",
+        "  the text resolves. Only the first stage costs ⏱.",
     ]
-    lines += _sub("encryption strength — identify it from the raw hash", "#c084fc")
+    lines += _sub("before you spend — read the block", "#c084fc")
     lines += [
-        "  With [#00ff9f]Cipher ID HUD[/] bought, the dossier auto-labels this",
-        "  chip for you. Without it, the dossier shows only the raw hash —",
-        "  use its LENGTH and SHAPE against this table to identify the tier",
-        "  yourself:",
+        "  The block's header states its DIGEST SHAPE, free, on arrival. That",
+        "  one line answers both questions that matter:",
         "",
-        "[#6b7785]  TIER     HASH SHAPE          CRACKABLE   MEANING[/]",
+        "[#6b7785]  DIGEST                 ALGORITHM   DIAL     WORTH OPENING?[/]",
         f"[#1c2733]{'─' * _W}[/]",
-        (f"  [#00ff9f]{_fit('STRONG', 9)}[/]{_fit('bcrypt  $2b$…', 20)}"
-        f"{_fit('never', 12)}always safe — no violation possible"),
-        (f"  [#ffd93d]{_fit('MEDIUM', 9)}[/]{_fit('SHA256  64 hex', 20)}"
-        f"{_fit('with effort', 12)}crack it, then judge the plaintext"),
-        (f"  [#ff5470]{_fit('WEAK', 9)}[/]{_fit('MD5     32 hex', 20)}"
-        f"{_fit('instantly', 12)}weak enc + weak plaintext = violation"),
+        (f"  [#ff5470]{_fit('32 hex characters', 23)}[/]{_fit('MD5', 12)}"
+        f"{_fit('short', 9)}yes — cheapest crack in the game"),
+        (f"  [#ffd93d]{_fit('64 hex characters', 23)}[/]{_fit('SHA-256', 12)}"
+        f"{_fit('long', 9)}yes — but the key takes finding"),
+        (f"  [#00ff9f]{_fit('$2b$ prefix', 23)}[/]{_fit('bcrypt', 12)}"
+        f"{_fit('none', 9)}[b]NO[/] — nothing is recoverable"),
         f"[#1c2733]{'─' * _W}[/]",
-        "  [dim]example — count the hex characters after the prefix:[/]",
-        "  [#00ff9f]STRONG[/] [dim]$2b$12$KIXQ7c5s9j2mR8vN…[/]         [dim]($2b$ prefix — never a hash to crack)[/]",
-        "  [#ffd93d]MEDIUM[/] [dim]a94a8fe5ccb19ba61c4c0873d391e987…[/] [dim](64 hex characters)[/]",
-        "  [#ff5470]WEAK[/]   [dim]5f4dcc3b5aa765d61d8327deb882cf99[/]   [dim](32 hex characters)[/]",
         "",
-        "  The tier is visible BEFORE spending any ⏱ — use it to decide",
-        "  whether a crack is worth the hours. A bcrypt credential is a dead",
-        "  end by design; an MD5 one begs to be cracked.",
+        "  [#00ff9f]bcrypt is a dead end by design.[/] Its window fits, the decrypt",
+        "  engages, and then it stalls — key-stretched at cost factor 12, with",
+        "  no alignment to find. Identifying it correctly and walking away",
+        "  costs [b]nothing[/]; opening it to find out costs a full window.",
+        "",
+        "  [#00ff9f]Cipher ID HUD[/] names the algorithm on the block for you, if you",
+        "  would rather buy the read than learn it.",
     ]
-    lines += _sub("judging a cracked plaintext", "#c084fc")
+    lines += _sub("stage 1 — the decryption window", "#c084fc")
+    lines += [
+        "  [#c084fc]X[/] opens the selector. Three windows, one per algorithm family;",
+        f"  applying one costs {hc} ⏱ (the tool's base cost, so inflation and the",
+        "  Hashcrack Optimizer both apply).",
+        "",
+        "  [#ff5470]wrong window[/]   no structure emerges. The ⏱ is spent. Read the",
+        "                 digest and try again.",
+        "  [#00ff9f]bcrypt window[/]  fits, engages, stalls. Nothing to recover.",
+        "  [#c084fc]right window[/]   the block gains structure and the dial unlocks.",
+    ]
+    lines += _sub("stage 2 — the alignment dial", "#c084fc")
+    lines += [
+        "  The decrypt has the right family but the wrong derived key. Turning",
+        "  the dial is [b]free[/] — arrows step, PgUp/PgDn jump — and the block",
+        "  updates live.",
+        "",
+        "  Too far out and the block is pure ciphertext. Come within range and",
+        "  characters start holding still; keep closing and the password tiles",
+        "  itself across every row, so you can read it by consensus long before",
+        "  you are exact:",
+        "",
+        "  [dim]far   [/] [#6b7785]b99a8deb7c008949ad7f61aacf6edb07[/]",
+        "  [dim]close [/] [#c084fc]qN7!fWc$4kZt2[/][#6b7785]9q97!fWc$4kcf2·qN0![/]",
+        "  [dim]exact [/] [#c084fc]qN7!fWc$4kZt2·qN7!fWc$4kZt2·qN7![/]",
+        "",
+        "  A few cells only settle at the [b]exact[/] value — that is the lock. The",
+        "  credential resolves, the breach corpus is named, and the violations",
+        "  are labelled only there.",
+        "",
+        "  [#00ff9f]Credential HUD[/] marks the band of the dial the true key sits in.",
+        "  It narrows the search; it does not answer it.",
+    ]
+    lines += _sub("then judge what you recovered", "#c084fc")
     lines += [
         "  The call is meant to be obvious:",
         "  [#ff5470]weak[/]    [b]password01[/] · dictionary words · dates · keyboard walks",
         "  [#00ff9f]strong[/]  [b]drawkcab16445$&[/] · long, mixed, symbol-laden strings",
         "",
-        "  [#00ff9f]strong plaintext[/] → no concern, whatever the tier",
-        "  [#ffd93d]weak plaintext + weak encryption[/] → WEAK_CREDENTIAL (minor —",
+        "  [#00ff9f]strong plaintext[/] → no concern, whatever the algorithm",
+        "  [#ffd93d]weak plaintext + weak algorithm[/] → WEAK_CREDENTIAL (minor —",
         "  flag it; not grounds to deny by itself)",
-        "  [#ff5470]plaintext found in a breach corpus[/] → LEAKED_PASSWORD (critical)",
-    ]
-    lines += _sub("investigation tiers", "#c084fc")
-    lines += [
-        "  [#00ff9f]free[/]     shared audit log + the dossier hash tier (no ⏱)",
-        f"  [#ffb454]run H[/]    highlight target · crack inline in the log      [dim]{hc} ⏱[/]",
-        f"  [#c084fc]filter[/]   explicit ▲ violation labels + corpus analysis   [dim]+{hf} ⏱[/]",
+        "  [#ff8c42]plaintext found in a breach corpus[/] → LEAKED_PASSWORD (major)",
+        "  [#ff5470]the same plaintext in TWO corpora[/] → CROSS_BREACH_REUSE",
+        "  (critical — being dumped is misfortune, still reusing it is a choice)",
+        "",
+        "  [#00ff9f]Crack Verdict Analyzer[/] adds a one-line strength call to the",
+        "  recovery block, if you would rather not make it yourself.",
     ]
     lines.append("")
-    lines += violation_table(day, "CREDENTIAL")
+    lines += violation_table(day, "CREDENTIAL", unlocked_tools=unlocked_tools)
     lines += _sub("composing with other tools", "#c084fc")
     lines += [
-        "  A BREACH_MATCH line in the audit log names the same database the",
-        "  Ghostscan breach panel highlights — the two surfaces corroborate",
-        "  each other. Credential-stuffing bursts in this log are the same",
-        "  events Logwatch resolves as CREDENTIAL_STUFFING; the claimed IP on",
-        "  the dossier is your reference for spotting foreign login sources.",
+        "  The Logwatch day log carries this candidate's HASH_SUBMIT row (which",
+        "  credential was submitted, and from which IP) and any BREACH_MATCH",
+        "  rows for their email. Those corroborate what the cipher block tells",
+        "  you — the corpora named in both places are always the same, and the",
+        "  Ghostscan breach panel shows the third view of it.",
+        "",
+        "  Logwatch never names a credential violation itself; it only shows",
+        "  the events. Naming them is this page's job.",
     ]
     return "\n".join(lines)
 

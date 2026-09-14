@@ -695,7 +695,7 @@ def _ghostscan_sweep_lines(
                 lines.append(f"  [#ff8c42]▲ email in {len(_dbs)} breach corpora — "
                              f"check Hashcrack for password reuse[/]")
             else:
-                lines.append(f"  [#ff8c42]▲ email in breach corpus[/]")
+                lines.append("  [#ff8c42]▲ email in breach corpus[/]")
 
 
     return lines
@@ -973,48 +973,32 @@ def get_breach_lists_for_day(
     return result
 
 
-# ─── Hashcrack — shared credential audit log ────────────────────────────────
+# ─── Credential-event helpers ───────────────────────────────────────────────
 #
-# Shared day log of credential events: AUTH_FAIL/OK (stuffing patterns),
-# HASH_SUBMIT (hash type + truncated value), BREACH_MATCH (corpus entries).
-# Generated once per day. Player scrolls to find their candidate's email,
-# then runs crack (H) to highlight + crack inline, filter (F) for labels.
+# 2026-09-14 — what used to be here was the Hashcrack page's own shared
+# credential audit log: ~440 lines spanning _hc_candidate_entries,
+# _hc_noise_entries, generate_hashcrack_day_log, _render_hc_log,
+# get_hashcrack_shared, run_hashcrack_shared and run_hashcrack_filtered_shared.
+# The cipher-block rework removed all of it.
+#
+# The Hashcrack page has no log to render any more — it IS the aperture
+# minigame now (see "HASHCRACK — the cipher block" at the end of this module).
+# The two row types that carried real evidence and had nowhere else to live,
+# HASH_SUBMIT and BREACH_MATCH, were relocated into the Logwatch day log, which
+# is already an audit log; see the credential-rows block at the end of
+# _lw_candidate_entries below. The AUTH_OK/AUTH_FAIL bursts did NOT move —
+# Logwatch has always generated its own for the kinds it owns, and merging
+# would have printed every burst twice.
+#
+# Deleted rather than parked as dead code deliberately. A renderer nothing
+# calls, still computing violation labels from ground truth, is exactly the
+# surface this module keeps drifting on — #48 and #57 were each two copies of
+# one list that fell out of step, and this would have been a third.
+#
+# What survives is the small amount still in use: the algorithm label for the
+# relocated HASH_SUBMIT rows.
 
-_HC_DATE          = "2024-01-15"
-_HC_NOISE_USERS   = ["j.morris", "r.chen", "s.patel", "admin", "k.okonkwo",
-                      "t.nakamura", "l.vasquez", "d.kowalski", "m.ibrahim",
-                      "a.petrov", "b.silva", "c.johannsen", "n.reyes", "p.walsh"]
-_HC_NOISE_DOMAINS = ["corp.net", "internal.io", "hackdox.local", "company.org"]
-_HC_NOISE_IPS     = ["10.0.1.15", "10.0.1.42", "10.0.2.7", "10.0.3.88",
-                      "192.168.0.55", "192.168.1.200", "172.16.0.14"]
-_HC_BREACH_NAMES  = [db[0] for db in _BREACH_DATABASES]  # keep in sync with _BREACH_DATABASES
 _HC_ALGO_LABEL_MAP = {32: "MD5", 40: "SHA1", 64: "SHA256"}
-
-_HC_WEAK_PASSWORDS   = ["password", "123456", "password123", "letmein", "qwerty",
-                         "admin", "welcome1", "monkey", "dragon", "sunshine",
-                         "iloveyou", "princess", "1234567890", "abc123"]
-_HC_LEAKED_PASSWORDS = ["letmein2019", "summer2021!", "dragon2020", "welcome@corp",
-                         "monkey123!", "sunshine2018", "iloveyou01", "admin2022"]
-
-
-@dataclass
-class _HCLogEntry:
-    ts_secs:        int
-    ts_str:         str
-    event:          str          # AUTH_FAIL | AUTH_OK | HASH_SUBMIT | BREACH_MATCH
-    ip:             str          # source IP (or "--" for BREACH_MATCH)
-    account:        str          # email / username
-    detail:         str          # hash snippet for HASH_SUBMIT, breach name for BREACH_MATCH
-    owner_id:       str | None
-    is_suspicious:  bool
-    violation_kind: str | None   # "stuffing" | "brute" | "weak" | "leaked"
-                                 # | "reuse" | "unsalted" | None
-
-
-def _hc_ts_str(secs: int) -> str:
-    h, r = divmod(secs % 86400, 3600)
-    m, s = divmod(r, 60)
-    return f"{_HC_DATE} {h:02d}:{m:02d}:{s:02d}"
 
 
 def _hc_algo(h: str | None) -> str:
@@ -1024,448 +1008,6 @@ def _hc_algo(h: str | None) -> str:
         return "bcrypt"
     return _HC_ALGO_LABEL_MAP.get(len(h), "?")
 
-
-def _hc_candidate_entries(candidate, rng: _random.Random, day_number: int) -> list[_HCLogEntry]:
-    from .. import config as _cfg
-
-    _kinds = {d.kind for d in candidate.truth.discrepancies}
-    has_leaked = DiscrepancyKind.LEAKED_PASSWORD in _kinds
-    has_weak = DiscrepancyKind.WEAK_CREDENTIAL in _kinds
-    has_reuse = DiscrepancyKind.CROSS_BREACH_REUSE in _kinds
-    has_unsalt = DiscrepancyKind.UNSALTED_STORAGE in _kinds
-
-    has_hashbad = has_leaked or has_weak or has_reuse or has_unsalt
-    # #62: the burst below used to fire on `has_cred`, so EVERY weak- or
-    # leaked-credential candidate got an AUTH_FAIL storm annotated "credential
-    # stuffing pattern" — measured at 91 of 91, none of which carried
-    # CREDENTIAL_STUFFING. Because that kind is LOGWATCH-tier
-    # (candidate_gen._SEVERITY_REVEAL), it can never appear on the Hashcrack
-    # evidence board either, so the player had no way to reconcile the claim
-    # against anything. This is the inverted form of the recurring bug class:
-    # not ground truth with no artifact, but an artifact with no ground truth.
-    # The burst is now derived from the violation instead of asserted alongside
-    # a different one.
-    has_stuffing = any(d.kind == DiscrepancyKind.CREDENTIAL_STUFFING
-                       for d in candidate.truth.discrepancies)
-
-    # The login burst is gated on the LOG kinds, never on the credential kinds.
-    # A weak or leaked password says nothing about how the account was logged
-    # into — planting a burst for it invented evidence the ground truth did not
-    # contain, and labelled a single-account attack as "credential stuffing".
-    #
-    #   BRUTE_FORCE_IN_LOG   one account, many tries   -> "brute"
-    #   CREDENTIAL_STUFFING  one IP, many accounts,
-    #                        1-2 tries each            -> "stuffing"
-    has_brute    = DiscrepancyKind.BRUTE_FORCE_IN_LOG  in _kinds
-    has_stuffing = DiscrepancyKind.CREDENTIAL_STUFFING in _kinds
-
-    account    = candidate.email
-    claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
-    ext_ip     = f"185.{rng.randint(100,220)}.{rng.randint(1,254)}.{rng.randint(1,254)}"
-    t          = rng.randint(*_cfg.HC_WORKDAY_WINDOW)
-
-    entries: list[_HCLogEntry] = []
-
-    if has_stuffing:
-        # Credential-stuffing burst from external IP. Gated on the violation
-        # itself (#62) — a bad password is not an attack pattern, and rendering
-        # one as the other taught the player a tell that meant nothing.
-        #
-        # Batch-3/merge note: this used to build a victims[] sweep across up to
-        # 6 OTHER accounts (rng.sample(_HC_NOISE_USERS, min(6, ...))) with 1-2
-        # tries each — leftover pre-batch-3 code that a merge resolution
-        # brought back over this branch's own simplification. That hard 6-cap
-        # silently ignored HC_STUFFING_BURST_SIZE above 6 (config extracted the
-        # literal but the surrounding shape never actually read it past that
-        # cap), which is what test_hashcrack_stuffing_burst_size_is_configurable
-        # caught. Restored to the batch-3 version: burst straight-line AUTH_FAILs
-        # against the candidate's own account, same shape as the brute-force
-        # branch below and as Logwatch's LW_BRUTE_BURST_SIZE — burst actually
-        # drives the count now, at any size.
-        burst = rng.randint(*_cfg.HC_STUFFING_BURST_SIZE)
-        for i in range(burst):
-            entries.append(_HCLogEntry(
-                ts_secs=t+i, ts_str=_hc_ts_str(t+i),
-                event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
-                owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
-            ))
-        t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="AUTH_OK", ip=ext_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
-        ))
-        t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
-    elif has_brute:
-        # Brute force: many tries against the SINGLE target account.
-        burst = rng.randint(5, 9)
-
-        for i in range(burst):
-            entries.append(_HCLogEntry(
-                ts_secs=t+i, ts_str=_hc_ts_str(t+i),
-                event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
-                owner_id=candidate.id, is_suspicious=True, violation_kind="brute",
-            ))
-        t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="AUTH_OK", ip=ext_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=True, violation_kind="brute",
-        ))
-        t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
-    else:
-        # Normal login
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="AUTH_OK", ip=claimed_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=False, violation_kind=None,
-        ))
-        t += rng.randint(*_cfg.HC_NORMAL_LOGIN_GAP)
-
-    # Hash submission
-    h_val = candidate.dossier.submitted_hash or ""
-    if h_val:
-        algo    = _hc_algo(h_val)
-        snippet = h_val[:16] + ".."
-        vk      = ("weak" if has_weak else "leaked" if has_leaked
-                   else "reuse" if has_reuse else "unsalted" if has_unsalt else None)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="HASH_SUBMIT", ip=ext_ip if (has_stuffing or has_brute) else claimed_ip,
-
-            account=account, detail=f"{algo}:{snippet}",
-            owner_id=candidate.id, is_suspicious=has_hashbad,
-            violation_kind=vk,
-        ))
-        t += rng.randint(*_cfg.HC_HASH_SUBMIT_GAP)
-
-    # Breach match rows. #61: both the first and the second corpus now come
-    # from breach_dbs_for_candidate(), which is the SAME function the Ghostscan
-    # breach panel seeds from — so the databases Hashcrack names are exactly
-    # the databases the player can find the email in. The second corpus used to
-    # be picked by `(int(id,16) >> 8) % len(_HC_BREACH_NAMES)` with a decrement
-    # to dodge collisions, which knew nothing about the Ghostscan side and
-    # could name a corpus that isn't unlocked yet.
-    if has_leaked or has_reuse:
-        corpora = breach_dbs_for_candidate(candidate, day_number)
-        for i, corpus in enumerate(corpora):
-            if i:
-                t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
-            entries.append(_HCLogEntry(
-                ts_secs=t, ts_str=_hc_ts_str(t),
-                event="BREACH_MATCH", ip="--", account=account, detail=corpus,
-                owner_id=candidate.id, is_suspicious=True,
-                violation_kind=("leaked" if has_leaked and not i else "reuse"),
-            ))
-            t += rng.randint(5, 20)
-
-    return entries
-
-
-def _hc_noise_entries(rng: _random.Random, count: int) -> list[_HCLogEntry]:
-    from .. import config as _cfg
-
-    entries: list[_HCLogEntry] = []
-    for _ in range(count):
-        user   = rng.choice(_HC_NOISE_USERS)
-        domain = rng.choice(_HC_NOISE_DOMAINS)
-        ip     = rng.choice(_HC_NOISE_IPS)
-        t      = rng.randint(*_cfg.HC_NOISE_TIME_WINDOW)
-        acct   = f"{user}@{domain}"
-        evt    = rng.choice(_cfg.HC_NOISE_EVENT_WEIGHTS)
-        detail = ""
-        if evt == "HASH_SUBMIT":
-            algo    = rng.choice(["MD5", "SHA256", "SHA256", "SHA1"])
-            snippet = "".join(rng.choice("0123456789abcdef") for _ in range(16)) + ".."
-            detail  = f"{algo}:{snippet}"
-        elif evt == "BREACH_MATCH":
-            detail = rng.choice(_HC_BREACH_NAMES)
-            ip     = "--"
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event=evt, ip=ip, account=acct, detail=detail,
-            owner_id=None, is_suspicious=False, violation_kind=None,
-        ))
-    return entries
-
-
-def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
-    """Shared credential audit log for the full day. Volume scales with day
-    number per config (batch-3 task #4d/#7 — was a flat max(80, 160-n))."""
-    from .. import config as _cfg
-    from .candidate_gen import generate as _gen_candidate
-
-    rng     = _random.Random(_stable_hash(game_seed, day.number, "hc_day") & 0xFFFFFFFF)
-    entries: list[_HCLogEntry] = []
-
-    for slot in range(day.candidate_count):
-        cand  = _gen_candidate(game_seed, day, slot)
-        crng  = _random.Random(_stable_hash(game_seed, day.number, slot, "hc_entries") & 0xFFFFFFFF)
-        entries.extend(_hc_candidate_entries(cand, crng, day.number))
-
-    base_noise = _cfg.HC_ENTRIES_BY_DAY.get(day.number, _cfg.HC_ENTRIES_DEFAULT)
-    last_key   = max(_cfg.HC_ENTRIES_BY_DAY.keys()) if _cfg.HC_ENTRIES_BY_DAY else 1
-    if day.number > last_key:
-        extra_days = day.number - last_key
-        base_noise = int(_cfg.HC_ENTRIES_BY_DAY.get(last_key, _cfg.HC_ENTRIES_DEFAULT)
-                         * (_cfg.HC_ENTRIES_SCALE_FACTOR ** extra_days))
-    n_noise = max(_cfg.HC_ENTRIES_MIN, base_noise - len(entries))
-    entries.extend(_hc_noise_entries(rng, n_noise))
-    entries.sort(key=lambda e: e.ts_secs)
-    return entries
-
-
-def _render_hc_log(
-    entries:       list[_HCLogEntry],
-    target_id:     str | None,
-    candidate,
-    annotate:      bool = False,
-    explicit_tags: bool = False,
-    upgrade_highlight: bool = False,   # hash_highlight upgrade ("Credential
-                                       # HUD"): colours the candidate's own
-                                       # suspicious lines + the "why" annotations
-    upgrade_verdict:   bool = False,   # hashcrack_verdict_highlight upgrade
-                                       # ("Crack Verdict Analyzer"): labels a
-                                       # crack's STRENGTH VERDICT ("no concern" /
-                                       # "always safe") — the plaintext itself
-                                       # reveals on any run either way (#6a)
-) -> tuple[str, ...]:
-    """Render the credential audit log to Rich markup lines.
-
-    Batch-3 tasks #4d/#6a: `annotate` alone used to be enough to turn on both
-    line-highlighting AND the inline "▲ why" annotations, which meant owning
-    hash_highlight never actually gated anything once the tool was run (any
-    base run already had annotate=True). Highlighting/annotation now key off
-    `highlight_active` (explicit_tags — the paid filter — OR upgrade_highlight)
-    instead. Cracking a password (revealing the plaintext) is NOT part of that
-    gate: it only needs `annotate` (the tool was actually run) — Nick's
-    instruction was that the crack must always work, only the "why is this
-    suspicious"/"this is a safe verdict" commentary is paywalled.
-    """
-    lines: list[str] = [
-        "[#3d6478]── credential audit log ──────────────────────────────────────[/]",
-        f"[dim]{_HC_DATE}  (all accounts — locate your target email below)[/]",
-        "",
-    ]
-
-    # Derive crack result for annotation. Issue #29: the plaintext is the
-    # generator's ground truth (dossier.password_plain), so the crack always
-    # matches the dossier hash. bcrypt (strong tier) never cracks.
-    crack_plaintext: str | None = None
-    neutral_crack = False   # clean candidate — crack succeeds, no violation
-    has_credkind = False
-    if annotate and target_id and candidate is not None:
-        has_credkind = any(d.kind in (
-            DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
-            DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE,
-        ) for d in candidate.truth.discrepancies)
-        crack_plaintext = crack_password(candidate)
-        neutral_crack = crack_plaintext is not None and not has_credkind
-
-    highlight_active = explicit_tags or upgrade_highlight
-    verdict_active    = explicit_tags or upgrade_verdict
-
-    evt_col = {
-        "AUTH_OK":      "#00ff9f",
-        "AUTH_FAIL":    "#ff5470",
-        "HASH_SUBMIT":  "#7dd3c0",
-        "BREACH_MATCH": "#ff8c42",
-    }
-
-    prev_vk: str | None = None
-    emitted_crack = False
-    breach_seen   = 0        # how many BREACH_MATCH rows we've annotated
-
-    for e in entries:
-        is_mine = (e.owner_id == target_id)
-        ec      = evt_col.get(e.event, "#6b7785")
-        det_str = f"  {e.detail}" if e.detail else ""
-        raw     = f"{e.ts_str}  [{ec}]{e.event:<12}[/]  {e.ip:<18}  {e.account}{det_str}"
-
-        if is_mine and e.is_suspicious and highlight_active:
-            col = "#ff5470" if explicit_tags else "#ff8c42"
-            lines.append(f"[{col}]{raw}[/]")
-
-            # Inline annotations — only the free-tier highlight styling here;
-            # explicit_tags (filter) has its own block below.
-            if upgrade_highlight and not explicit_tags:
-                if e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                    lines.append("  [#ff8c42]▲ this IP is failing against several "
-                                 "other accounts too[/]")
-                elif e.violation_kind == "brute" and prev_vk != "brute":
-                    lines.append("  [#ff8c42]▲ repeated failures against this one "
-                                 "account from a single IP[/]")
-                elif e.violation_kind in ("weak", "leaked") and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        attempts = "1" if e.violation_kind == "weak" else "found in corpus"
-                        lines.append(f"  [#ff8c42]▲ crack result  →  [b]{crack_plaintext}[/]  ({attempts})[/]")
-                        emitted_crack = True
-                elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
-                    lines.append("  [#ff8c42]▲ email confirmed in breach corpus[/]")
-                elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        _note = "reused across breaches" if e.violation_kind == "reuse" else "unsalted -- cracks instantly"
-                        lines.append(f"  [#ff8c42]▲ crack result  ->  [b]{crack_plaintext}[/]  ({_note})[/]")
-                        emitted_crack = True
-                elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    breach_seen += 1
-                    if breach_seen == 1:
-                        lines.append("  [#ff8c42]▲ email found in this breach corpus[/]")
-                    else:
-                        lines.append("  [#ff8c42]▲ the SAME password appears here too — reused across corpora[/]")
-
-
-            if explicit_tags:
-                if e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                    lines.append("  [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]  "
-                                 "— one source IP, many accounts, few tries each")
-                elif e.violation_kind == "brute" and prev_vk != "brute":
-                    lines.append("  [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]  "
-                                 "— one account, sustained failures")
-                elif e.violation_kind == "weak" and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        lines.append(f"  [#ff5470]▲ crack result  →  [b]{crack_plaintext}[/][/]")
-                        emitted_crack = True
-                elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
-                    lines.append(f"  [#ff5470]▲ breach corpus confirmed: {e.detail}[/]")
-                elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        lines.append(f"  [#ff5470]▲ crack result  ->  [b]{crack_plaintext}[/][/]")
-                        emitted_crack = True
-                elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    breach_seen += 1
-                    if breach_seen == 1:
-                        lines.append(f"  [#ff5470][b]▲ BREACH_HIT[/][/]  — {e.detail}")
-                    else:
-                        lines.append(f"  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
-                                     f"— same plaintext also in {e.detail}")
-
-            prev_vk = e.violation_kind
-
-        elif is_mine:
-            lines.append(f"[#ffd93d]{raw}[/]")
-            # Issue #29 — the crack still runs on any base run (annotate=True)
-            # regardless of upgrades; only the WORDING differs. #4d: without
-            # Credential HUD, a violator's own HASH_SUBMIT line lands here
-            # (not the highlighted branch above) — reveal the plaintext
-            # plainly, with none of the "▲ why" framing that branch adds.
-            if (annotate and e.event == "HASH_SUBMIT" and not emitted_crack
-                    and candidate is not None):
-                _strength = password_strength(candidate.dossier.submitted_hash)
-                if _strength == "strong":
-                    if verdict_active:
-                        lines.append("  [#00ff9f]✓ crack abandoned — bcrypt "
-                                     "(~100 H/s) · strong encryption, always safe[/]")
-                    else:
-                        lines.append("  [dim]✓ crack abandoned — bcrypt "
-                                     "(~100 H/s) · no plaintext recovered[/]")
-                    emitted_crack = True
-                elif neutral_crack and crack_plaintext:
-                    if verdict_active:
-                        lines.append(f"  [#00ff9f]✓ crack result  →  "
-                                     f"[b]{crack_plaintext}[/]  "
-                                     f"(strong password — no concern)[/]")
-                    else:
-                        lines.append(f"  [#c8d4e1]crack result  →  "
-                                     f"[b]{crack_plaintext}[/][/]")
-                    emitted_crack = True
-                elif has_credkind and crack_plaintext:
-                    # A real violation, but Credential HUD isn't owned (or
-                    # this line simply wasn't the one the highlight branch
-                    # picked) — still reveal the plaintext, just without any
-                    # "▲ this is why it's suspicious" call-out.
-                    lines.append(f"  [#c8d4e1]crack result  →  "
-                                 f"[b]{crack_plaintext}[/][/]")
-                    emitted_crack = True
-            prev_vk = None
-        else:
-            lines.append(f"[#2e3d4f]{raw}[/]")
-            prev_vk = None
-
-    lines.append("")
-
-    if explicit_tags and target_id and candidate is not None:
-        has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
-        has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
-        has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)
-        has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)
-        lines += [
-            "[#c084fc]── [FILTER] credential analysis ─────────────────────────────[/]",
-        ]
-        _any = False
-        if has_leaked:
-            lines.append("  [#ff5470][b]▲ LEAKED_PASSWORD[/][/]  -- plaintext confirmed in breach corpus"); _any = True
-        if has_weak:
-            lines.append("  [#ff5470][b]▲ WEAK_CREDENTIAL[/][/]  -- hash cracked in < 100 attempts"); _any = True
-        if has_reuse:
-            lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  -- reused password recurs across breach corpora"); _any = True
-        if has_unsalt:
-            lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  -- unsalted hash cracked instantly"); _any = True
-        if not _any:
-            lines.append("  [#00ff9f]✓ credential appears secure[/]")
-
-    lines.append(f"[dim]{len(entries)} entries  ·  highlighted = current target account[/]")
-    return tuple(lines)
-
-
-def get_hashcrack_shared(entries: list[_HCLogEntry], candidate,
-                         upgrade_highlight: bool = False) -> tuple[str, ...]:
-    """Free shared log — always visible on hashcrack page, no cost.
-    With the hash_highlight upgrade, suspicious lines are pre-coloured."""
-    return _render_hc_log(entries, target_id=candidate.id, candidate=candidate,
-                          upgrade_highlight=upgrade_highlight)
-
-
-def run_hashcrack_shared(entries: list[_HCLogEntry], candidate, state) -> ToolResult:
-    """Base run: highlights candidate + shows crack result inline.
-
-    Batch-3 task #4d: this used to call _render_hc_log with only
-    annotate=True and no upgrade flags — meaning hash_highlight ("Credential
-    HUD") never actually gated anything once the tool was run, since
-    annotate alone used to turn highlighting on. Now threads both upgrades
-    from state, same as the filtered run below.
-    """
-    _charge(state, "hashcrack")
-    _ups = getattr(state, "upgrades", ())
-    raw_lines = _render_hc_log(
-        entries, target_id=candidate.id, candidate=candidate, annotate=True,
-        upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in _ups,
-        upgrade_verdict=config.UPGRADE_HC_VERDICT in _ups)
-    strength = password_strength(candidate.dossier.submitted_hash)
-    cracked = any(d.kind in (
-        DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
-        DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE,
-    ) for d in candidate.truth.discrepancies)
-    if cracked:
-        summary = "Hash cracked — review inline result. Run filter (F) to name the violation."
-    elif strength == "strong":
-        summary = "bcrypt credential — attempt abandoned. Strong encryption is always safe."
-    elif crack_password(candidate):
-        summary = "Hash cracked — plaintext revealed inline. Assess its strength yourself."
-    else:
-        summary = "No match found in common wordlist."
-    return ToolResult(tool=ToolName.HASHCRACK, findings=(), raw_lines=raw_lines, summary=summary)
-
-
-def run_hashcrack_filtered_shared(entries: list[_HCLogEntry], candidate, state) -> ToolResult:
-    """Filter: explicit violation labels."""
-    _charge(state, "hashcrack", filter=True)
-    findings  = _findings_from(candidate, ToolName.HASHCRACK)
-    _ups = getattr(state, "upgrades", ())
-    raw_lines = _render_hc_log(
-        entries, target_id=candidate.id, candidate=candidate, annotate=True,
-        explicit_tags=True,
-        upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in _ups,
-        upgrade_verdict=config.UPGRADE_HC_VERDICT in _ups)
-    summary = (
-        f"[FILTERED] {len(findings)} credential finding(s) confirmed."
-        if findings else
-        "[FILTERED] Credential clean — no breach match, complexity threshold passed."
-    )
-    return ToolResult(
-        tool=ToolName.HASHCRACK, findings=findings,
-        raw_lines=raw_lines, summary=summary, filtered=True,
-    )
 
 
 
@@ -1590,7 +1132,12 @@ class _LogEntry:
     city:           str | None = None   # populated on AUTH_OK for external IPs
 
 
-def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
+def _lw_candidate_entries(candidate, rng: _random.Random,
+                          day_number: int = 1) -> list[_LogEntry]:
+    # `day_number` is needed by breach_dbs_for_candidate() for the relocated
+    # BREACH_MATCH rows at the end of this function. Defaulted so the many
+    # existing two-argument callers (tests, mostly) keep working; the real day
+    # is threaded through from generate_day_log().
     from .. import config as _cfg
 
     kinds = {d.kind for d in candidate.truth.discrepancies}
@@ -1760,6 +1307,51 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             ))
             t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
 
+    # ── Credential rows, relocated from the Hashcrack audit log ───────────
+    #
+    # 2026-09-14. The Hashcrack page used to carry its own shared credential
+    # log; the cipher-block rework took that page over, so the rows that had
+    # nowhere else to live moved to the tool that is already an audit log.
+    #
+    # ONLY these two row types moved, and the distinction matters. The old
+    # credential log also carried AUTH_FAIL/AUTH_OK bursts for brute-force and
+    # credential-stuffing candidates — but those kinds are LOGWATCH-owned, and
+    # `_lw_candidate_entries` has always generated its own bursts for them
+    # above. Merging the old log wholesale would have printed every burst
+    # twice. What genuinely had no home here is the credential ARTIFACT: the
+    # submission itself, and the corpora the account's email appears in.
+    #
+    # Both are deliberately is_suspicious=False. They are context the player
+    # reads, not findings Logwatch asserts — Logwatch does not own a single
+    # credential violation, and a flagged row here would be the #62 bug
+    # rebuilt: an artifact claiming a violation whose evidence board is on
+    # another page entirely.
+    h_val = candidate.dossier.submitted_hash or ""
+    if h_val:
+        t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
+        entries.append(_LogEntry(
+            ts_secs=t, ts_str=_lw_ts(t), event="HASH_SUBMIT",
+            ip=login_ip, account=account,
+            extra=f"{_hc_algo(h_val)}:{h_val[:16]}..",
+            owner_id=candidate.id, is_suspicious=False,
+            violation_kind="credential_artifact", city=None,
+        ))
+
+    if kinds & {DiscrepancyKind.LEAKED_PASSWORD,
+                DiscrepancyKind.CROSS_BREACH_REUSE}:
+        # Seeded from breach_dbs_for_candidate() — the same function the
+        # Ghostscan breach panel and the cipher block's resolve readout use, so
+        # all three surfaces name the same corpora. #61 fixed this once for the
+        # old log; keeping the single source is what stops it drifting again.
+        for i, corpus in enumerate(breach_dbs_for_candidate(candidate, day_number)):
+            t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
+            entries.append(_LogEntry(
+                ts_secs=t, ts_str=_lw_ts(t), event="BREACH_MATCH",
+                ip="--", account=account, extra=corpus,
+                owner_id=candidate.id, is_suspicious=False,
+                violation_kind="breach_corpus", city=None,
+            ))
+
     return entries
 
 
@@ -1804,7 +1396,7 @@ def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
     for slot in range(day.candidate_count):
         cand = _gen_candidate(game_seed, day, slot)
         crng = _random.Random(_stable_hash(game_seed, day.number, slot, "lw_entries") & 0xFFFFFFFF)
-        all_entries.extend(_lw_candidate_entries(cand, crng))
+        all_entries.extend(_lw_candidate_entries(cand, crng, day.number))
 
     # Noise count from config — scaled per day
     base_noise = _cfg.LW_ENTRIES_BY_DAY.get(day.number, _cfg.LW_ENTRIES_DEFAULT)
@@ -1852,6 +1444,16 @@ def _lw_render(
         "FILE_READ":    "#7dd3c0",
         "SUDO_EXEC":    "#ff8c42",
         "SESSION_END":  "#6b7785",
+        # 2026-09-14: relocated here from the Hashcrack page's own credential
+        # audit log, which the cipher-block rework removed. These two rows are
+        # CORROBORATION, never a verdict: HASH_SUBMIT says a credential was
+        # submitted and from where, BREACH_MATCH says this account's email
+        # turns up in a named corpus. Naming the violation behind either is
+        # Hashcrack's job, and the cipher block's resolve readout does it.
+        # Wording here must stay observational for exactly that reason — see
+        # test_no_tool_claims_a_violation_another_tool_owns.
+        "HASH_SUBMIT":  "#c084fc",
+        "BREACH_MATCH": "#ff8c42",
     }
     # Batch-3 task #4e: `annotate` alone used to be enough to trigger
     # highlighting — meaning log_highlight ("Log Analyzer HUD") never
@@ -2003,22 +1605,12 @@ def run_logwatch(candidate: Candidate, state) -> ToolResult:
                       raw_lines=("(legacy — use shared day log)",), summary="Run via logwatch page.")
 
 
-def run_hashcrack(candidate: Candidate, state) -> ToolResult:
-    """Legacy stub — callers should use run_hashcrack_shared() via app.py.
-
-    Pre-refactor this called two module-level helpers, _hashcrack_raw_lines()
-    and _hashcrack_filter_lines(), that no longer exist -- they were removed
-    when the shared-log Hashcrack implementation (run_hashcrack_shared,
-    above) replaced this path. Nothing calls run_hashcrack()/
-    run_hashcrack_filtered() any more (app.py routes through the *_shared
-    variants), so this was dead code that would have raised NameError if it
-    ever ran. Brought in line with the run_logwatch() stub just above, which
-    got the same treatment during that refactor.
-    """
-    _charge(state, "hashcrack")
-    return ToolResult(tool=ToolName.HASHCRACK, findings=(),
-                      raw_lines=("(legacy — use shared hashcrack log)",),
-                      summary="Run via hashcrack page.")
+# run_hashcrack() / run_hashcrack_filtered() used to sit here as legacy stubs,
+# pointing callers at run_hashcrack_shared(). Both were removed on 2026-09-14
+# along with the shared log itself: a stub whose docstring redirects to a
+# function that no longer exists is worse than no stub. Hashcrack has no
+# run/filter entry point at all now — the page is the cipher-block aperture
+# minigame, driven from IntakeScreen._open_aperture.
 
 # ─── Stegotool constants & helpers ────────────────────────────────────────────
 
@@ -2377,18 +1969,6 @@ def run_logwatch_filtered(candidate: Candidate, state) -> ToolResult:
                       raw_lines=("(legacy -- use shared day log)",),
                       summary="[FILTERED] Run via logwatch page.", filtered=True)
 
-
-def run_hashcrack_filtered(candidate: Candidate, state) -> ToolResult:
-    """Legacy stub -- callers should use run_hashcrack_filtered_shared() via app.py.
-
-    See run_hashcrack() above -- same dead reference to helpers removed in
-    the shared-log refactor, fixed the same way.
-    """
-    _charge(state, "hashcrack", filter=True)
-    findings = _findings_from(candidate, ToolName.HASHCRACK)
-    return ToolResult(tool=ToolName.HASHCRACK, findings=findings,
-                      raw_lines=("(legacy -- use shared hashcrack log)",),
-                      summary="[FILTERED] Run via hashcrack page.", filtered=True)
 
 def run_stegotool_filtered(candidate: Candidate, state) -> ToolResult:
     """Per-channel LSB breakdown -- explicitly confirms payload type."""
@@ -2802,3 +2382,542 @@ def get_stego_stats(candidate: Candidate,
         "",
     ]
     return tuple(header + out)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HASHCRACK — the cipher block
+# ════════════════════════════════════════════════════════════════════════════
+#
+# A standalone two-stage decryption minigame. Not a variant of the stego stamp:
+# there is no canvas to sweep and nothing spatially hidden. The whole block
+# decrypts at once, and the skill is reading the credential and tuning the
+# decrypt.
+#
+#   STAGE 0 (free)   The block renders as ciphertext with a header carrying
+#                    three plain observations: its dimensions, its glyph
+#                    alphabet, and its DIGEST SHAPE ("64 hex characters").
+#                    Those identify the algorithm to a player who has read the
+#                    reference table — and, separately, tell them whether the
+#                    credential is worth opening at all.
+#
+#   STAGE 1 (paid)   Choose one of three decryption windows. The matching one
+#                    engages the decrypt; any other wastes the spend. bcrypt's
+#                    window engages and then STALLS — correctly identifying
+#                    key-stretching is not the same as it being crackable, and
+#                    the only winning move is not to open it.
+#
+#   STAGE 2 (free)   An alignment dial. The decrypt has the right family but
+#                    the wrong derived key; turning the dial toward the true
+#                    value brings the plaintext into focus, cell by cell. At
+#                    exact alignment the block locks and the credential
+#                    resolves.
+#
+# The plaintext is TILED across the whole block rather than hidden in one run.
+# Partial alignment scrambles a different subset of cells in each repeat, so a
+# player who is close can read the password by consensus across rows — which is
+# what makes the last few dial steps satisfying rather than fiddly.
+#
+# Only stage 1 costs ⏱. The spend decision is made once, up front, on
+# information the player already had for free.
+
+
+_CIPHER_HEX_GLYPHS = "0123456789abcdef"
+# bcrypt's radix-64 alphabet, plus the $ that makes its blocks unmistakable at
+# a glance even before you count anything.
+_CIPHER_B64_GLYPHS = ("./$ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                      "abcdefghijklmnopqrstuvwxyz0123456789")
+
+# tier → (label, hex colour, algorithm name, one-line description)
+_CIPHER_TIER_META: dict[str, tuple[str, str, str, str]] = {
+    "weak":   ("WEAK",   "#ff5470", "MD5",
+               "32-hex digest, unsalted round — one pass, short dial"),
+    "medium": ("MEDIUM", "#ffd93d", "SHA256",
+               "64-hex digest — recoverable, but the key needs finding"),
+    "strong": ("STRONG", "#00ff9f", "bcrypt",
+               "key-stretched, cost factor 12 — no completion possible"),
+}
+
+# Outcomes of selecting a decryption window (stage 1).
+CIPHER_WINDOW_WRONG   = "wrong"     # window does not match the digest
+CIPHER_WINDOW_STALLED = "stalled"   # matched, but key-stretched — dead end
+CIPHER_WINDOW_ENGAGED = "engaged"   # matched and crackable — dial unlocks
+
+
+@dataclass(frozen=True)
+class CipherBlockData:
+    """Deterministic render model for one candidate's credential.
+
+    `cipher_glyphs` is what the player sees before any window is applied.
+    `plain_glyphs` is the fully-decrypted block — the password tiled across the
+    grid. `cell_tolerance` gives each cell its own threshold: at dial distance
+    `err`, a cell shows its plain glyph when its tolerance clears `err`, and
+    its cipher glyph otherwise. That is the entire sharpening effect, and
+    keeping it in the DATA rather than in the renderer is what makes turning
+    the dial back and forth show the same picture every time.
+
+    `align_true` is the dial value at which every cell resolves. For bcrypt
+    there is no dial and no plaintext: `align_range` is 0 and `plaintext` is
+    None, which is the single fact the whole strong tier turns on.
+    """
+    cols:           int
+    rows:           int
+    tier:           str                  # "weak" | "medium" | "strong"
+    algo:           str                  # "MD5" | "SHA256" | "bcrypt"
+    cipher_glyphs:  tuple                # rows × cols of single-char strings
+    plain_glyphs:   tuple                # rows × cols — the tiled plaintext
+    cell_tolerance: tuple                # rows × cols of ints
+    align_true:     int
+    align_range:    int                  # dial spans 0 .. align_range
+    align_tolerance: int                 # beyond this, nothing resolves at all
+    plaintext:      str | None
+    hash_value:     str
+    # Defaults last (dataclass field order).
+    pre_revealed:   bool = False         # UNSALTED_STORAGE: arrives decrypted
+
+    @property
+    def crackable(self) -> bool:
+        """Whether stage 2 exists for this block at all."""
+        return self.plaintext is not None and self.tier != "strong"
+
+
+@dataclass(frozen=True)
+class WindowResult:
+    """Outcome of applying a decryption window (stage 1)."""
+    outcome:  str          # CIPHER_WINDOW_WRONG | _STALLED | _ENGAGED
+    chosen:   str          # tier key of the window the player picked
+    cost:     int          # ⏱ charged
+
+
+def cipher_tier(hash_value: str | None) -> str | None:
+    """The block tier for a submitted hash.
+
+    Deliberately a thin alias of password_strength() rather than a second
+    implementation — the dossier, the block and the rules page must never
+    disagree about what tier a hash is, and two functions computing it from the
+    same shape is how that drift starts.
+    """
+    return password_strength(hash_value)
+
+
+def _cipher_rng(candidate: Candidate) -> _random.Random:
+    """Per-candidate RNG for block layout. Distinct salt from the stego grid's
+    so the two surfaces cannot accidentally correlate."""
+    return _random.Random(int(candidate.id, 16) ^ 0x0C1F4E)
+
+
+def _digest_shape(hash_value: str) -> str:
+    """How the submitted hash LOOKS, as a free observation.
+
+    Never names the algorithm — that is the conclusion the player draws, or
+    buys Cipher ID HUD to have drawn for them. It only counts what is there.
+    """
+    if hash_value.startswith("$2b$"):
+        return f"$2b$ prefix, {len(hash_value)} characters"
+    return f"{len(hash_value)} hex characters"
+
+
+def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
+    """Build the render model for the two-stage decrypt.
+
+    Deterministic per candidate. Every size and difficulty knob lives in
+    config.CIPHER_* so this can be rebalanced without touching code.
+    """
+    h_val = candidate.dossier.submitted_hash or ""
+    tier  = cipher_tier(h_val) or "medium"
+    _lbl, _col, algo, _desc = _CIPHER_TIER_META[tier]
+
+    base_c, base_r = config.CIPHER_GRID_BASE[tier]
+    extra = max(0, day - 1)
+    cols = base_c + extra * config.CIPHER_GRID_GROWTH_COLS_PER_DAY
+    rows = base_r + extra // config.CIPHER_GRID_GROWTH_ROWS_PERIOD
+    max_c, max_r = config.CIPHER_GRID_MAX
+    cols, rows = min(cols, max_c), min(rows, max_r)
+
+    rng = _cipher_rng(candidate)
+    alphabet = _CIPHER_B64_GLYPHS if tier == "strong" else _CIPHER_HEX_GLYPHS
+    cipher = [[rng.choice(alphabet) for _ in range(cols)] for _ in range(rows)]
+
+    # bcrypt stamps its literal cost prefix into the top-left of the block.
+    # Structural evidence, not a label: the player is reading actual
+    # ciphertext, exactly as they would a real $2b$12$ hash.
+    if tier == "strong":
+        for i, ch in enumerate(config.CIPHER_BCRYPT_PREFIX[:cols]):
+            cipher[0][i] = ch
+
+    plaintext = crack_password(candidate)
+    align_range = config.CIPHER_ALIGN_RANGE[tier]
+    align_tol   = config.CIPHER_ALIGN_TOLERANCE[tier]
+
+    if not plaintext or tier == "strong":
+        # Strong tier: crack_password() already returns None for bcrypt, so
+        # there is no plaintext, no dial and no amount of ⏱ that changes it.
+        return CipherBlockData(
+            cols=cols, rows=rows, tier=tier, algo=algo,
+            cipher_glyphs=tuple(tuple(r) for r in cipher),
+            plain_glyphs=tuple(tuple(r) for r in cipher),
+            cell_tolerance=tuple(tuple(0 for _ in range(cols)) for _ in range(rows)),
+            align_true=0, align_range=0, align_tolerance=0,
+            plaintext=None, hash_value=h_val,
+        )
+
+    # The decrypted block: the password tiled across every row, separated so
+    # repeats are visually distinguishable from one long smear.
+    unit = plaintext + config.CIPHER_TILE_SEPARATOR
+    flat = (unit * (cols * rows // len(unit) + 2))[:cols * rows]
+    plain = [tuple(flat[y * cols:(y + 1) * cols]) for y in range(rows)]
+
+    align_true = rng.randint(0, align_range)
+    # Per-cell tolerance, uniform over 0..align_tol. A cell with tolerance t
+    # resolves whenever the dial is within t of true, so at err=0 every cell
+    # resolves and the proportion falls away smoothly as the dial drifts.
+    #
+    # The range STARTS AT ZERO, and that is load-bearing. Drawing from 1..tol
+    # instead gives every cell a tolerance of at least 1, which makes err=1
+    # render identically to err=0 — the player would see a fully legible block
+    # one step away from true and have no way to tell they were not there yet.
+    # The zero-tolerance cells are the handful of characters that refuse to
+    # settle until the dial is exactly right, which is the whole "fine-tune it
+    # exactly" beat.
+    cell_tol = tuple(
+        tuple(rng.randint(0, align_tol) for _ in range(cols))
+        for _ in range(rows)
+    )
+
+    return CipherBlockData(
+        cols=cols, rows=rows, tier=tier, algo=algo,
+        cipher_glyphs=tuple(tuple(r) for r in cipher),
+        plain_glyphs=tuple(plain),
+        cell_tolerance=cell_tol,
+        align_true=align_true, align_range=align_range,
+        align_tolerance=align_tol,
+        plaintext=plaintext, hash_value=h_val,
+        pre_revealed=bool(candidate.dossier.credential_unsalted),
+    )
+
+
+# ── Stage 1 — the decryption window ─────────────────────────────────────────
+
+
+def window_cost(state) -> int:
+    """⏱ to apply one decryption window — the tool's ordinary base cost.
+
+    Routed through tool_cost() rather than a constant of its own, so the
+    Hashcrack Optimizer upgrade and campaign inflation keep applying to this
+    tool exactly as they do to every other one.
+    """
+    return tool_cost(state, "hashcrack")
+
+
+def apply_window(block: CipherBlockData, chosen_tier: str, state) -> WindowResult:
+    """Charge for, and evaluate, one decryption-window choice.
+
+    Raises InsufficientCompute if unaffordable — and charges NOTHING in that
+    case, so a refused purchase can never leave the player worse off.
+    """
+    cost = window_cost(state)
+    if state.compute_hours < cost:
+        raise InsufficientCompute(
+            f"Need {cost} ⏱ to apply a decryption window, "
+            f"have {state.compute_hours} ⏱"
+        )
+    state.compute_hours -= cost
+
+    if chosen_tier != block.tier:
+        outcome = CIPHER_WINDOW_WRONG
+    elif block.crackable:
+        outcome = CIPHER_WINDOW_ENGAGED
+    else:
+        # Matched the algorithm, but the algorithm is the problem.
+        outcome = CIPHER_WINDOW_STALLED
+    return WindowResult(outcome=outcome, chosen=chosen_tier, cost=cost)
+
+
+def window_log_lines(block: CipherBlockData, res: WindowResult) -> list[str]:
+    """Terminal block for one window application."""
+    label = next((lbl for key, lbl, _shape in config.CIPHER_WINDOWS
+                  if key == res.chosen), res.chosen)
+    head = (f"[#c084fc][b]DECRYPTION WINDOW — {label}[/][/]  "
+            f"[dim]−{res.cost} ⏱[/]")
+
+    if res.outcome == CIPHER_WINDOW_WRONG:
+        return [
+            head,
+            ("  [#ff5470]no structure emerged[/] — this window does not "
+             "fit the digest"),
+            (f"  [dim]the block is {_digest_shape(block.hash_value)}; "
+             f"check it against the reference table before paying again[/]"),
+        ]
+    if res.outcome == CIPHER_WINDOW_STALLED:
+        return [
+            head,
+            "  [#00ff9f]window fits — and the decrypt stalls immediately[/]",
+            ("  [dim]key-stretched at cost factor 12: every guess costs the "
+             "same as the first. There is no alignment to find and no plaintext "
+             "to recover. Reading the digest would have told you this for "
+             "free.[/]"),
+        ]
+    return [
+        head,
+        "  [#c084fc][b]▲ decrypt engaged[/][/] — the block has structure",
+        ("  [dim]wrong derived key: turn the alignment dial until the text "
+         "comes into focus[/]"),
+    ]
+
+
+# ── Stage 2 — the alignment dial ────────────────────────────────────────────
+
+
+def render_block(block: CipherBlockData, dial: int,
+                 engaged: bool = True) -> list[list[tuple[str, bool]]]:
+    """The block as it looks at a given dial position.
+
+    Returns rows of (glyph, resolved) pairs so the widget can colour resolved
+    cells without recomputing which ones they are. Before a window is applied
+    (`engaged=False`) every cell is ciphertext, whatever the dial says.
+
+    A pre-revealed block (UNSALTED_STORAGE) is fully resolved unconditionally:
+    no salt means the stored value is exposed with no tool run at all, which is
+    the violation itself.
+    """
+    if block.pre_revealed:
+        return [[(g, True) for g in row] for row in block.plain_glyphs]
+    if not engaged or not block.crackable:
+        return [[(g, False) for g in row] for row in block.cipher_glyphs]
+
+    err = abs(dial - block.align_true)
+    out: list[list[tuple[str, bool]]] = []
+    for y in range(block.rows):
+        row: list[tuple[str, bool]] = []
+        for x in range(block.cols):
+            if err <= block.cell_tolerance[y][x]:
+                row.append((block.plain_glyphs[y][x], True))
+            else:
+                row.append((block.cipher_glyphs[y][x], False))
+        out.append(row)
+    return out
+
+
+def alignment_locked(block: CipherBlockData, dial: int) -> bool:
+    """True when the dial is exactly right and the credential resolves."""
+    if block.pre_revealed:
+        return True
+    return block.crackable and dial == block.align_true
+
+
+def resolved_fraction(block: CipherBlockData, dial: int) -> float:
+    """Fraction of cells currently showing plaintext.
+
+    Used by the widget for the lock indicator and by tests to assert the
+    sharpening curve. Deliberately NOT surfaced to the player as a number —
+    the design is that they read the block, not a percentage.
+    """
+    if block.pre_revealed:
+        return 1.0
+    if not block.crackable:
+        return 0.0
+    err = abs(dial - block.align_true)
+    hit = sum(1 for row in block.cell_tolerance for t in row if err <= t)
+    return hit / max(1, block.cols * block.rows)
+
+
+def hint_band(block: CipherBlockData, upgrades: set | None = None
+              ) -> tuple[int, int] | None:
+    """The dial range Credential HUD marks, or None without the upgrade.
+
+    Returns an INCLUSIVE (low, high) span containing the true value, widened
+    by config.CIPHER_HINT_BAND. Per #54's lesson it narrows the search without
+    answering it, and the base tier marks nothing at all.
+    """
+    if config.UPGRADE_HASH_HIGHLIGHT not in (upgrades or ()):
+        return None
+    if not block.crackable:
+        return None
+    band = config.CIPHER_HINT_BAND
+    return (max(0, block.align_true - band),
+            min(block.align_range, block.align_true + band))
+
+
+# ── Readouts ────────────────────────────────────────────────────────────────
+
+
+def cipher_header_lines(block: CipherBlockData,
+                        upgrades: set | None = None) -> list[str]:
+    """The block's header — structural facts always, the ALGORITHM on upgrade.
+
+    The split here is the whole design of WEAK_ENCRYPTION's evidence, so it is
+    worth being precise about.
+
+    Printed ALWAYS, free: the block's dimensions, its glyph alphabet, and the
+    DIGEST SHAPE. All three are observations about the artifact in front of the
+    player, readable off the hash the dossier already shows. The digest line is
+    what makes WEAK_ENCRYPTION flaggable by a player who owns no upgrades: they
+    see "32 hex characters", match it against the rules page's table, and
+    conclude MD5 themselves.
+
+    Printed ONLY with Cipher ID HUD: the algorithm's NAME and what it implies.
+    That is the conclusion, and the upgrade buys drawing it for you.
+
+    An earlier draft left the algorithm entirely behind the upgrade, which
+    would have made a violation ABOUT the algorithm unflaggable without it —
+    turning a 20 HD$ convenience into a paywall on a whole kind.
+    """
+    upgrades = upgrades or ()
+    lines = [
+        "[#3d6478]── cipher block ─────────────────────────────────────────────[/]",
+        (f"[dim]{block.cols} × {block.rows} cells  ·  "
+         f"{'radix-64' if block.tier == 'strong' else 'hex'} glyphs[/]"),
+        f"[dim]digest: {_digest_shape(block.hash_value)}[/]",
+    ]
+    if config.UPGRADE_CRYPTO_ID in upgrades:
+        lbl, col, algo, desc = _CIPHER_TIER_META[block.tier]
+        lines.append(f"  [{col}][b]{lbl} — {algo}[/][/]  [dim]{desc}[/]")
+    else:
+        lines.append("  [dim]algorithm unidentified — match the digest shape "
+                     "against the reference table[/]")
+    return lines
+
+
+def get_cipher_intro(block: CipherBlockData,
+                     upgrades: set | None = None) -> tuple[str, ...]:
+    """Free-tier content for the Hashcrack findings terminal, before any spend."""
+    lines = cipher_header_lines(block, upgrades)
+    lines += [
+        "",
+        f"[dim]hash on file:[/] [#6b7785]{block.hash_value[:28]}…[/]",
+        "",
+        "[#c084fc][b]DECRYPTION[/][/]  [dim]X to open the window selector[/]",
+        "[dim]stage 1 — choose the window matching the digest (costs ⏱)[/]",
+        "[dim]stage 2 — turn the alignment dial until the text resolves (free)[/]",
+    ]
+    if block.pre_revealed:
+        lines += [
+            "",
+            ("[#ff5470][b]⚠ UNSALTED STORAGE[/][/]  "
+             "[dim]— stored without a salt; the block is already in the clear, "
+             "no decryption required[/]"),
+            f"  [b #e8f0f8]{block.plaintext}[/]",
+        ]
+    return tuple(lines)
+
+
+def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
+                         day_number: int = 1,
+                         upgrades: set | None = None) -> list[str]:
+    """Block printed once the alignment locks and the credential resolves.
+
+    This is what makes Hashcrack self-sufficient for LEAKED_PASSWORD and
+    CROSS_BREACH_REUSE: the corpus is named HERE, by the tool that owns those
+    kinds, so neither depends on a Logwatch page that does not exist until a
+    day later. Logwatch's relocated BREACH_MATCH rows corroborate this readout;
+    they are not a substitute for it.
+
+    Which violations get NAMED here, and which the player calls themselves, is
+    the line this whole rework turns on:
+
+      OBSERVED, so named unconditionally — LEAKED_PASSWORD and
+      CROSS_BREACH_REUSE. "This plaintext is in LinkedIn (2016)" is a lookup,
+      not a judgement, and the player must be able to flag them on the evidence
+      board or the kinds are unplayable.
+
+      JUDGED, so gated behind Crack Verdict Analyzer — WEAK_CREDENTIAL.
+      Whether `monkey123` is a bad password is exactly the call this rework
+      hands back to the player.
+
+    The corpus line is gated on the candidate actually carrying a credential
+    corpus kind, NOT merely on breach_dbs_for_candidate() returning something.
+    That function also answers for BREACH_HIT, which is Ghostscan-owned and
+    means the EMAIL was exposed — printing it inside a block headed "credential
+    recovered" would tell the player their password was found in a dump when it
+    was not.
+    """
+    upgrades = upgrades or ()
+    if not block.plaintext:
+        return []
+    _lbl, col, algo, desc = _CIPHER_TIER_META[block.tier]
+    lines = [
+        "",
+        "[#c084fc][b]▲ CREDENTIAL RECOVERED[/][/]",
+        f"  [#6b7785]plaintext:[/]  [b #e8f0f8]{block.plaintext}[/]",
+        f"  [#6b7785]algorithm:[/]  [{col}]{algo}[/]  [dim]{desc}[/]",
+    ]
+
+    kinds = {d.kind for d in candidate.truth.discrepancies}
+    has_leaked = DiscrepancyKind.LEAKED_PASSWORD in kinds
+    has_reuse  = DiscrepancyKind.CROSS_BREACH_REUSE in kinds
+    has_weak   = DiscrepancyKind.WEAK_CREDENTIAL in kinds
+    has_wenc   = DiscrepancyKind.WEAK_ENCRYPTION in kinds
+    has_unsalt = DiscrepancyKind.UNSALTED_STORAGE in kinds
+
+    if has_leaked or has_reuse:
+        corpora = breach_dbs_for_candidate(candidate, day_number)
+        if corpora:
+            lines.append("  [#6b7785]corpus:[/]     "
+                         + " · ".join(f"[#ff8c42]{c}[/]" for c in corpora))
+
+    if has_leaked:
+        lines.append("  [#ff8c42][b]▲ LEAKED_PASSWORD[/][/]  "
+                     "— plaintext confirmed in breach corpus")
+    if has_reuse:
+        lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
+                     "— this exact plaintext appears in more than one corpus")
+    if has_unsalt:
+        lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  "
+                     "— stored without a salt; no decryption was required")
+    if has_wenc and config.UPGRADE_CRYPTO_ID in upgrades:
+        # Free evidence for this kind is the digest shape in the header; the
+        # HUD is what turns that observation into a named violation.
+        lines.append("  [#ffd93d][b]▲ WEAK_ENCRYPTION[/][/]  "
+                     "— stored with the weakest available algorithm")
+
+    if config.UPGRADE_HC_VERDICT in upgrades:
+        lines.append(f"  [#6b7785]verdict:[/]    {_cipher_verdict(block.plaintext)}")
+        if has_weak:
+            lines.append("  [#ffd93d][b]▲ WEAK_CREDENTIAL[/][/]  "
+                         "— recovered plaintext fails the complexity threshold")
+    else:
+        lines.append("  [dim]judge the password's own strength yourself — "
+                     "see the reference panel[/]")
+    lines.append("  [dim]flag it on the Evidence Board (Tab)[/]")
+    return lines
+
+
+def _cipher_verdict(plaintext: str) -> str:
+    """Crack Verdict Analyzer's one-line strength call on a recovered password.
+
+    Reads the STRING, not the ground truth. A verdict derived from the
+    candidate's discrepancy list would be the guard-hardening mistake in
+    miniature: it would agree with the answer key by construction and so could
+    never disagree with what the player is actually looking at.
+    """
+    from .candidate_gen import _HC_LEAKED_PASSWORDS, _HC_WEAK_PASSWORDS
+    if plaintext in _HC_WEAK_PASSWORDS:
+        return "[#ff5470]weak — dictionary word or keyboard walk[/]"
+    if plaintext in _HC_LEAKED_PASSWORDS:
+        return "[#ff8c42]dated pattern — word plus year, corpus-typical[/]"
+    has_sym = any(not c.isalnum() for c in plaintext)
+    if len(plaintext) >= 12 and has_sym:
+        return "[#00ff9f]strong — long, mixed, symbol-laden[/]"
+    return "[#ffd93d]moderate — no obvious dictionary root[/]"
+
+
+def cipher_full_readout(block: CipherBlockData, candidate: Candidate,
+                        day_number: int = 1,
+                        upgrades: set | None = None) -> list[str]:
+    """Everything the cipher block can tell the player, fully solved.
+
+    The end state of the minigame without playing it. Used by the lab CLI
+    (`hackdox lab --tool hashcrack`) and by tests that need this tool's REAL
+    final output to check against ground truth.
+
+    Deliberately routed through the same cipher_header_lines() and
+    cipher_resolve_lines() the live page calls, rather than composing its own
+    prose. A debug view that formats findings its own way is a view that can
+    agree with the answer key while the actual page disagrees.
+    """
+    lines = cipher_header_lines(block, upgrades)
+    if not block.plaintext:
+        lines.append("  [#00ff9f]key-stretched — no alignment exists and no "
+                     "plaintext can be recovered from this block[/]")
+        return lines
+    lines += cipher_resolve_lines(block, candidate, day_number, upgrades)
+    return lines

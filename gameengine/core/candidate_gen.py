@@ -336,7 +336,11 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.EMAIL_GITHUB_MISMATCH,
             # v2: competence / hygiene failures, not malice
             DiscrepancyKind.UNSALTED_STORAGE,
-            DiscrepancyKind.CROSS_BREACH_REUSE,
+            # CROSS_BREACH_REUSE removed 2026-09-14 when it became critical:
+            # this archetype has no critical budget slot, so keeping it listed
+            # would have meant a kind that simply never appeared. It is also no
+            # longer the right story here — deliberate reuse of a public
+            # credential is misconduct, not carelessness.
             DiscrepancyKind.BREACH_HIT,
             DiscrepancyKind.AFTER_HOURS_ACCESS,
             DiscrepancyKind.CLAIMED_IP_MISMATCH,
@@ -417,6 +421,12 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.AFTER_HOURS_ACCESS,
             DiscrepancyKind.CLAIMED_IP_MISMATCH,
             DiscrepancyKind.WEAK_ENCRYPTION,
+            # 2026-09-14: inherited from Clumsy Cutie when the kind became
+            # critical. Knowingly reusing a credential that is already in two
+            # public dumps is exactly this archetype's register — quiet,
+            # deliberate, and only visible if you go looking. Lands in the
+            # critical slot this archetype already has.
+            DiscrepancyKind.CROSS_BREACH_REUSE,
         ),
         handle_style="academic",
         # #56: moved elite -> legit. A claimed elite/trusted affiliation is now
@@ -549,7 +559,12 @@ _SEVERITY_REVEAL = {
     DiscrepancyKind.BRUTE_FORCE_IN_LOG:     (ToolName.LOGWATCH,   "critical"),
     DiscrepancyKind.IMPOSSIBLE_TRAVEL:      (ToolName.LOGWATCH,   "major"),
     DiscrepancyKind.INSIDER_BEHAVIOR:       (ToolName.LOGWATCH,   "major"),
-    DiscrepancyKind.LEAKED_PASSWORD:        (ToolName.HASHCRACK,  "critical"),
+    # 2026-09-14: critical -> major. Appearing in a dump is something that
+    # HAPPENED to this credential; the disqualifying act is continuing to reuse
+    # it across corpora, which is why CROSS_BREACH_REUSE took the critical slot
+    # below. The two were the wrong way round: the passive exposure outranked
+    # the deliberate reuse.
+    DiscrepancyKind.LEAKED_PASSWORD:        (ToolName.HASHCRACK,  "major"),
     # Issue #29 rework: weak encryption + weak plaintext = MINOR violation —
     # a hygiene signal, not immediate grounds for denial.
     DiscrepancyKind.WEAK_CREDENTIAL:        (ToolName.HASHCRACK,  "minor"),
@@ -564,7 +579,18 @@ _SEVERITY_REVEAL = {
     DiscrepancyKind.CREDENTIAL_STUFFING:    (ToolName.LOGWATCH,   "critical"),
     DiscrepancyKind.AFTER_HOURS_ACCESS:     (ToolName.LOGWATCH,   "minor"),
     DiscrepancyKind.LOW_AND_SLOW:           (ToolName.LOGWATCH,   "critical"),
-    DiscrepancyKind.CROSS_BREACH_REUSE:     (ToolName.HASHCRACK,  "major"),
+    # 2026-09-14: major -> critical, swapping with LEAKED_PASSWORD above.
+    # Reusing a password that is already public, across multiple corpora, is a
+    # deliberate ongoing choice rather than a misfortune.
+    #
+    # The promotion forced a second change: Clumsy Cutie's budget is
+    # minor=2/major=1 with NO critical slot, so the kind became unreachable for
+    # the archetype it was written for — and silently, because _roll_discrepancies
+    # gates each forced kind against its own severity slot while the
+    # forced_violations loader never validates budget capacity at all. It moved
+    # to the deliberate-misconduct archetypes instead (Bad Actor already listed
+    # it; Sneaky Bugger gained it), which is what the new severity means.
+    DiscrepancyKind.CROSS_BREACH_REUSE:     (ToolName.HASHCRACK,  "critical"),
     # 2026-08-16: moved HASHCRACK → DOSSIER. Originally speced as "free (hash
     # shape)" but shipped as Hashcrack-only; the dossier now shows the stored
     # password in the clear for this kind (see Dossier.credential_unsalted),
@@ -576,11 +602,23 @@ _SEVERITY_REVEAL = {
     # the login IPs in the Logwatch log, so Logwatch is what actually reveals
     # it (and gates it to Logwatch's unlock day instead of day 1).
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    (ToolName.LOGWATCH,   "minor"),
-    # Weak encryption ALGORITHM (not a weak plaintext) — the hash-shape /
-    # strength chip on the dossier already shows this for free, no tool
-    # needed. Distinct from WEAK_CREDENTIAL, which needs a Hashcrack crack to
-    # confirm the plaintext itself is bad.
-    DiscrepancyKind.WEAK_ENCRYPTION:        (ToolName.DOSSIER,    "minor"),
+    # Weak encryption ALGORITHM (not a weak plaintext). Distinct from
+    # WEAK_CREDENTIAL, which is about the plaintext itself.
+    #
+    # 2026-09-14: moved DOSSIER → HASHCRACK, for the cipher-block rework. The
+    # old tiering rested on the dossier printing a free [WEAK ENC] strength
+    # chip beside the hash — which is precisely the "the game hands you the
+    # answer" problem the rework exists to remove. The dossier now shows the
+    # raw hash and nothing else; establishing the algorithm means reading the
+    # cipher block's SHAPE on the Hashcrack page (32 cols of hex = MD5), or
+    # buying the Cipher ID HUD upgrade to have it named.
+    #
+    # Same shape of retier as #51 and CLAIMED_IP_MISMATCH above, and it fixes
+    # the same class of mistake: the kind is now filed under the tool that
+    # actually reveals it, which also gates it to that tool's unlock day (3)
+    # instead of day 1. The derivation below already consults intro_day(), so
+    # this single line is what moves the gate — no second edit needed.
+    DiscrepancyKind.WEAK_ENCRYPTION:        (ToolName.HASHCRACK,  "minor"),
 }
 
 

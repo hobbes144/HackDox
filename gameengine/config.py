@@ -291,7 +291,7 @@ TOOL_COSTS: dict[str, int] = {
 FILTER_COSTS: dict[str, int] = {
     "ghostscan":  4,   # cross-reference email vs GitHub commit history
     "logwatch":   6,   # geographic timeline overlay
-    "hashcrack":  8,   # extended wordlist + full mutation rules
+    "hashcrack":  8,   # legacy — hashcrack page now uses the cipher-block aperture
     "stegotool":  10,   # legacy — stego page now uses the stamp mechanic
 }
 
@@ -373,6 +373,103 @@ STEGO_GRID_BASE: dict[str, tuple[int, int]] = {
 STEGO_GRID_GROWTH_COLS_PER_DAY = 4   # extra columns per day beyond day 1
 STEGO_GRID_GROWTH_ROWS_PER_DAY = 2   # extra rows per day beyond day 1
 STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflows
+
+# ─── Hashcrack cipher block ──────────────────────────────────────────────────
+#
+# The Hashcrack page is a standalone TWO-STAGE DECRYPTION minigame. The
+# candidate's credential is rendered as a block of ciphertext glyphs; the
+# player identifies the algorithm from the block itself, selects the matching
+# decryption window, and then fine-tunes an alignment dial until the whole
+# block resolves into the password.
+#
+# It replaced an earlier aperture-sweep design (moveable reveal windows, a
+# per-batch ⏱ cost, a coverage threshold). That version was a spatial hunt
+# wearing a cryptography costume — the skill it tested was "find the hidden
+# rectangle", which the stego stamp already does better. This one tests
+# reading a credential and tuning a decrypt, which is the thing the page is
+# actually about.
+#
+# What the player establishes rather than being handed:
+#
+#   1. the ALGORITHM — read off the block's digest shape and glyph alphabet,
+#      free, before any ⏱ is spent (CIPHER_GRID_BASE below);
+#   2. whether it is VIABLE AT ALL — bcrypt is identifiable and uncrackable,
+#      so the only winning move is not to open it;
+#   3. the PASSWORD's own strength — read off the plaintext that comes into
+#      focus as the dial approaches true.
+#
+# Only STAGE 1 costs ⏱, at the tool's ordinary base cost (so inflation and the
+# Hashcrack Optimizer both still apply). The dial is free to turn: the spend
+# decision is "is this credential worth opening", made once, up front.
+
+# ── Block geometry, per encryption tier ───────────────────────────────────
+# (cols, rows) at day 1. The block's shape is the player-facing tell, so these
+# must stay visibly distinct — collapsing two of them silently deletes the
+# free read this whole feature is built on. bcrypt is widest on purpose: the
+# most expensive-looking block is the one you should never pay to open.
+CIPHER_GRID_BASE: dict[str, tuple[int, int]] = {
+    "weak":   (32, 4),    # MD5     — 32 hex
+    "medium": (40, 6),    # SHA256  — 64 hex
+    "strong": (52, 8),    # bcrypt  — $2b$12$…
+}
+# Growth is gentle and asymmetric — area is what makes a block harder to read,
+# and growing both dimensions every day compounds fast.
+CIPHER_GRID_GROWTH_COLS_PER_DAY = 1   # extra columns per day beyond day 1
+CIPHER_GRID_GROWTH_ROWS_PERIOD  = 4   # +1 row every N days beyond day 1
+CIPHER_GRID_MAX = (50, 10)            # hard cap (cols, rows) so it never overflows
+
+# The literal prefix bcrypt stamps into the first cells of the block's top row.
+# Structural evidence, not a label: it is part of the ciphertext the player is
+# looking at, exactly as the $2b$ prefix is part of a real bcrypt hash.
+CIPHER_BCRYPT_PREFIX = "$2b$12$"
+
+# The character that separates repeats of the password when the block decrypts.
+# The plaintext is TILED across the whole block rather than sitting in one run:
+# partial alignment scrambles a different subset of cells in each repeat, so a
+# player who is close can read the password by consensus across rows. That is
+# what makes the last few dial steps satisfying instead of fiddly.
+CIPHER_TILE_SEPARATOR = "·"
+
+# ── Stage 1: the decryption windows ───────────────────────────────────────
+# One window per algorithm family. Selecting the one that matches the
+# candidate's digest engages the decrypt; any other choice wastes the spend.
+# Keys are the tier names used by CIPHER_GRID_BASE and password_strength().
+CIPHER_WINDOWS: tuple[tuple[str, str, str], ...] = (
+    # (tier key, display label, the digest shape it is built for)
+    ("weak",   "MD5",     "32-hex digest"),
+    ("medium", "SHA-256", "64-hex digest"),
+    ("strong", "bcrypt",  "$2b$ key-stretched"),
+)
+
+# ── Stage 2: the alignment dial ───────────────────────────────────────────
+# The decrypt has the right family but the wrong derived key; the dial tunes
+# it. Per tier: how many positions the dial spans, and how near the true value
+# the player must get before ANY cell resolves.
+#
+# Tolerance is the difficulty knob that matters. Outside it the block is pure
+# garbage, so the player must first spin until something legible appears —
+# raising it makes that initial sweep shorter, lowering it makes the block
+# stay dark for longer. Range/tolerance ratios are kept around 2:1 so roughly
+# half the dial's positions give some signal; widen the ratio and the sweep
+# becomes a chore rather than a search.
+CIPHER_ALIGN_RANGE: dict[str, int] = {
+    "weak":   24,   # MD5    — short dial, forgiving
+    "medium": 40,   # SHA256 — longer dial, tighter peak
+    "strong":  0,   # bcrypt — never reaches stage 2 at all
+}
+CIPHER_ALIGN_TOLERANCE: dict[str, int] = {
+    "weak":   10,
+    "medium":  8,
+    "strong":  0,
+}
+CIPHER_DIAL_COARSE_STEP = 5   # PgUp/PgDn jump, for spinning the dial quickly
+
+# ── Credential HUD hint band ──────────────────────────────────────────────
+# Half-width, in dial positions, of the band the Credential HUD upgrade marks
+# around the true alignment. Same stance as STEGO_HINT_BUFFER (#54): it
+# narrows the search, it never answers it, and the BASE TIER MARKS NOTHING.
+# Must stay comfortably wider than 0 — a band of 0 IS the answer.
+CIPHER_HINT_BAND = 4
 
 # ─── Day-cycle pacing ────────────────────────────────────────────────────────
 
@@ -694,26 +791,6 @@ LW_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
 # account + pattern, not just scan for non-US/non-internal city names.
 LW_NOISE_EXTERNAL_CITY_FRACTION = 0.3
 
-# ─── Hashcrack shared log — volume scaling ───────────────────────────────────
-#
-# Same shape as LW_ENTRIES_BY_DAY above. Previously a flat max(80, 160 -
-# len(candidate_entries)) regardless of day (no day-scaling at all) — batch-3
-# task #4d/#7 made it day-scaled and configurable, and — same reasoning as
-# LW_ENTRIES_BY_DAY above — started smaller now that Credential HUD's
-# highlighting is a real gate instead of a no-op.
-HC_ENTRIES_BY_DAY: dict[int, int] = {
-    1:  35,
-    2:  45,
-    3:  55,
-    4:  70,
-    5:  85,
-    6: 100,
-    7: 115,
-}
-HC_ENTRIES_DEFAULT      = 95    # fallback for days not in the dict
-HC_ENTRIES_SCALE_FACTOR = 1.15  # multiplier applied per day beyond the last key
-HC_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
-
 # ─── Log generation timing (batch-3 task #7) ─────────────────────────────────
 #
 # Every (min, max) pair below feeds an rng.randint(*pair) somewhere in
@@ -757,24 +834,19 @@ LW_NOISE_EVENT_WEIGHTS: list[str] = [
     "AUTH_OK", "AUTH_OK", "AUTH_FAIL", "FILE_READ", "SESSION_END", "AUTH_OK",
 ]
 
-# Hashcrack — normal/legit candidate activity window and pacing
-HC_WORKDAY_WINDOW        = (25200, 50400)   # 7am–2pm
-HC_NORMAL_LOGIN_GAP      = (30, 120)        # AUTH_OK → hash submit, non-stuffing path
-HC_HASH_SUBMIT_GAP       = (5, 30)          # login → HASH_SUBMIT row
+# Credential rows in the Logwatch log (relocated 2026-09-14)
+#
+# The cipher-block rework deleted the Hashcrack page's own shared credential
+# audit log, and with it every HC_* knob that paced it: HC_ENTRIES_BY_DAY and
+# friends (volume), HC_WORKDAY_WINDOW / HC_NORMAL_LOGIN_GAP /
+# HC_HASH_SUBMIT_GAP (timing), HC_STUFFING_* (a burst Logwatch was already
+# generating for itself via LW_BRUTE_BURST_SIZE / LW_STUFFING_SPRAY_SIZE
+# above), and HC_NOISE_* (noise rows that no longer exist).
+#
+# Only this one survives, because only the rows it paces survived: the
+# BREACH_MATCH corroboration now emitted at the end of
+# tools_bridge._lw_candidate_entries.
 HC_BREACH_ROW_GAP        = (5, 20)          # gap between a candidate's breach-match rows
-
-# Hashcrack — credential-stuffing burst (gated on CREDENTIAL_STUFFING itself,
-# see #62 in tools_bridge._hc_candidate_entries)
-HC_STUFFING_BURST_SIZE   = (3, 6)
-HC_STUFFING_COOLDOWN     = (1, 3)           # burst → the AUTH_OK that follows it
-HC_STUFFING_POST_GAP     = (10, 60)         # AUTH_OK → hash submit
-
-# Hashcrack — noise (unrelated background accounts)
-HC_NOISE_TIME_WINDOW     = (21600, 79200)
-HC_NOISE_EVENT_WEIGHTS: list[str] = [
-    "AUTH_OK", "AUTH_OK", "AUTH_FAIL", "HASH_SUBMIT",
-    "AUTH_OK", "HASH_SUBMIT", "BREACH_MATCH",
-]
 
 # ─── Upgrades (issue #23) ────────────────────────────────────────────────────
 #
@@ -790,14 +862,16 @@ HC_NOISE_EVENT_WEIGHTS: list[str] = [
 
 # Auto-highlight upgrades — surface signals the engine already computes.
 UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: colour suspicious log lines
-UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: colour suspicious audit lines
+UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: mark the band of the
+                                                # alignment dial holding the true key
 UPGRADE_EMAIL_APPROVED   = "email_approved_highlight"    # dossier: green trusted domains
 UPGRADE_EMAIL_PROHIBITED = "email_prohibited_highlight"  # dossier: red disposable domains
 UPGRADE_AFFIL_APPROVED   = "affil_approved_highlight"    # dossier: green trusted orgs
 UPGRADE_AFFIL_PROHIBITED = "affil_prohibited_highlight"  # dossier: red threat-actor orgs
 UPGRADE_STEGO_TINT       = "stego_area_tint"    # Stegotool: stronger area-of-interest tint
 UPGRADE_CHAT_HOSTILE     = "chat_hostile_highlight"      # chat: mark hostile lines
-UPGRADE_CRYPTO_ID        = "crypto_id_highlight"   # dossier: auto-label MD5/SHA256/bcrypt chip
+UPGRADE_CRYPTO_ID        = "crypto_id_highlight"   # hashcrack: auto-label the cipher
+                                                   # block's tier (MD5/SHA256/bcrypt)
 UPGRADE_BREACH_AUTO      = "breach_auto_detect"    # ghostscan: confirm BREACH_HIT on the free base run
 UPGRADE_HC_VERDICT       = "hashcrack_verdict_highlight"  # hashcrack: label a crack's strength verdict
 UPGRADE_STEGO_RGB_COLOR  = "stego_rgb_color"       # stegotool: colour-code channel entropy readout
@@ -819,15 +893,15 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",     20, "auto-highlight approved affiliations on the dossier"),
     (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
     (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
-    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "auto-highlight suspicious lines in the Hashcrack audit log"),
+    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the band of the alignment dial the true key sits in"),
     (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "auto-highlight suspicious lines in the Logwatch day log"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 35, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     30, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the dossier's encryption-strength chip (MD5/SHA256/bcrypt)"),
+    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
     (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     30, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a cracked password's strength verdict, not just the plaintext"),
+    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a recovered password's strength verdict, not just the plaintext"),
     (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",    25, "colour-code the RGB channel entropy readout by severity"),
 ]
 
@@ -921,6 +995,19 @@ KEY_BINDINGS: dict[str, str] = {
     # arrow keys move the stamp, Space stamps (STEGO_STAMP_COST),  and
     # Escape (or this key again) exits.
     "stamp_mode":       "x",
+
+    # ── Hashcrack decrypt mode (page 3 only) ──────────────────
+    # Deliberately the SAME physical key as stamp mode above: one "engage this
+    # page's minigame" gesture, dispatched on which page you are standing on.
+    # They are separate entries rather than one shared name because the two
+    # modes have different costs, different surfaces and different exit
+    # behaviour — collapsing them into one binding would make rebinding either
+    # silently rebind the other.
+    # Decrypt mode runs in two stages: first left/right pick a decryption
+    # window and Enter buys it, then left/right turn the alignment dial
+    # (PgUp/PgDn for a coarse jump) with the block sharpening live. Escape
+    # (or this key again) exits from either stage.
+    "decrypt_mode":     "x",
 
     # ── Misc ────────────────────────────────
     # Toggle the editable Evidence Board on every page. On tool pages (2-5)

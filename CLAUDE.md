@@ -554,11 +554,20 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 
 ## Session Log
 
+> **Documentation note (added 2026-09-14 by the health-check sweep):** this log's most recent
+> narrated entry below is 2026-08-16. Batches 2 through 5, the Evidence Board chip-grid rework,
+> the Hashcrack cipher-block/stamp-minigame rework, `core/overseer.py`, and `core/content_loader.py`
+> all shipped after that date and are **not** narrated here — only in project memory
+> (`planning_sprint.md`, `evidence_board_chips.md`, `hashcrack_cipher_block.md`, `batch4_audit.md`,
+> `batch5_plan.md`). Treat this Session Log, and the Evidence Catalog table further up, as accurate
+> only through 2026-08-16; check `rules_content.py`'s `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` and
+> project memory for anything current.
+
 ### 2026-08-16 (playtest fixes)
 Ad-hoc fixes from Nick's manual playtesting, applied directly (not a numbered backlog batch — see `planning_sprint.md`/`playtest_fixes.md` in project memory for the Batch 1 epic that shipped separately the same day). All 32 `gameengine/tests` pass throughout; changes also verified with 2000+-candidate generation sweeps across days 1-5.
 - **Tab-toggle bug fixed:** pressing Tab on the Candidate/Dossier page used to force-navigate to Ghostscan and only ever open the Evidence Board, never close it (`on_key`'s Tab handler special-cased page 0 instead of calling `_toggle_evidence()`, even though `board_c0` already supported toggling in place there). Now unified across all 5 pages.
 - **`CLAIMED_IP_MISMATCH` moved Dossier → Logwatch** in `_SEVERITY_REVEAL` — the dossier's `claimed_ip` field never actually varied by violation; the mismatch was only ever expressed in the Logwatch log data. Now gated to Logwatch's unlock day (4) instead of day 1.
-- **New `WEAK_ENCRYPTION` kind** (Dossier, minor, free) — flags the password's encryption *algorithm* (MD5 strength chip) independent of the plaintext's quality; fills the slot `CLAIMED_IP_MISMATCH` vacated. Distinct from `WEAK_CREDENTIAL` (needs a Hashcrack crack to confirm the plaintext itself is bad).
+- **New `WEAK_ENCRYPTION` kind** (Dossier, minor, free) — flags the password's encryption *algorithm* (MD5 strength chip) independent of the plaintext's quality; fills the slot `CLAIMED_IP_MISMATCH` vacated. Distinct from `WEAK_CREDENTIAL` (needs a Hashcrack crack to confirm the plaintext itself is bad). **Correction, 2026-09-14 (health-check sweep):** no longer accurate — the Hashcrack cipher-block rework retiered `WEAK_ENCRYPTION` to `(ToolName.HASHCRACK, "minor")` in `_SEVERITY_REVEAL` (reading the cipher block's digest shape, or buying the Cipher ID HUD upgrade, is what reveals it now; the dossier no longer prints a free strength chip). See `rules_content.VIOLATION_CATALOG`/`_CATCH` for the current, single-sourced tier — treat this paragraph as history, not current behavior.
 - **Bug found + fixed:** `_roll_discrepancies` could plant two "credential-artifact" kinds on one candidate at once (e.g. Clumsy Cutie rolling `CROSS_BREACH_REUSE` + `WEAK_ENCRYPTION` together), but `generate()`'s hash-selection is a single if/elif chain — the loser had no matching hash a player could ever actually observe, an unflaggable ground-truth violation. New `candidate_gen._CREDENTIAL_ARTIFACT_KINDS` set enforces at most one credential kind per candidate.
 - **`UNSALTED_STORAGE` moved Hashcrack → Dossier**, major severity — this is the reveal tier the original design doc specced ("free (hash shape)") but it had shipped Hashcrack-only. New `Dossier.credential_unsalted` flag makes the dossier password field show the plaintext in the clear (⚠ UNSALTED marker), no crack required; `submitted_hash` stays a real MD5 underneath so Hashcrack's own log rendering needed no changes.
 - **Evidence Board `_GROUP_ORDER`** reordered to match tool-page order: DOSSIER, OSINT, CREDENTIAL, FORENSICS, STEGO (was …, FORENSICS, CREDENTIAL, …).

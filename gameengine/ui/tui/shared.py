@@ -110,30 +110,46 @@ _REF_GHOSTSCAN = """[#7dd3c0][b]COMMANDS — GHOSTSCAN[/][/]
 [dim]── verdict ─────────────────────────[/]
 [#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
 
-_REF_HASHCRACK = """[#7dd3c0][b]COMMANDS — HASHCRACK[/][/]
+_REF_HASHCRACK = """[#7dd3c0][b]THE CIPHER BLOCK[/][/]
 
-[#00ff9f]crack[/]  [dim]or[/] [#00ff9f]h[/]
-  highlight target in shared log
-  + crack hash inline in log
-  [dim]cost: 3 ⏱[/]
+[#c084fc]X[/]  [dim]or[/] [#c084fc]crack[/] [dim]/[/] [#c084fc]h[/]
+  open the window selector
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
-  explicit ▲ violation labels:
-  WEAK_CREDENTIAL · LEAKED_PASSWORD
-  [dim]cost: +4 ⏱[/]
+[dim]── 1. read the digest (free) ─────[/]
+[dim]The header states the digest
+shape before you spend anything.[/]
+[#ff5470]32 hex[/]   [dim]MD5     short dial[/]
+[#ffd93d]64 hex[/]   [dim]SHA-256 long dial[/]
+[#00ff9f]$2b$[/]     [dim]bcrypt  DEAD END[/]
 
-[dim]── encryption strength ───────────[/]
-[#ff5470]WEAK[/]    [dim]MD5 32 hex — cracks instantly[/]
-[#ffd93d]MEDIUM[/]  [dim]SHA256 64 hex — crackable[/]
-[#00ff9f]STRONG[/]  [dim]bcrypt $2b$ — always safe,
-        don't waste ⏱ cracking it[/]
-[dim]weak enc + weak password
-= WEAK_CREDENTIAL (minor)[/]
+[dim]bcrypt's window fits, engages,
+then stalls — key-stretched, no
+alignment exists. Walking away
+costs nothing. Opening it to find
+out costs a full window.[/]
 
-[dim]── log events ────────────────────[/]
-[dim]AUTH_FAIL/OK  login attempts[/]
-[dim]HASH_SUBMIT   hash + source IP[/]
-[dim]BREACH_MATCH  corpus hit[/]
+[dim]── 2. pick the window (costs ⏱) ──[/]
+[#c084fc]←→[/] [dim]choose[/]  [#c084fc]Enter[/] [dim]apply[/]
+[dim]wrong window = no structure, and
+the ⏱ is gone. Read first.[/]
+
+[dim]── 3. turn the dial (free) ───────[/]
+[#c084fc]←→[/] [dim]step[/]  [#c084fc]PgUp/PgDn[/] [dim]jump[/]
+[dim]far   [/] [#6b7785]b99a8deb7c008949[/]
+[dim]close [/] [#c084fc]qN7!fWc$4kZt2[/][#6b7785]9q97![/]
+[dim]exact [/] [#c084fc]qN7!fWc$4kZt2·qN7![/]
+[dim]the password tiles across every
+row, so you can read it by
+consensus before you're exact.
+a few cells only settle at the
+exact value — that's the lock.[/]
+
+[dim]── then judge it ─────────────────[/]
+[#ff5470]weak[/]    [dim]password01 · dates · walks[/]
+[#00ff9f]strong[/]  [dim]long, mixed, symbol-laden[/]
+[dim]weak pw + weak algo[/] [#ffd93d]WEAK_CREDENTIAL[/]
+[dim]in a corpus[/]        [#ff8c42]LEAKED_PASSWORD[/]
+[dim]in TWO corpora[/]     [#ff5470]CROSS_BREACH_REUSE[/]
 
 [dim]── verdict ─────────────────────[/]
 [#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
@@ -295,13 +311,13 @@ def _hl_affil(affil: str, upgrades: set) -> str:
 
 
 # ─── Dossier password field (issue #29) ──────────────────────────────────────
-# Every dossier shows the submitted password in encrypted form plus its
-# encryption-strength tier (derived from the hash shape). After Hashcrack
-# runs, the cracked plaintext is shown in place across all pages.
+# Every dossier shows the submitted credential in encrypted form. Once the
+# Hashcrack cipher block resolves it, the recovered plaintext is shown in place
+# across all pages.
 #
 # Panel convention for `cracked_password`:
-#   None → not attempted yet   ·   "" → attempted, bcrypt held (uncracked)
-#   str  → cracked plaintext
+#   None → not recovered yet   ·   "" → bcrypt, established as unrecoverable
+#   str  → recovered plaintext
 
 _PW_STRENGTH_META: dict[str, tuple[str, str, str]] = {
     "weak":   ("#ff5470", "WEAK ENC",   "MD5"),
@@ -315,24 +331,26 @@ def _password_markup(dossier, cracked_password: str | None,
                      prefix_len: int = 14) -> tuple[str, str]:
     """(hash line, state line) for the dossier password field.
 
-    Batch-3 task #4: the [WEAK ENC]/[MEDIUM ENC]/[STRONG ENC] algorithm chip
-    is gated behind config.UPGRADE_CRYPTO_ID ("Cipher ID HUD") — without it,
-    only the raw hash is shown, and the player has to recognise MD5 (32 hex)
-    / SHA256 (64 hex) / bcrypt ($2b$…) by shape, using the rules page's new
-    reference examples. This doesn't remove WEAK_ENCRYPTION's evidence (the
-    hash itself is still fully visible), it just stops auto-labelling it.
+    2026-09-14, cipher-block rework: the dossier NO LONGER shows an encryption-
+    strength chip at all, upgrade or not. It shows the raw hash and says where
+    to go.
 
-    The "strongest tier is always safe" verdict line is gated separately,
-    behind config.UPGRADE_HC_VERDICT ("Crack Verdict Analyzer") — the same
-    upgrade that gates the equivalent wording in tools_bridge's Hashcrack
-    audit log (#6a), so the dossier and the tool never disagree about
-    whether a strength verdict is being told to the player for free.
+    That chip was the single biggest "the game answers its own question"
+    surface left in the build. WEAK_ENCRYPTION is a violation about the
+    ALGORITHM, and the dossier printed the algorithm for free on every
+    candidate — so the kind was, in effect, pre-flagged. It has been retiered
+    to HASHCRACK (see candidate_gen._SEVERITY_REVEAL) and establishing the
+    algorithm is now something the player does at the cipher block, by reading
+    its shape or by buying Cipher ID HUD to have it named THERE.
 
-    Batch-3 follow-up: UNSALTED_STORAGE (credential_unsalted) is handled
-    FIRST and returns early — there is no hash-shaped chip to show and
-    nothing left to crack, so the Password entry line itself is simply the
-    plaintext (no "encrypted — run hashcrack" prompt can ever appear next to
-    it, since that line only exists further down in the salted branch).
+    `_PW_STRENGTH_META` above is deliberately kept: the rules page renders the
+    same three tiers in its reference table, which is where the player learns
+    the shapes in the first place. It just no longer decorates the dossier.
+
+    UNSALTED_STORAGE (credential_unsalted) is still handled FIRST and returns
+    early — there is no hash to show and nothing to recover, so the entry line
+    is simply the plaintext. That kind stays dossier-tier: no salt means the
+    stored value really is exposed without any tool at all.
     """
     upgrades = upgrades or ()
     if dossier.credential_unsalted:
@@ -340,27 +358,18 @@ def _password_markup(dossier, cracked_password: str | None,
         # the stored value is exposed outright. Don't show an encrypted-
         # looking hash at all here — that reads as "still needs cracking"
         # and papers over the actual finding. ⚠ UNSALTED tags it as the
-        # UNSALTED_STORAGE evidence rather than a cracked result.
+        # UNSALTED_STORAGE evidence rather than a recovered result.
         head = f"[b #e8f0f8]{dossier.password_plain}[/]  [#ff5470][b]⚠ UNSALTED[/][/]"
         return head, ""
-    strength = tools_bridge.password_strength(dossier.submitted_hash)
-    if strength is None:
+    if not dossier.submitted_hash:
         return "[dim](none)[/]", ""
-    col, label, algo = _PW_STRENGTH_META[strength]
-    if config.UPGRADE_CRYPTO_ID in upgrades:
-        head = (f"{dossier.submitted_hash[:prefix_len]}…  "
-                f"[{col}][b]{label}[/][/] [#6b7785]{algo}[/]")
-    else:
-        head = f"{dossier.submitted_hash[:prefix_len]}…"
+    head = f"{dossier.submitted_hash[:prefix_len]}…"
     if cracked_password is None:
-        state = "[dim]encrypted — run hashcrack (H) to attempt crack[/]"
+        state = "[dim]encrypted — open the cipher block on Hashcrack (3)[/]"
     elif cracked_password == "":
-        if config.UPGRADE_HC_VERDICT in upgrades:
-            state = "[#00ff9f]✓ uncracked — strongest tier is always safe[/]"
-        else:
-            state = "[dim]✓ crack abandoned — no plaintext recovered[/]"
+        state = "[dim]✓ key-stretched — nothing recoverable[/]"
     else:
-        state = f"[#c084fc]cracked →[/]  [b #e8f0f8]{cracked_password}[/]"
+        state = f"[#c084fc]recovered →[/]  [b #e8f0f8]{cracked_password}[/]"
     return head, state
 
 

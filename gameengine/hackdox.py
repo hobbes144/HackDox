@@ -217,17 +217,24 @@ def _lab_day(day_number: int, archetypes: list[str], violations: list[str],
 def _lab_tool_output(candidate, tool: ToolName, day, seed: int) -> list[str]:
     """The real filtered output of `tool` for this candidate.
 
-    The shared Logwatch/Hashcrack day logs are built per (seed, day) and contain
-    a block per candidate in the roster, so the seed must be the one the
-    candidate came from — passing a different one yields a log the candidate
-    simply is not in, which looks exactly like a rendering bug and isn't.
+    The shared Logwatch day log is built per (seed, day) and contains a block
+    per candidate in the roster, so the seed must be the one the candidate came
+    from — passing a different one yields a log the candidate simply is not in,
+    which looks exactly like a rendering bug and isn't.
+
+    Hashcrack no longer has a log or a filter tier: since the cipher-block
+    rework its output is the aperture minigame's end state, which
+    cipher_full_readout() produces without simulating a sweep (the same way
+    the Stegotool case below takes stamp_signature_lines rather than stamping).
     """
     state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
     if tool == ToolName.GHOSTSCAN:
         return list(tools_bridge.run_ghostscan_filtered_shared(candidate, state).raw_lines)
     if tool == ToolName.HASHCRACK:
-        entries = tools_bridge.generate_hashcrack_day_log(seed, day)
-        return list(tools_bridge.run_hashcrack_filtered_shared(entries, candidate, state).raw_lines)
+        block = tools_bridge.build_cipher_block(candidate, day.number)
+        return list(tools_bridge.cipher_full_readout(
+            block, candidate, day.number,
+            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT}))
     if tool == ToolName.LOGWATCH:
         entries = tools_bridge.generate_day_log(seed, day)
         return list(tools_bridge.run_logwatch_filtered_shared(entries, candidate, state).raw_lines)

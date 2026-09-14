@@ -40,7 +40,12 @@ def test_dossier_material_left_the_rules_tab():
     def has_section(text: str, title: str) -> bool:
         return f"── {title} ─" in text
 
-    for moved in ("password encryption strength", "email domains",
+    # "password encryption strength" became "the password field" when the
+    # dossier stopped labelling encryption tiers — establishing the algorithm
+    # is the cipher block's job now, and the tier table lives on the
+    # CREDENTIALS tab. The section itself still belongs on Dossier: it
+    # describes what the dossier actually shows.
+    for moved in ("the password field", "email domains",
                   "affiliations"):
         assert has_section(dossier, moved), f"{moved!r} should be on Dossier"
         assert not has_section(rules, moved), f"{moved!r} still on Rules"
@@ -271,7 +276,11 @@ def test_rules_screen_evidence_board_respects_unlocked_tools():
     state_obj = EvidenceState()
     screen = RulesScreen(day, state_obj, unlocked_tools={"ghostscan"})
     groups = {g for g, _k, _l in screen._ev_board._items}
-    assert groups == {"DOSSIER", "OSINT"}
+    # CREDENTIAL joins these two from day 1: UNSALTED_STORAGE is grouped there
+    # but tiered DOSSIER, so it is observable before Hashcrack exists. The
+    # gating rule is per-KIND (by its revealing tool), never per-group — see
+    # test_locked_tools_remove_whole_categories_rather_than_leaving_holes.
+    assert groups == {"DOSSIER", "OSINT", "CREDENTIAL"}
 
 
 def test_every_violation_has_a_worked_example():
@@ -316,30 +325,50 @@ def test_worked_examples_render_as_valid_markup_next_to_their_violation():
                 f"{kind.name}'s example is not positioned right after its own row")
 
 
-def test_dossier_encryption_strength_section_has_a_worked_example_per_tier():
-    """Nick, follow-up to task #6: the Hashcrack tab's encryption-strength
-    reference already had worked hash examples; the Dossier tab's shorter
-    quick-reference version of the same chip didn't. Every tier (and the
-    UNSALTED marker) now shows a recognizable example hash/value alongside
-    its description, and the whole section still parses as valid markup."""
+def test_the_tier_reference_moved_to_the_credentials_tab():
+    """The per-tier reference lives where the player now needs it.
+
+    Rewritten 2026-09-14. The Dossier tab used to carry a quick-reference
+    version of the encryption-strength chip, with a worked example per tier.
+    That chip no longer exists: the dossier shows a raw hash and says nothing
+    about it, because establishing the algorithm is the cipher block's job and
+    WEAK_ENCRYPTION is a violation ABOUT the algorithm.
+
+    So the assertion moves rather than disappears — the reference a player
+    matches a digest against still has to exist somewhere, and that somewhere
+    is the CREDENTIALS tab. The Dossier tab keeps only what the dossier itself
+    shows: a raw hash, and the one credential violation visible with no tool."""
     from rich.errors import MarkupError
     from rich.text import Text
 
     day = load_day(1)
-    text = rules_content.build_dossier_text(day)
-    i = text.find("password encryption strength")
+    creds = rules_content.build_creds_text(day, {"hashcrack"})
+
+    # Each tier identifiable by the shape the block header actually prints.
+    assert "32 hex characters" in creds     # WEAK / MD5
+    assert "64 hex characters" in creds     # MEDIUM / SHA256
+    assert "$2b$ prefix" in creds           # STRONG / bcrypt
+    # ...and the tab must say which of them is worth opening at all.
+    assert "bcrypt is a dead end by design" in creds
+
+    dossier = rules_content.build_dossier_text(day)
+    i = dossier.find("the password field")
     assert i != -1
-    section = text[i:i + 1400]
+    section = dossier[i:i + 1400]
+    assert "UNSALTED" in section, (
+        "the dossier no longer documents the one credential violation it does "
+        "show for free")
+    for gone in ("WEAK ENC", "MEDIUM ENC", "STRONG ENC"):
+        assert gone not in section, (
+            f"{gone!r} is back on the dossier — the tier chip was removed so "
+            f"that WEAK_ENCRYPTION is not pre-flagged on every candidate")
 
-    # A recognizable example for each tier, distinguishable by hex length /
-    # prefix shape — the whole point of "so the player can recognize it".
-    assert "5f4dcc3b5aa765d61d8327deb882cf99" in section   # WEAK / MD5, 32 hex
-    assert "a94a8fe5ccb19ba61c4c0873d391e987" in section    # MEDIUM / SHA256, 64 hex
-    assert "$2b$12$" in section                              # STRONG / bcrypt prefix
-    assert "monkey123" in section or "UNSALTED" in section
-
-    for ln in text.split("\n"):
-        try:
-            Text.from_markup(ln)
-        except MarkupError as e:
-            raise AssertionError(f"invalid markup in dossier text: {ln!r} ({e})")
+    # Per-LINE rather than whole-text: a single malformed tag is far easier to
+    # find when the failure names the one line carrying it.
+    for label, body in (("credentials tab", creds), ("dossier tab", dossier)):
+        for ln in body.split("\n"):
+            try:
+                Text.from_markup(ln)
+            except MarkupError as e:
+                raise AssertionError(
+                    f"invalid markup in {label}: {ln!r} ({e})") from e
