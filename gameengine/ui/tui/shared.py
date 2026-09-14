@@ -172,11 +172,11 @@ _REF_STEGOTOOL = """[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]
 
 [dim]── signature colors ────────────────[/]
 [#ff8c42]AMBER[/]    plaintext LSB payload
+[#c084fc]VIOLET[/]   covert C2 channel
+  [dim]sparse scatter, wide zone[/]
   [dim]dense solid block[/]
 [#ff5470]CRIMSON[/]  encrypted payload
   [dim]mid-density, structured[/]
-[#c084fc]VIOLET[/]   covert C2 channel
-  [dim]sparse scatter, wide zone[/]
 [#00ff9f]GREEN[/]    region clean
 
 [dim]── reading the image ───────────────[/]
