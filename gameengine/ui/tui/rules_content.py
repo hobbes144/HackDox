@@ -456,6 +456,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.LEAKED_PASSWORD:        "align the cipher block and the recovery readout names the corpus the plaintext was dumped in; the Logwatch BREACH_MATCH rows corroborate it",
     DiscrepancyKind.WEAK_CREDENTIAL:        "the recovered plaintext is a dictionary word or keyboard walk — judge it yourself, or buy Crack Verdict Analyzer to have it called",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "the recovery readout names TWO corpora holding the same plaintext — the breach panel lists both",
+    DiscrepancyKind.UNSALTED_STORAGE:       "no salt at all — the stored value is the plaintext, exposed without any tool run",
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
 
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
@@ -1125,20 +1126,21 @@ def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "",
         "  The Hashcrack page renders that credential as a block of ciphertext",
         "  and decrypts it in [b]two stages[/]: first you choose the decryption",
-        "  window matching the algorithm, then you tune an alignment dial until",
-        "  the text resolves. Only the first stage costs ⏱.",
+        "  window matching the algorithm, then you walk an alignment pad until",
+        "  the text resolves. Stage 1 always costs ⏱; stage 2 only bills you",
+        "  if you wander.",
     ]
     lines += _sub("before you spend — read the block", "#c084fc")
     lines += [
         "  The block's header states its DIGEST SHAPE, free, on arrival. That",
         "  one line answers both questions that matter:",
         "",
-        "[#6b7785]  DIGEST                 ALGORITHM   DIAL     WORTH OPENING?[/]",
+        "[#6b7785]  DIGEST                 ALGORITHM   PAD      WORTH OPENING?[/]",
         f"[#1c2733]{'─' * _W}[/]",
         (f"  [#ff5470]{_fit('32 hex characters', 23)}[/]{_fit('MD5', 12)}"
-        f"{_fit('short', 9)}yes — cheapest crack in the game"),
+        f"{_fit('small', 9)}yes — cheapest crack in the game"),
         (f"  [#ffd93d]{_fit('64 hex characters', 23)}[/]{_fit('SHA-256', 12)}"
-        f"{_fit('long', 9)}yes — but the key takes finding"),
+        f"{_fit('wide', 9)}yes — but the key takes finding"),
         (f"  [#00ff9f]{_fit('$2b$ prefix', 23)}[/]{_fit('bcrypt', 12)}"
         f"{_fit('none', 9)}[b]NO[/] — nothing is recoverable"),
         f"[#1c2733]{'─' * _W}[/]",
@@ -1160,28 +1162,35 @@ def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [#ff5470]wrong window[/]   no structure emerges. The ⏱ is spent. Read the",
         "                 digest and try again.",
         "  [#00ff9f]bcrypt window[/]  fits, engages, stalls. Nothing to recover.",
-        "  [#c084fc]right window[/]   the block gains structure and the dial unlocks.",
+        "  [#c084fc]right window[/]   the block gains structure and the pad unlocks.",
     ]
-    lines += _sub("stage 2 — the alignment dial", "#c084fc")
+    lines += _sub("stage 2 — the alignment pad", "#c084fc")
     lines += [
-        "  The decrypt has the right family but the wrong derived key. Turning",
-        "  the dial is [b]free[/] — arrows step, PgUp/PgDn jump — and the block",
-        "  updates live.",
+        "  The decrypt has the right family but the wrong derived key — and",
+        "  that key is a [b]coordinate[/]. All four arrows are live: ←→ walks X,",
+        "  ↑↓ walks Y, and the block updates on every single press.",
         "",
-        "  Too far out and the block is pure ciphertext. Come within range and",
-        "  characters start holding still; keep closing and the password tiles",
-        "  itself across every row, so you can read it by consensus long before",
-        "  you are exact:",
+        "  Too far out and the block is pure ciphertext. Close in and characters",
+        "  start holding still; the password tiles itself across every row, so",
+        "  you can read it by consensus long before you are exact:",
         "",
         "  [dim]far   [/] [#6b7785]b99a8deb7c008949ad7f61aacf6edb07[/]",
         "  [dim]close [/] [#c084fc]qN7!fWc$4kZt2[/][#6b7785]9q97!fWc$4kcf2·qN0![/]",
         "  [dim]exact [/] [#c084fc]qN7!fWc$4kZt2·qN7!fWc$4kZt2·qN7![/]",
         "",
-        "  A few cells only settle at the [b]exact[/] value — that is the lock. The",
+        "  A few cells only settle on the [b]exact[/] square — that is the lock. The",
         "  credential resolves, the breach corpus is named, and the violations",
         "  are labelled only there.",
         "",
-        "  [#00ff9f]Credential HUD[/] marks the band of the dial the true key sits in.",
+        "  [#ff8c42]Every press counts.[/] Both axes move the same measure, so any",
+        "  press either warms or cools the block — there is no wasted direction,",
+        f"  and no dead zone. The first {config.CIPHER_DIAL_FREE_STEPS} steps are free;"
+        f" after that every",
+        f"  {config.CIPHER_DIAL_OVERAGE_BLOCK} further steps cost "
+        f"{config.CIPHER_DIAL_OVERAGE_COST} ⏱. Walking more or less straight at",
+        "  the key never costs anything — sweeping the pad at random does.",
+        "",
+        "  [#00ff9f]Credential HUD[/] marks the box of the pad the true key sits in.",
         "  It narrows the search; it does not answer it.",
     ]
     lines += _sub("then judge what you recovered", "#c084fc")

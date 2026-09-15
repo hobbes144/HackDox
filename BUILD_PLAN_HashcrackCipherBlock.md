@@ -318,3 +318,105 @@ guard keeps its teeth for new mistakes.
 The pre-existing `test_every_tutorial_day_actually_contains_its_scripted_violations`
 also catches the day-3 break — the codebase's own guard was live and would have
 caught it.
+
+---
+
+## Round 3 — the alignment pad (two axes + a step budget)
+
+Stage 2 was a single scalar dial. It is now a **two-dimensional coordinate**:
+the derived key is an `(x, y)` square on a pad, and the player walks to it with
+all four arrow keys, reading the ciphertext sharpening as their guidance.
+Walking is free up to a budget; wandering past it costs a little ⏱.
+
+### Why two axes
+
+A one-dimensional dial can be bisected by feel — spin, glance, spin — so a
+player could solve stage 2 without ever really reading the block, which is the
+one thing the stage exists for. Two axes have no such shortcut. They also give
+the step budget something meaningful to measure: on a line, "efficient" and
+"lucky" are the same thing.
+
+### The three decisions that make it playable
+
+**Manhattan error, not Chebyshev.** `err = |dx| + |dy|`. Under a `max()` metric
+a player one step off in x and nine off in y sees *nothing* change when they
+press left or right — the larger axis swallows the smaller one, and half their
+keypresses appear to do nothing. Manhattan moves the error by exactly one on
+every press, so each press answers the question the player just asked: warmer,
+or colder. Guarded by `test_both_axes_move_the_error_by_exactly_one`.
+
+**A convex tolerance curve, with no dead zones.** Per-cell thresholds are drawn
+`round(max_walk * u ** falloff)`, so the share of the block legible at error `e`
+is `1 − (e/max_walk) ** (1/falloff)`. Two consequences, both deliberate:
+
+- *Every square has signal.* The first cut used a flat `0..tolerance` draw,
+  which left over half the medium pad showing nothing at all — every search
+  opened with a blind walk. Blind walking is bad by itself and worse with a
+  step budget attached, because the player gets billed for steps they had no
+  way to aim. Now only the far corner is near-blank; the rim is dim, not dark.
+- *The gradient is steepest at the end.* With `falloff > 1` the last few steps
+  each flip a large share of the block while steps out at the rim barely move
+  it. That is the right way round: it is the fine-tune that should feel
+  precise, not the approach.
+
+**The step budget prices wandering, not playing.** First 45 presses free, then
+1 ⏱ per 10. Calibrated by simulating players against real generated blocks
+(`sim_pad.py`):
+
+| player | median steps | pays nothing | mean fee |
+|---|---|---|---|
+| clean coordinate descent | 16 | **100%** | 0 ⏱ |
+| same, with human slip/overshoot | 16 | **100%** | 0 ⏱ |
+| careless hill-climber | 29 | 82% | 0.3 ⏱ |
+| near-random wandering | 52 | 43% | 2.5 ⏱ |
+
+The worst case for a player who walks *straight* at the key is the pad's full
+diagonal — 36 steps on the largest pad, since the cursor always starts at
+`(0, 0)` — so the free allowance clears it with room to spare and the fee only
+ever means "you wandered". `test_a_direct_walk_is_always_free` pins that
+relationship so retuning `CIPHER_ALIGN_SPAN` cannot quietly break it.
+
+Two rules keep the fee honest: a move clamped at an edge is **not** billed
+(holding a direction against the wall must not drain ⏱ while nothing moves),
+and an unaffordable fee is **waived, not enforced** (blocking the pad on an
+empty balance would strand a credential the player already paid to open —
+the budget is a pacing nudge, not a way to end a search).
+
+### Credential HUD
+
+The hint is now a **box**, and its half-width is a fraction of each axis rather
+than a flat number of positions. A flat half-width of 3 was a genuine hint on a
+28-wide X axis and covered the *entire* 6-tall Y axis — the upgrade looked
+correct by every previous assertion while silently handing the player one of
+the two coordinates. `test_the_hint_box_narrows_both_axes_without_covering_either`
+now tests proportions, not just containment.
+
+### Guard verification — 14 mutations
+
+Eleven red on the first pass. Of the three that survived, two were faults in the
+mutation harness (a same-size config edit left a stale `.pyc`; the other changed
+a value the strong-tier early return hardcodes anyway) — both guards went red
+once re-run properly.
+
+The third was a **real tautology, and the same class of mistake as round 1's**.
+`test_the_block_sharpens_monotonically_toward_the_true_value` grouped squares by
+`block.error_at()` and asserted the resolved fraction fell as that rose — which
+is true by construction for *any* metric, since `resolved_fraction` counts cells
+whose tolerance clears `error_at()`. Replacing the metric with nonsense
+(`abs(|dx| − |dy|)`, which reports zero error along a diagonal nowhere near the
+key) left it green.
+
+It is now split in two, both phrased against distance computed in the test from
+the coordinates themselves:
+
+- `test_the_block_sharpens_as_you_physically_approach_the_key` — stepping one
+  square closer never makes the block less legible.
+- `test_the_reveal_depends_on_distance_alone` — two squares equidistant from
+  the key look identical, so the block never leaks *which axis* to fix.
+
+Between those two and the Manhattan guard, every bad metric tried is caught.
+
+### Removed
+
+PgUp/PgDn coarse jumping. A jump key would let a player cross the pad for a
+fraction of the step budget, which is the only cost this stage has.

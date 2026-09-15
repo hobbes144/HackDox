@@ -110,7 +110,7 @@ _REF_GHOSTSCAN = """[#7dd3c0][b]COMMANDS — GHOSTSCAN[/][/]
 [dim]── verdict ─────────────────────────[/]
 [#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
 
-_REF_HASHCRACK = """[#7dd3c0][b]THE CIPHER BLOCK[/][/]
+_REF_HASHCRACK = f"""[#7dd3c0][b]THE CIPHER BLOCK[/][/]
 
 [#c084fc]X[/]  [dim]or[/] [#c084fc]crack[/] [dim]/[/] [#c084fc]h[/]
   open the window selector
@@ -118,8 +118,8 @@ _REF_HASHCRACK = """[#7dd3c0][b]THE CIPHER BLOCK[/][/]
 [dim]── 1. read the digest (free) ─────[/]
 [dim]The header states the digest
 shape before you spend anything.[/]
-[#ff5470]32 hex[/]   [dim]MD5     short dial[/]
-[#ffd93d]64 hex[/]   [dim]SHA-256 long dial[/]
+[#ff5470]32 hex[/]   [dim]MD5     small pad[/]
+[#ffd93d]64 hex[/]   [dim]SHA-256 wide pad[/]
 [#00ff9f]$2b$[/]     [dim]bcrypt  DEAD END[/]
 
 [dim]bcrypt's window fits, engages,
@@ -133,16 +133,20 @@ out costs a full window.[/]
 [dim]wrong window = no structure, and
 the ⏱ is gone. Read first.[/]
 
-[dim]── 3. turn the dial (free) ───────[/]
-[#c084fc]←→[/] [dim]step[/]  [#c084fc]PgUp/PgDn[/] [dim]jump[/]
+[dim]── 3. walk the pad ───────────────[/]
+[#c084fc]←→[/] [dim]X axis[/]   [#c084fc]↑↓[/] [dim]Y axis[/]
 [dim]far   [/] [#6b7785]b99a8deb7c008949[/]
 [dim]close [/] [#c084fc]qN7!fWc$4kZt2[/][#6b7785]9q97![/]
 [dim]exact [/] [#c084fc]qN7!fWc$4kZt2·qN7![/]
 [dim]the password tiles across every
 row, so you can read it by
 consensus before you're exact.
-a few cells only settle at the
-exact value — that's the lock.[/]
+a few cells only settle on the
+exact square — that's the lock.[/]
+[dim]every press warms or cools the
+block. first {config.CIPHER_DIAL_FREE_STEPS} steps free, then
+{config.CIPHER_DIAL_OVERAGE_COST} ⏱ per {config.CIPHER_DIAL_OVERAGE_BLOCK} — a straight walk is
+always free, a random sweep isn't.[/]
 
 [dim]── then judge it ─────────────────[/]
 [#ff5470]weak[/]    [dim]password01 · dates · walks[/]

@@ -379,7 +379,7 @@ STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflo
 # The Hashcrack page is a standalone TWO-STAGE DECRYPTION minigame. The
 # candidate's credential is rendered as a block of ciphertext glyphs; the
 # player identifies the algorithm from the block itself, selects the matching
-# decryption window, and then fine-tunes an alignment dial until the whole
+# decryption window, and then walks a two-axis alignment pad until the whole
 # block resolves into the password.
 #
 # It replaced an earlier aperture-sweep design (moveable reveal windows, a
@@ -441,35 +441,109 @@ CIPHER_WINDOWS: tuple[tuple[str, str, str], ...] = (
     ("strong", "bcrypt",  "$2b$ key-stretched"),
 )
 
-# ── Stage 2: the alignment dial ───────────────────────────────────────────
-# The decrypt has the right family but the wrong derived key; the dial tunes
-# it. Per tier: how many positions the dial spans, and how near the true value
-# the player must get before ANY cell resolves.
+# ── Stage 2: the alignment pad (two axes) ─────────────────────────────────
+# The decrypt has the right family but the wrong derived key. That key is a
+# COORDINATE, not a scalar: the player walks an (x, y) pad with the arrow keys
+# until the block resolves. Per tier: how far each axis spans, and how near
+# the true point they must get before ANY cell resolves.
 #
-# Tolerance is the difficulty knob that matters. Outside it the block is pure
-# garbage, so the player must first spin until something legible appears —
-# raising it makes that initial sweep shorter, lowering it makes the block
-# stay dark for longer. Range/tolerance ratios are kept around 2:1 so roughly
-# half the dial's positions give some signal; widen the ratio and the sweep
-# becomes a chore rather than a search.
-CIPHER_ALIGN_RANGE: dict[str, int] = {
-    "weak":   24,   # MD5    — short dial, forgiving
-    "medium": 40,   # SHA256 — longer dial, tighter peak
-    "strong":  0,   # bcrypt — never reaches stage 2 at all
+# Why two axes rather than one dial. A single dial can be bisected by feel —
+# spin, glance, spin — so a player could solve it without ever really reading
+# the block. Two axes have no such shortcut: the only usable signal is the
+# ciphertext sharpening as they close in, which is what this stage was always
+# meant to be about. It also gives the step budget below something to measure.
+#
+# ERROR IS MANHATTAN — |dx| + |dy| — and that is load-bearing. Under a
+# Chebyshev max() metric a player at (dx=1, dy=9) sees NOTHING change when
+# they press left or right, because the larger axis swallows the smaller one,
+# and a control that ignores half its inputs reads as broken. Manhattan moves
+# the error by exactly one on every arrow press, so every keypress answers the
+# question the player just asked: warmer, or colder.
+# Pads are deliberately WIDER THAN TALL. Two reasons, both practical: a
+# terminal cell is about twice as tall as it is wide, so a 29×9 pad reads as
+# roughly square on screen; and the pad is drawn at one character per position
+# directly under a block that is already up to ten rows deep, so height is the
+# scarce dimension. Squaring these off would push the pad off the panel.
+CIPHER_ALIGN_SPAN: dict[str, tuple[int, int]] = {
+    "weak":   (20, 6),    # MD5    — 21×7 pad,  max walk 26
+    "medium": (28, 8),    # SHA256 — 29×9 pad,  max walk 36
+    "strong": (0, 0),     # bcrypt — never reaches stage 2 at all
 }
-CIPHER_ALIGN_TOLERANCE: dict[str, int] = {
-    "weak":   10,
-    "medium":  8,
-    "strong":  0,
+# Each cell gets its own threshold and shows plaintext while the Manhattan
+# error clears it, so the DISTRIBUTION of those thresholds is the difficulty
+# curve. A cell's threshold is drawn as
+#
+#     round(max_walk * u ** falloff),   u ~ U(0, 1),  max_walk = span_x + span_y
+#
+# which makes the share of the block legible at error e exactly
+# 1 − (e / max_walk) ** (1 / falloff).
+#
+# Two properties come out of that shape, and BOTH are the point:
+#
+#   Every position has signal. Only the single farthest corner of the pad is
+#   fully dark. A uniform 0..tolerance draw (the first cut of this) left over
+#   half the medium pad at zero resolved cells, so the opening of every search
+#   was a blind walk — and a blind walk billed by a step budget is a fee the
+#   player had no way to avoid. There is now always a gradient to climb.
+#
+#   The gradient is STEEPEST at the end. With falloff > 1 the curve is convex:
+#   the last few steps each flip a large share of the block, while steps out at
+#   the rim barely move it. That is the right way round — it is the fine-tune
+#   that is supposed to feel precise, not the approach.
+#
+# Raising falloff darkens the rim without touching the endgame; 1.0 would make
+# the reveal linear in distance and the last step no more informative than the
+# first.
+CIPHER_ALIGN_FALLOFF: dict[str, float] = {
+    "weak":   2.0,   # MD5    — generous; signal well out toward the rim
+    "medium": 2.6,   # SHA256 — dimmer at distance, same sharp endgame
+    "strong": 0.0,   # bcrypt — never reaches stage 2 at all
 }
-CIPHER_DIAL_COARSE_STEP = 5   # PgUp/PgDn jump, for spinning the dial quickly
 
-# ── Credential HUD hint band ──────────────────────────────────────────────
-# Half-width, in dial positions, of the band the Credential HUD upgrade marks
-# around the true alignment. Same stance as STEGO_HINT_BUFFER (#54): it
-# narrows the search, it never answers it, and the BASE TIER MARKS NOTHING.
-# Must stay comfortably wider than 0 — a band of 0 IS the answer.
-CIPHER_HINT_BAND = 4
+# ── Stage 2: the step budget ──────────────────────────────────────────────
+# Walking the pad is free for the first CIPHER_DIAL_FREE_STEPS presses. After
+# that every CIPHER_DIAL_OVERAGE_BLOCK further steps costs
+# CIPHER_DIAL_OVERAGE_COST ⏱.
+#
+# The point is NOT to tax stage 2. A player who reads the block and walks more
+# or less straight at it finishes inside the free allowance and pays nothing,
+# every time. The budget exists so that flailing has a price — it turns "sweep
+# the whole pad and watch for sparkle" from a viable strategy into an
+# expensive one, which is what makes reading the block worth doing.
+#
+# Free steps must therefore stay comfortably above the worst-case DIRECT walk
+# — span_x + span_y on the largest pad, currently 36, since the cursor always
+# starts at (0, 0) — or a player who did everything right still gets billed
+# for the pad's size. See test_a_direct_walk_is_always_free.
+#
+# Calibrated against simulated players reading the block (sim_pad.py). At
+# 45/10: a clean or humanly-noisy coordinate descent pays NOTHING on 100% of
+# blocks (worst observed run, 36 steps, is the theoretical bound); a careless
+# hill-climber pays nothing 82% of the time and a mean of 0.3 ⏱; a player
+# wandering nearly at random pays a median of 1 ⏱ and a mean of 2.5. Against a
+# day-3 budget near 68 ⏱ that is a nudge, which is the intent — raise
+# OVERAGE_COST and it becomes a punishment for being bad at the minigame.
+CIPHER_DIAL_FREE_STEPS    = 45
+CIPHER_DIAL_OVERAGE_BLOCK = 10   # further steps per charge
+CIPHER_DIAL_OVERAGE_COST  = 1    # ⏱ per block
+
+# ── Credential HUD hint box ───────────────────────────────────────────────
+# Half-width of the BOX the Credential HUD upgrade marks around the true
+# coordinate, as a FRACTION of each axis's span (minimum one position).
+#
+# A fraction rather than a flat number of positions, because the two axes are
+# very different lengths. A flat half-width of 3 — the first cut of this — was
+# a real hint on a 28-wide X axis and covered the ENTIRE 6-tall Y axis, so the
+# upgrade silently degraded into an X-only hint and the player got Y for free.
+# Scaling per axis keeps the box the same shape relative to the pad whatever
+# CIPHER_ALIGN_SPAN is retuned to.
+#
+# Same stance as STEGO_HINT_BUFFER (#54): it narrows the search, it never
+# answers it, and the BASE TIER MARKS NOTHING. At 0.18 the box covers roughly
+# an eighth to a fifth of the pad — worth 35 HD$, still several steps of real
+# searching. Push it below about 0.05 and it becomes the answer; above about
+# 0.35 and it stops narrowing anything.
+CIPHER_HINT_FRACTION = 0.18
 
 # ─── Day-cycle pacing ────────────────────────────────────────────────────────
 
@@ -862,8 +936,8 @@ HC_BREACH_ROW_GAP        = (5, 20)          # gap between a candidate's breach-m
 
 # Auto-highlight upgrades — surface signals the engine already computes.
 UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: colour suspicious log lines
-UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: mark the band of the
-                                                # alignment dial holding the true key
+UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: mark the region of the
+                                                # alignment pad holding the true key
 UPGRADE_EMAIL_APPROVED   = "email_approved_highlight"    # dossier: green trusted domains
 UPGRADE_EMAIL_PROHIBITED = "email_prohibited_highlight"  # dossier: red disposable domains
 UPGRADE_AFFIL_APPROVED   = "affil_approved_highlight"    # dossier: green trusted orgs
@@ -893,7 +967,7 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",     20, "auto-highlight approved affiliations on the dossier"),
     (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
     (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
-    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the band of the alignment dial the true key sits in"),
+    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
     (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "auto-highlight suspicious lines in the Logwatch day log"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
@@ -1004,8 +1078,8 @@ KEY_BINDINGS: dict[str, str] = {
     # behaviour — collapsing them into one binding would make rebinding either
     # silently rebind the other.
     # Decrypt mode runs in two stages: first left/right pick a decryption
-    # window and Enter buys it, then left/right turn the alignment dial
-    # (PgUp/PgDn for a coarse jump) with the block sharpening live. Escape
+    # window and Enter buys it, then all four arrows walk the alignment pad —
+    # left/right on X, up/down on Y — with the block sharpening live. Escape
     # (or this key again) exits from either stage.
     "decrypt_mode":     "x",
 

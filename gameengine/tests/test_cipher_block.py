@@ -113,7 +113,7 @@ def test_digest_shape_distinguishes_every_tier():
         f"two tiers print the same digest line {seen} — the free read is gone")
 
 
-def test_bcrypt_blocks_carry_their_prefix_and_have_no_dial():
+def test_bcrypt_blocks_carry_their_prefix_and_have_no_pad():
     """The strong tier's defining facts, asserted on the block itself."""
     checked = 0
     for _cand, block in _blocks(8, seeds=25):
@@ -122,7 +122,8 @@ def test_bcrypt_blocks_carry_their_prefix_and_have_no_dial():
         checked += 1
         assert not block.crackable
         assert block.plaintext is None
-        assert block.align_range == 0, "a bcrypt block has a dial to turn"
+        assert (block.align_span_x, block.align_span_y) == (0, 0), (
+            "a bcrypt block has a pad to walk")
         top = "".join(block.cipher_glyphs[0][:len(config.CIPHER_BCRYPT_PREFIX)])
         assert top == config.CIPHER_BCRYPT_PREFIX, (
             f"bcrypt block's top row starts {top!r}, not its cost prefix — "
@@ -159,11 +160,11 @@ def test_unsalted_blocks_arrive_decrypted():
                 continue
             checked += 1
             assert block.pre_revealed
-            grid = tools_bridge.render_block(block, 0, engaged=False)
+            grid = tools_bridge.render_block(block, 0, 0, engaged=False)
             assert all(res for row in grid for _g, res in row), (
                 "an unsalted block still renders as ciphertext — the violation "
                 "is that no decryption is required")
-            assert tools_bridge.alignment_locked(block, 0)
+            assert tools_bridge.alignment_locked(block, 0, 0)
     assert checked, "guard is inert — no unsalted candidate examined"
 
 
@@ -247,97 +248,285 @@ def test_reading_the_block_is_free_and_opening_bcrypt_is_not():
         "opening a bcrypt block was free — the free read has nothing to reward")
 
 
-# ── Stage 2 — the alignment dial ────────────────────────────────────────────
+# ── Stage 2 — the alignment pad ─────────────────────────────────────────────
 
 
-def test_the_dial_is_free_to_turn():
-    """Stage 2 costs nothing; the spend decision was made once, in stage 1."""
+def _pad_positions(block):
+    """Every coordinate on a block's pad."""
+    for y in range(block.align_span_y + 1):
+        for x in range(block.align_span_x + 1):
+            yield x, y
+
+
+def _crackable_blocks(day_n=8, seeds=25):
+    for cand, block in _blocks(day_n, seeds=seeds):
+        if block.crackable and not block.pre_revealed:
+            yield cand, block
+
+
+def test_walking_the_pad_costs_no_compute_by_itself():
+    """The pad functions never charge — the step budget lives in IntakeScreen.
+
+    Deliberately asserted at this layer. The overage fee has to be applied by
+    the one component that owns ⏱; an engine function that quietly deducted
+    would double-charge the moment the screen also did.
+    """
     _cand, block = _first_block(8, tier="medium", pre_revealed=False)
     state = _rich_state()
     tools_bridge.apply_window(block, block.tier, state)
     after_purchase = state.compute_hours
-    for d in range(block.align_range + 1):
-        tools_bridge.render_block(block, d)
-        tools_bridge.resolved_fraction(block, d)
-        tools_bridge.alignment_locked(block, d)
-    assert state.compute_hours == after_purchase, "turning the dial cost ⏱"
+    for x, y in _pad_positions(block):
+        tools_bridge.render_block(block, x, y)
+        tools_bridge.resolved_fraction(block, x, y)
+        tools_bridge.alignment_locked(block, x, y)
+    assert state.compute_hours == after_purchase, "reading the pad cost ⏱"
 
 
 def test_exact_alignment_is_distinguishable_from_one_step_off():
-    """err=1 must NOT look the same as err=0.
+    """err=1 must NOT look the same as err=0, on either axis.
 
-    The failure this catches is subtle and was real: drawing per-cell tolerance
-    from 1..tol gives every cell a tolerance of at least one, so the block
-    renders fully legible one step away from true. The player would see a
-    finished password and have no way to know they were not there yet, and
-    "fine-tune it exactly" would have no meaning. A share of cells must have
-    tolerance 0 so they only settle at the exact value.
+    The failure this catches is subtle and was real: a per-cell tolerance draw
+    with a floor of one makes the block render fully legible one step away from
+    true. The player would see a finished password and have no way to know they
+    were not there yet, and "fine-tune it exactly" would have no meaning. A
+    share of cells must land on tolerance 0 so they only settle on the exact
+    square.
     """
     checked = 0
-    for _cand, block in _blocks(8, seeds=40):
-        if not block.crackable or block.pre_revealed:
-            continue
-        if block.align_true >= block.align_range:
-            continue
+    for _cand, block in _crackable_blocks(8, seeds=40):
+        tx, ty = block.align_true
+        neighbours = [(tx + 1, ty), (tx - 1, ty), (tx, ty + 1), (tx, ty - 1)]
+        neighbours = [(x, y) for x, y in neighbours
+                      if 0 <= x <= block.align_span_x
+                      and 0 <= y <= block.align_span_y]
+        assert neighbours, "pad has no neighbouring square to compare against"
         checked += 1
-        exact = tools_bridge.resolved_fraction(block, block.align_true)
-        off_by_one = tools_bridge.resolved_fraction(block, block.align_true + 1)
-        assert exact == 1.0, "the true alignment does not fully resolve"
-        assert off_by_one < 1.0, (
-            "one step off the true value renders identically to exact — every "
-            "cell has a non-zero tolerance, so nothing marks the lock")
-        assert not tools_bridge.alignment_locked(block, block.align_true + 1)
-        assert tools_bridge.alignment_locked(block, block.align_true)
+        assert tools_bridge.resolved_fraction(block, tx, ty) == 1.0, (
+            "the true coordinate does not fully resolve")
+        assert tools_bridge.alignment_locked(block, tx, ty)
+        for x, y in neighbours:
+            assert tools_bridge.resolved_fraction(block, x, y) < 1.0, (
+                f"({x}, {y}) renders identically to the exact key — every cell "
+                f"has a non-zero tolerance, so nothing marks the lock")
+            assert not tools_bridge.alignment_locked(block, x, y)
     assert checked, "guard is inert"
 
 
-def test_the_block_sharpens_monotonically_toward_the_true_value():
-    """Closer must never look worse, or hill-climbing by eye is a lie."""
+def test_the_block_sharpens_as_you_physically_approach_the_key():
+    """Stepping TOWARD the key must never make the block less legible.
+
+    Measured against the pad's own geometry — distance computed here, in the
+    test, from the coordinates — and NOT against block.error_at().
+
+    That distinction is the whole value of this test, and the first version
+    got it wrong. It grouped squares by error_at() and asserted the resolved
+    fraction fell as error_at() rose, which is true by construction for ANY
+    metric: resolved_fraction counts cells whose tolerance clears error_at(),
+    so it is monotone in that function whatever the function does. Replacing
+    the metric with nonsense — abs(|dx| - |dy|), which reports zero error all
+    along a diagonal nowhere near the key — left the test green. A guard that
+    passes on a metric pointing at the wrong square is not guarding anything.
+
+    Phrased against real distance, it pins the property the player actually
+    relies on: walk one square closer, and more characters settle.
+    """
     checked = 0
-    for _cand, block in _blocks(8, seeds=25):
-        if not block.crackable or block.pre_revealed:
-            continue
+    for _cand, block in _crackable_blocks(8, seeds=25):
         checked += 1
-        prev = None
-        for err in range(block.align_tolerance + 2, -1, -1):
-            d = block.align_true + err
-            if d > block.align_range:
-                continue
-            frac = tools_bridge.resolved_fraction(block, d)
-            if prev is not None:
-                assert frac >= prev, (
-                    f"moving from err {err + 1} to {err} made the block LESS "
-                    f"legible ({prev:.2f} -> {frac:.2f})")
-            prev = frac
+        tx, ty = block.align_true
+        for x, y in _pad_positions(block):
+            here_d = abs(x - tx) + abs(y - ty)
+            here_f = tools_bridge.resolved_fraction(block, x, y)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx <= block.align_span_x
+                        and 0 <= ny <= block.align_span_y):
+                    continue
+                there_d = abs(nx - tx) + abs(ny - ty)
+                if there_d >= here_d:
+                    continue          # that step moves away or sideways
+                there_f = tools_bridge.resolved_fraction(block, nx, ny)
+                assert there_f >= here_f, (
+                    f"stepping from ({x}, {y}) to ({nx}, {ny}) moved "
+                    f"{here_d - there_d} square closer to the key and made the "
+                    f"block LESS legible ({here_f:.2f} -> {there_f:.2f})")
+        # ...and reaching the key must be the unique maximum, or "closer is
+        # better" has a plateau the player cannot walk off.
+        assert tools_bridge.resolved_fraction(block, tx, ty) == 1.0
     assert checked, "guard is inert"
 
 
-def test_beyond_tolerance_the_block_is_pure_ciphertext():
-    """Out of range there is no partial signal to read — you must sweep."""
+def test_the_reveal_depends_on_distance_alone():
+    """Two squares the same distance from the key look the same.
+
+    Rules out a reveal that leaks direction — if approaching along X painted a
+    different picture than approaching along Y, the block would be telling the
+    player which axis to fix, and the second axis would stop being a search.
+    """
     checked = 0
-    for _cand, block in _blocks(8, seeds=25):
-        if not block.crackable or block.pre_revealed:
-            continue
-        far = block.align_true + block.align_tolerance + 1
-        if far > block.align_range:
-            far = block.align_true - block.align_tolerance - 1
-        if far < 0:
-            continue
+    for _cand, block in _crackable_blocks(8, seeds=15):
         checked += 1
-        assert tools_bridge.resolved_fraction(block, far) == 0.0
-        grid = tools_bridge.render_block(block, far)
-        assert not any(res for row in grid for _g, res in row)
+        tx, ty = block.align_true
+        seen: dict[int, float] = {}
+        for x, y in _pad_positions(block):
+            d = abs(x - tx) + abs(y - ty)
+            f = tools_bridge.resolved_fraction(block, x, y)
+            if d in seen:
+                assert seen[d] == f, (
+                    f"two squares {d} from the key resolve differently "
+                    f"({seen[d]:.3f} vs {f:.3f}) — the block is leaking which "
+                    f"way you came")
+            seen[d] = f
     assert checked, "guard is inert"
 
 
-def test_the_dial_shows_nothing_until_a_window_is_applied():
+def test_every_square_on_the_pad_has_a_gradient_to_climb():
+    """No dead zone: from anywhere, SOME characters are settled.
+
+    This replaces an earlier guard that asserted the opposite — that beyond a
+    fixed tolerance the block was pure ciphertext. That rule was written for
+    the one-dimensional dial, where a dark region just meant "keep spinning".
+    On a two-axis pad it meant over half the medium pad showed nothing at all,
+    so every search opened with a blind walk. Blind walking is bad on its own,
+    and it is worse now that stage 2 has a step budget: a player would be
+    billed for steps they had no way to aim.
+
+    So the tolerance distribution is convex over the whole pad instead
+    (config.CIPHER_ALIGN_FALLOFF), and the invariant flips: the rim is DIM, not
+    dark. Only the single farthest corner may be blank.
+    """
+    checked = 0
+    for _cand, block in _crackable_blocks(8, seeds=25):
+        checked += 1
+        blank = [(x, y) for x, y in _pad_positions(block)
+                 if tools_bridge.resolved_fraction(block, x, y) == 0.0
+                 and block.error_at(x, y) < block.max_walk]
+        assert not blank, (
+            f"{len(blank)} squares inside the {block.tier} pad show no "
+            f"resolved cells at all — those are dead zones the player cannot "
+            f"steer out of, e.g. {blank[:3]}")
+        # ...and the rim must still be much dimmer than the centre, or there
+        # is no gradient worth reading.
+        rim = tools_bridge.resolved_fraction(block, *_farthest_corner(block))
+        assert rim < 0.35, (
+            f"the far corner of the {block.tier} pad is {rim:.0%} legible — "
+            f"the password is readable without walking anywhere")
+    assert checked, "guard is inert"
+
+
+def _farthest_corner(block):
+    """The pad corner at maximum Manhattan distance from the true key."""
+    return max(
+        ((x, y) for x, y in [(0, 0), (block.align_span_x, 0),
+                             (0, block.align_span_y),
+                             (block.align_span_x, block.align_span_y)]),
+        key=lambda p: block.error_at(*p))
+
+
+def test_both_axes_move_the_error_by_exactly_one():
+    """Every arrow press is worth the same, so none of them is a dead key.
+
+    The metric has to be Manhattan for this. Under Chebyshev — the obvious
+    alternative — a player one step off in x and nine off in y sees NOTHING
+    change when they press left or right, because max() swallows the smaller
+    axis. Half their presses would appear to do nothing, which reads as a
+    broken control and makes the step budget arbitrary.
+    """
+    checked = 0
+    for _cand, block in _crackable_blocks(8, seeds=15):
+        checked += 1
+        for x, y in _pad_positions(block):
+            here = block.error_at(x, y)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx <= block.align_span_x
+                        and 0 <= ny <= block.align_span_y):
+                    continue
+                assert abs(block.error_at(nx, ny) - here) == 1, (
+                    f"stepping ({dx}, {dy}) from ({x}, {y}) moved the error by "
+                    f"{abs(block.error_at(nx, ny) - here)}, not 1")
+    assert checked, "guard is inert"
+
+
+def test_the_pad_shows_nothing_until_a_window_is_applied():
     """A block the player has not paid for must render as ciphertext at EVERY
-    dial position — otherwise stage 1 could be skipped by spinning."""
+    pad square — otherwise stage 1 could be skipped by walking."""
     _cand, block = _first_block(8, tier="medium", pre_revealed=False)
-    for d in range(block.align_range + 1):
-        grid = tools_bridge.render_block(block, d, engaged=False)
+    for x, y in _pad_positions(block):
+        grid = tools_bridge.render_block(block, x, y, engaged=False)
         assert not any(res for row in grid for _g, res in row), (
-            f"dial position {d} leaked plaintext before a window was bought")
+            f"pad square ({x}, {y}) leaked plaintext before a window was bought")
+
+
+# ── Stage 2 — the step budget ───────────────────────────────────────────────
+
+
+def test_a_direct_walk_is_always_free():
+    """The headline promise: play it right and stage 2 never costs anything.
+
+    The cursor always starts at (0, 0), so the worst case a player who walks
+    STRAIGHT at the key can face is the pad's full Manhattan diagonal. If the
+    free allowance does not clear that, a player who did everything correctly
+    still gets billed for the pad's size, and the fee stops meaning "you
+    wandered" — which is the only thing it is supposed to mean.
+    """
+    worst = max(sx + sy for sx, sy in config.CIPHER_ALIGN_SPAN.values())
+    assert worst < config.CIPHER_DIAL_FREE_STEPS, (
+        f"a perfect walk across the largest pad takes {worst} steps but only "
+        f"{config.CIPHER_DIAL_FREE_STEPS} are free")
+    checked = 0
+    for _cand, block in _crackable_blocks(8, seeds=25):
+        checked += 1
+        direct = block.error_at(0, 0)
+        assert tools_bridge.step_overage_charge(0, direct) == 0, (
+            f"walking straight to the key on a {block.tier} block costs ⏱")
+    assert checked, "guard is inert"
+
+
+def test_the_budget_bills_every_boundary_a_move_crosses():
+    """A multi-step move pays for all of it, not just the last threshold.
+
+    Written this way because the naive implementation — "charge when this step
+    lands on a multiple" — silently undercharges any move longer than one
+    step, and the panel's clamped moves are exactly that.
+    """
+    free  = config.CIPHER_DIAL_FREE_STEPS
+    block = config.CIPHER_DIAL_OVERAGE_BLOCK
+    cost  = config.CIPHER_DIAL_OVERAGE_COST
+
+    assert tools_bridge.step_overage_charge(0, free) == 0
+    assert tools_bridge.step_overage_charge(free, free + 1) == cost
+    assert tools_bridge.step_overage_charge(free + 1, free + block) == 0
+    assert tools_bridge.step_overage_charge(free + block,
+                                            free + block + 1) == cost
+    # One move spanning three blocks pays three times.
+    assert tools_bridge.step_overage_charge(free, free + 3 * block) == 3 * cost
+    # And the sum of single steps matches one long move over the same span.
+    piecewise = sum(tools_bridge.step_overage_charge(s, s + 1)
+                    for s in range(0, free + 4 * block))
+    assert piecewise == tools_bridge.step_overage_charge(0, free + 4 * block)
+
+
+def test_the_countdown_never_lies_about_when_the_next_charge_lands():
+    """steps_until_charge(n) must be exactly the presses left before a fee.
+
+    It drives the footer, which is the only place the player can see the
+    budget while their eyes are on the block — a readout that is off by one is
+    worse than none at all.
+    """
+    for steps in range(0, config.CIPHER_DIAL_FREE_STEPS
+                       + 3 * config.CIPHER_DIAL_OVERAGE_BLOCK):
+        left = tools_bridge.steps_until_charge(steps)
+        assert left >= 1
+        walked = sum(tools_bridge.step_overage_charge(s, s + 1)
+                     for s in range(steps, steps + left - 1))
+        assert walked == 0, (
+            f"at {steps} steps the footer promises {left} free presses, but a "
+            f"charge lands inside them")
+        assert tools_bridge.step_overage_charge(
+            steps + left - 1, steps + left) == config.CIPHER_DIAL_OVERAGE_COST, (
+            f"at {steps} steps the footer promises a charge in {left}, and "
+            f"none arrives")
 
 
 # ── Violation redistribution ────────────────────────────────────────────────
@@ -574,21 +763,49 @@ def test_panel_walks_the_two_stages():
     assert p.attempts == 1
 
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
-    assert p.state == p.ENGAGED and p.dial == 0
+    assert p.state == p.ENGAGED and p.cursor == (0, 0)
 
-    p.move_dial(block.align_true)
-    assert p.locked and p.dial == block.align_true
+    tx, ty = block.align_true
+    p.move_cursor(tx, 0)
+    p.move_cursor(0, ty)
+    assert p.locked and p.cursor == block.align_true
 
 
-def test_panel_dial_is_clamped_to_the_track():
+def test_panel_cursor_is_clamped_to_the_pad():
     cand, block = _first_block(8, tier="medium", pre_revealed=False)
     p = _panel(cand)
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
-    p.move_dial(-9999)
-    assert p.dial == 0
-    p.move_dial(9999)
-    assert p.dial == block.align_range
+    p.move_cursor(-9999, -9999)
+    assert p.cursor == (0, 0)
+    p.move_cursor(9999, 9999)
+    assert p.cursor == (block.align_span_x, block.align_span_y)
+
+
+def test_panel_does_not_bill_steps_it_did_not_take():
+    """A move that runs into an edge reports zero steps.
+
+    The step counter is what the ⏱ fee is computed from, so counting a clamped
+    move would charge the player for a cursor that never moved — holding a
+    direction against the wall would quietly drain ⏱ while the screen showed
+    nothing happening.
+    """
+    cand, block = _first_block(8, tier="medium", pre_revealed=False)
+    p = _panel(cand)
+    p.open_selector()
+    p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
+    assert p.steps == 0
+    assert p.move_cursor(-1, 0) == 0, "stepping off the left edge counted"
+    assert p.move_cursor(0, -1) == 0, "stepping off the top edge counted"
+    assert p.steps == 0
+
+    assert p.move_cursor(1, 0) == 1
+    assert p.steps == 1
+    # A move partly clamped counts only the part that happened.
+    p.move_cursor(block.align_span_x, 0)          # runs to the right edge
+    at_edge = p.steps
+    assert p.move_cursor(5, 0) == 0
+    assert p.steps == at_edge
 
 
 def test_panel_keeps_an_engaged_block_when_the_player_leaves():
@@ -597,10 +814,11 @@ def test_panel_keeps_an_engaged_block_when_the_player_leaves():
     p = _panel(cand)
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
-    p.move_dial(3)
+    p.move_cursor(3, 1)
     p.close()
-    assert p.state == p.ENGAGED and p.dial == 3, (
+    assert p.state == p.ENGAGED and p.cursor == (3, 1), (
         "walking away reset a window the player already paid for")
+    assert p.steps == 4, "leaving decrypt mode reset the step budget"
     p.open_selector()
     assert p.state == p.ENGAGED, "re-entering restarted stage 1 after a buy"
 
@@ -611,10 +829,42 @@ def test_panel_resets_between_candidates():
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(
         p.block, p.block.tier, _rich_state()))
-    p.move_dial(2)
+    p.move_cursor(2, 1)
     p.load_candidate(candidate_gen.generate(3, day, 1), 8)
-    assert p.attempts == 0 and p.dial == 0
+    assert p.attempts == 0 and p.cursor == (0, 0)
+    assert p.steps == 0, (
+        "the step budget carried over to the next candidate — one player's "
+        "wandering would bill the next credential")
     assert p.state in (p.IDLE, p.LOCKED)
+
+
+def test_the_hint_box_narrows_both_axes_without_covering_either():
+    """The HUD box has to leave real searching to do on X AND on Y.
+
+    The failure this exists for was live: a single flat half-width of 3
+    positions was a genuine hint on a 28-wide X axis and covered the WHOLE of
+    a 6-tall Y axis. The upgrade still looked correct — the box contained the
+    key, it was wider than one square on both axes — while quietly handing the
+    player one of the two coordinates outright. Only a proportion test catches
+    that.
+    """
+    checked = 0
+    for _cand, block in _crackable_blocks(8, seeds=40):
+        checked += 1
+        x0, y0, x1, y1 = tools_bridge.hint_band(
+            block, {config.UPGRADE_HASH_HIGHLIGHT})
+        span_x, span_y = block.align_span_x, block.align_span_y
+        assert (x1 - x0) < span_x, (
+            f"the hint box spans the whole X axis of the {block.tier} pad")
+        assert (y1 - y0) < span_y, (
+            f"the hint box spans the whole Y axis of the {block.tier} pad — "
+            f"that coordinate is being given away, not hinted at")
+        area = (x1 - x0 + 1) * (y1 - y0 + 1)
+        pad = (span_x + 1) * (span_y + 1)
+        assert 1 < area < pad * 0.45, (
+            f"the hint box covers {area}/{pad} of the {block.tier} pad — "
+            f"that is the answer, or no help at all")
+    assert checked, "guard is inert"
 
 
 def test_panel_marks_the_hint_band_only_with_credential_hud():
@@ -638,17 +888,54 @@ def test_panel_marks_the_hint_band_only_with_credential_hud():
 
 
 def test_panel_never_shows_a_progress_percentage():
-    """The dial shows POSITION, never PROGRESS.
+    """The pad shows POSITION, never PROGRESS.
 
     A percentage readout would let the player hill-climb a number instead of
-    reading the block, which is the one thing this stage exists for.
+    reading the block, which is the one thing this stage exists for — and with
+    two axes it would be even more decisive, since it would turn a search into
+    two independent bisections.
     """
     cand, block = _first_block(8, tier="medium", pre_revealed=False)
     p = _panel(cand)
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
-    for d in (0, block.align_range // 2, block.align_true):
-        p.move_dial(d - p.dial)
+    spots = [(0, 0), (block.align_span_x // 2, block.align_span_y // 2),
+             block.align_true]
+    for x, y in spots:
+        cx, cy = p.cursor
+        p.move_cursor(x - cx, y - cy)
         assert "%" not in p._content.text, (
-            f"the panel printed a percentage at dial {d} — that replaces "
+            f"the panel printed a percentage at ({x}, {y}) — that replaces "
             f"reading the block with reading a number")
+
+
+def test_panel_draws_the_pad_at_full_resolution():
+    """One character per pad position, both axes.
+
+    A scaled pad maps several coordinates onto one cell, so the marker stops
+    moving on some presses and the hint box covers more ground than it marks.
+    Both read as the control lying to the player, and neither would fail any
+    other test here.
+    """
+    cand, block = _first_block(8, tier="medium", pre_revealed=False)
+    p = _panel(cand)
+    p.open_selector()
+    p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
+
+    def marker_row_col():
+        for r, line in enumerate(p._content.text.split("\n")):
+            if "◆" in line:
+                # Count only pad glyphs before the marker, not markup.
+                head = line.split("◆")[0]
+                return r, head.count("·") + head.count("▒")
+        raise AssertionError("the pad marker is not drawn at all")
+
+    r0, c0 = marker_row_col()
+    p.move_cursor(1, 0)
+    r1, c1 = marker_row_col()
+    assert (r1, c1) == (r0, c0 + 1), (
+        "one step along X did not move the marker exactly one cell right")
+    p.move_cursor(0, 1)
+    r2, c2 = marker_row_col()
+    assert (r2, c2) == (r1 + 1, c1), (
+        "one step along Y did not move the marker exactly one row down")

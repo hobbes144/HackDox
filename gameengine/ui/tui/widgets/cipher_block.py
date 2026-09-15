@@ -22,8 +22,8 @@ class CipherBlockPanel(VerticalScroll):
 
       X            open the window selector (handled by IntakeScreen)
       ← →          stage 1: choose a decryption window
-                   stage 2: turn the alignment dial one step
-      PgUp/PgDn    stage 2: jump the dial by CIPHER_DIAL_COARSE_STEP
+                   stage 2: step the alignment pad along X
+      ↑ ↓          stage 2: step the alignment pad along Y
       Enter        stage 1: apply the selected window (costs ⏱)
       Esc          leave decrypt mode
 
@@ -58,7 +58,9 @@ class CipherBlockPanel(VerticalScroll):
         self._block: tools_bridge.CipherBlockData | None = None
         self._state = self.IDLE
         self._sel = 0            # index into config.CIPHER_WINDOWS
-        self._dial = 0
+        self._x = 0              # alignment pad cursor
+        self._y = 0
+        self._steps = 0          # pad presses spent on this candidate
         self._applied: str | None = None   # tier key of the window in use
         self._attempts = 0       # windows paid for on this candidate
         self.hint_upgrade = False   # Credential HUD
@@ -81,8 +83,14 @@ class CipherBlockPanel(VerticalScroll):
         return self._state
 
     @property
-    def dial(self) -> int:
-        return self._dial
+    def cursor(self) -> tuple[int, int]:
+        """The alignment pad cursor as (x, y)."""
+        return (self._x, self._y)
+
+    @property
+    def steps(self) -> int:
+        """Pad presses spent on this candidate — drives the step budget."""
+        return self._steps
 
     @property
     def attempts(self) -> int:
@@ -103,7 +111,8 @@ class CipherBlockPanel(VerticalScroll):
     def load_candidate(self, candidate: Candidate, day: int = 1) -> None:
         self._block = tools_bridge.build_cipher_block(candidate, day)
         self._sel = 0
-        self._dial = 0
+        self._x = self._y = 0
+        self._steps = 0
         self._applied = None
         self._attempts = 0
         # UNSALTED_STORAGE arrives decrypted: no salt means the stored value is
@@ -144,7 +153,7 @@ class CipherBlockPanel(VerticalScroll):
         if res.outcome == tools_bridge.CIPHER_WINDOW_ENGAGED:
             self._applied = res.chosen
             self._state = self.ENGAGED
-            self._dial = 0
+            self._x = self._y = 0
         elif res.outcome == tools_bridge.CIPHER_WINDOW_STALLED:
             self._applied = res.chosen
             self._state = self.STALLED
@@ -155,14 +164,28 @@ class CipherBlockPanel(VerticalScroll):
             self._state = self.SELECTING
         self._rebuild_content()
 
-    def move_dial(self, delta: int) -> None:
+    def move_cursor(self, dx: int, dy: int) -> int:
+        """Step the alignment pad. Returns how many steps actually happened.
+
+        A move that runs into an edge returns 0 and is NOT billed. Holding a
+        direction against the wall must not rack up ⏱ for a cursor that is not
+        moving — the budget is meant to price a wandering search, not punish
+        the player for finding out where the pad ends.
+        """
         if self._state not in (self.ENGAGED, self.LOCKED) or self._block is None:
-            return
-        self._dial = max(0, min(self._block.align_range, self._dial + delta))
+            return 0
+        nx = max(0, min(self._block.align_span_x, self._x + dx))
+        ny = max(0, min(self._block.align_span_y, self._y + dy))
+        moved = abs(nx - self._x) + abs(ny - self._y)
+        if not moved:
+            return 0
+        self._x, self._y = nx, ny
+        self._steps += moved
         self._state = (self.LOCKED
-                       if tools_bridge.alignment_locked(self._block, self._dial)
+                       if tools_bridge.alignment_locked(self._block, nx, ny)
                        else self.ENGAGED)
         self._rebuild_content()
+        return moved
 
     # ── Content rendering ─────────────────────────────────────────────────
     # NOTE: not named _render() — that's a Textual base-class method.
@@ -172,7 +195,7 @@ class CipherBlockPanel(VerticalScroll):
             return
         blk = self._block
         engaged = self._state in (self.ENGAGED, self.LOCKED)
-        grid = tools_bridge.render_block(blk, self._dial, engaged=engaged)
+        grid = tools_bridge.render_block(blk, self._x, self._y, engaged=engaged)
 
         lines: list[str] = []
         for row in grid:
@@ -207,7 +230,7 @@ class CipherBlockPanel(VerticalScroll):
                 "[#00ffd5][b]SELECT DECRYPTION WINDOW[/][/]",
                 "  " + "   ".join(chips),
                 f"  [dim]built for: {shape}[/]",
-                "  [dim]←→ choose · Enter apply · Esc cancel[/]",
+                "  [dim]← → choose · Enter apply · Esc cancel[/]",
             ]
             if self._attempts:
                 out.append(f"  [#ff8c42]{self._attempts} window(s) already "
@@ -231,43 +254,65 @@ class CipherBlockPanel(VerticalScroll):
         ]
 
     def _dial_lines(self) -> list[str]:
-        """The alignment dial, drawn as a track with a marker.
+        """The alignment pad, drawn one character per position.
 
-        Deliberately shows POSITION and not PROGRESS. A percentage readout
-        would let the player hill-climb a number instead of reading the block,
-        which is the one thing this stage is for.
+        Deliberately shows POSITION and not PROGRESS. A "42% resolved" readout
+        would let the player hill-climb a number with their eyes closed, which
+        is precisely the shortcut the second axis exists to remove — the
+        gradient is supposed to be read off the ciphertext above.
+
+        Drawn at full resolution rather than scaled to fit. A scaled pad maps
+        several positions onto one character, so the marker stops moving on
+        some presses and the hint box covers more ground than it really marks;
+        both read as the control lying. config.CIPHER_ALIGN_SPAN is sized so
+        the pad fits as-is.
         """
         blk = self._block
-        width = min(blk.align_range, 48)
         band = tools_bridge.hint_band(
             blk, {config.UPGRADE_HASH_HIGHLIGHT} if self.hint_upgrade else set())
 
-        def _pos(v: int) -> int:
-            if blk.align_range <= 0:
-                return 0
-            return round(v / blk.align_range * width)
-
-        marker = _pos(self._dial)
-        track = ""
-        for i in range(width + 1):
-            if i == marker:
-                track += "[#00ffd5][b]◆[/][/]"
-            elif band is not None and _pos(band[0]) <= i <= _pos(band[1]):
-                track += "[#4a6b8a]─[/]"
-            else:
-                track += "[#2e3d4f]─[/]"
+        rows: list[str] = []
+        for y in range(blk.align_span_y + 1):
+            line = ""
+            for x in range(blk.align_span_x + 1):
+                if (x, y) == (self._x, self._y):
+                    line += "[#00ffd5][b]◆[/][/]"
+                elif (band is not None
+                      and band[0] <= x <= band[2] and band[1] <= y <= band[3]):
+                    line += "[#4a6b8a]▒[/]"
+                else:
+                    line += "[#2e3d4f]·[/]"
+            rows.append("  " + line)
 
         if self._state == self.LOCKED:
             head = ("[#00ff9f][b]✓ ALIGNED — credential resolved[/][/]  "
-                    f"[dim]key {self._dial}[/]")
-            hint = "[dim]the block is fully in the clear[/]"
+                    f"[dim]key ({self._x}, {self._y})[/]")
+            tail = ["  [dim]the block is fully in the clear[/]"]
         else:
-            head = (f"[#c084fc][b]ALIGNMENT DIAL[/][/]  "
-                    f"[dim]{self._dial} / {blk.align_range}[/]")
-            hint = ("[dim]←→ step · PgUp/PgDn jump · "
-                    "keep going until every character settles[/]")
-        out = [head, "  " + track, "  " + hint]
+            head = ("[#c084fc][b]ALIGNMENT PAD[/][/]  "
+                    f"[dim]X {self._x}/{blk.align_span_x}  ·  "
+                    f"Y {self._y}/{blk.align_span_y}[/]")
+            tail = ["  [dim]← → ↑ ↓ step · watch the block, not the pad — "
+                    "more characters settle as you close in[/]"]
+            tail.append("  " + self._budget_line())
+        out = [head, *rows, *tail]
         if band is not None and self._state != self.LOCKED:
-            out.append("  [#4a6b8a]shaded band: Credential HUD — the key is "
-                       "somewhere in there[/]")
+            out.append("  [#4a6b8a]shaded box: Credential HUD — the key is "
+                       "somewhere inside it[/]")
         return out
+
+    def _budget_line(self) -> str:
+        """The step-budget readout: steps spent, and what the next ones cost.
+
+        Shown as a countdown rather than a running total because the number
+        the player can act on is "how many more presses before this starts
+        costing me", not "how many have I used".
+        """
+        left = tools_bridge.steps_until_charge(self._steps)
+        if self._steps < config.CIPHER_DIAL_FREE_STEPS:
+            return (f"[dim]{self._steps} steps  ·  {left} free before "
+                    f"{config.CIPHER_DIAL_OVERAGE_COST} ⏱ per "
+                    f"{config.CIPHER_DIAL_OVERAGE_BLOCK}[/]")
+        return (f"[#ff8c42]{self._steps} steps  ·  over budget — "
+                f"{config.CIPHER_DIAL_OVERAGE_COST} ⏱ every "
+                f"{config.CIPHER_DIAL_OVERAGE_BLOCK}, next in {left}[/]")

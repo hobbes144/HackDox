@@ -336,10 +336,19 @@ class IntakeScreen(Screen):
                     f"[#00ffd5][b]Enter[/][/] Apply (−{cost} ⏱)  "
                     "[#ffb454][b]Esc[/][/] Exit"
                 )
+            # The footer carries the step budget because it is the one thing on
+            # screen the player watches while their eyes are on the block: the
+            # panel's own counter sits below a pad they are not looking at.
+            steps = self.cipher_hc.steps
+            left  = tools_bridge.steps_until_charge(steps)
+            budget = (f"[dim]{left} steps free[/]"
+                      if steps < config.CIPHER_DIAL_FREE_STEPS
+                      else (f"[#ff8c42]−{config.CIPHER_DIAL_OVERAGE_COST} ⏱ "
+                            f"in {left}[/]"))
             return (
-                "[#00ffd5][b]ALIGNMENT DIAL[/][/]  "
-                "[dim]←→ Step  PgUp/PgDn Jump[/]  "
-                "[dim]free[/]  "
+                "[#00ffd5][b]ALIGNMENT PAD[/][/]  "
+                "[dim]←→↑↓ Step[/]  "
+                f"{budget}  "
                 "[#ffb454][b]Esc[/][/] Exit"
             )
         if self._stamp_mode:
@@ -971,7 +980,7 @@ class IntakeScreen(Screen):
         sound_manager.play("tool_run_hashcrack")
         if self.cipher_hc.state == self.cipher_hc.ENGAGED:
             self.command_bar.set_response(
-                "ALIGNMENT DIAL — ←→ step · PgUp/PgDn jump · Esc exit")
+                "ALIGNMENT PAD — ←→↑↓ step · Esc exit")
         else:
             cost = tools_bridge.window_cost(self._state)
             self.command_bar.set_response(
@@ -1023,7 +1032,7 @@ class IntakeScreen(Screen):
         elif res.outcome == tools_bridge.CIPHER_WINDOW_ENGAGED:
             sound_manager.play("filter_apply")
             self.command_bar.set_response(
-                "Decrypt engaged — turn the alignment dial until the text settles")
+                "Decrypt engaged — walk the alignment pad until the text settles")
         else:
             self.command_bar.set_response(
                 f"Wrong window — no structure emerged. −{res.cost} ⏱",
@@ -1033,12 +1042,35 @@ class IntakeScreen(Screen):
                                    self._page_index)
         self._refresh_footer()
 
-    def _turn_dial(self, delta: int) -> None:
-        """Stage 2 — free, live, and the only place the credential resolves."""
+    def _turn_dial(self, dx: int, dy: int) -> None:
+        """Stage 2 — live, mostly free, and the only place a credential resolves.
+
+        "Mostly" free: the first config.CIPHER_DIAL_FREE_STEPS presses cost
+        nothing, then a small ⏱ fee lands on every block of further steps. The
+        charge is applied HERE rather than in the panel for the same reason
+        stage 1's is — this screen is the one thing that owns ⏱.
+
+        An unaffordable fee is WAIVED, not enforced. Blocking the pad on an
+        empty ⏱ balance would strand a credential the player has already paid
+        to open, turning a pacing nudge into a dead end; the budget is meant to
+        price a wandering search, not to be able to end one.
+        """
         if self._candidate is None or self.cipher_hc.block is None:
             return
         was_locked = self.cipher_hc.locked
-        self.cipher_hc.move_dial(delta)
+        before = self.cipher_hc.steps
+        moved = self.cipher_hc.move_cursor(dx, dy)
+        if moved:
+            fee = tools_bridge.step_overage_charge(before, self.cipher_hc.steps)
+            if fee and self._state.compute_hours >= fee:
+                self._state.compute_hours -= fee
+                self.command_bar.set_response(
+                    f"Alignment overrun — −{fee} ⏱ "
+                    f"({self.cipher_hc.steps} steps on this block)",
+                    error=True)
+                self.status.refresh_status(
+                    self._state, self._state.current_slot_index,
+                    self._page_index)
         if self.cipher_hc.locked and not was_locked and not self._cipher_resolved:
             self._cipher_resolved = True
             sound_manager.play("filter_apply")
@@ -1258,16 +1290,18 @@ class IntakeScreen(Screen):
                 if k == "enter":
                     self._apply_window(); event.stop(); return
             elif stage in (self.cipher_hc.ENGAGED, self.cipher_hc.LOCKED):
+                # Stage 2 is a coordinate, so all four arrows are live and each
+                # one is exactly one step. There is deliberately no coarse jump:
+                # a jump key would let a player cross the pad for a fraction of
+                # the step budget, which is the one cost this stage has.
                 if k == "left":
-                    self._turn_dial(-1); event.stop(); return
+                    self._turn_dial(-1, 0); event.stop(); return
                 if k == "right":
-                    self._turn_dial(1); event.stop(); return
-                if k == "pagedown":
-                    self._turn_dial(-config.CIPHER_DIAL_COARSE_STEP)
-                    event.stop(); return
-                if k == "pageup":
-                    self._turn_dial(config.CIPHER_DIAL_COARSE_STEP)
-                    event.stop(); return
+                    self._turn_dial(1, 0); event.stop(); return
+                if k == "up":
+                    self._turn_dial(0, -1); event.stop(); return
+                if k == "down":
+                    self._turn_dial(0, 1); event.stop(); return
             if k not in ("1", "2", "3", "4", "5"):
                 event.stop(); return          # swallow everything else
             self._exit_decrypt_mode(quiet=True)  # page nav below exits it

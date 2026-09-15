@@ -2406,16 +2406,22 @@ def get_stego_stats(candidate: Candidate,
 #                    key-stretching is not the same as it being crackable, and
 #                    the only winning move is not to open it.
 #
-#   STAGE 2 (free)   An alignment dial. The decrypt has the right family but
-#                    the wrong derived key; turning the dial toward the true
-#                    value brings the plaintext into focus, cell by cell. At
-#                    exact alignment the block locks and the credential
-#                    resolves.
+#   STAGE 2 (free*)  An alignment PAD. The decrypt has the right family but
+#                    the wrong derived key, and that key is an (x, y)
+#                    coordinate: walking toward it with the arrow keys brings
+#                    the plaintext into focus, cell by cell. On the exact
+#                    square the block locks and the credential resolves.
+#
+#                    *Free for the first config.CIPHER_DIAL_FREE_STEPS presses.
+#                    Past that a small ⏱ fee lands every
+#                    CIPHER_DIAL_OVERAGE_BLOCK further steps, so a wandering
+#                    search costs something a direct walk never does. See
+#                    step_overage_charge().
 #
 # The plaintext is TILED across the whole block rather than hidden in one run.
 # Partial alignment scrambles a different subset of cells in each repeat, so a
 # player who is close can read the password by consensus across rows — which is
-# what makes the last few dial steps satisfying rather than fiddly.
+# what makes the last few steps satisfying rather than fiddly.
 #
 # Only stage 1 costs ⏱. The spend decision is made once, up front, on
 # information the player already had for free.
@@ -2449,15 +2455,17 @@ class CipherBlockData:
 
     `cipher_glyphs` is what the player sees before any window is applied.
     `plain_glyphs` is the fully-decrypted block — the password tiled across the
-    grid. `cell_tolerance` gives each cell its own threshold: at dial distance
-    `err`, a cell shows its plain glyph when its tolerance clears `err`, and
-    its cipher glyph otherwise. That is the entire sharpening effect, and
-    keeping it in the DATA rather than in the renderer is what makes turning
-    the dial back and forth show the same picture every time.
+    grid. `cell_tolerance` gives each cell its own threshold: at Manhattan
+    distance `err` from the true coordinate, a cell shows its plain glyph when
+    its tolerance clears `err`, and its cipher glyph otherwise. That is the
+    entire sharpening effect, and keeping it in the DATA rather than in the
+    renderer is what makes walking the pad back and forth show the same
+    picture every time.
 
-    `align_true` is the dial value at which every cell resolves. For bcrypt
-    there is no dial and no plaintext: `align_range` is 0 and `plaintext` is
-    None, which is the single fact the whole strong tier turns on.
+    `align_true_x` / `align_true_y` are the coordinate at which every cell
+    resolves. For bcrypt there is no pad and no plaintext: both spans are 0 and
+    `plaintext` is None, which is the single fact the whole strong tier turns
+    on.
     """
     cols:           int
     rows:           int
@@ -2466,9 +2474,11 @@ class CipherBlockData:
     cipher_glyphs:  tuple                # rows × cols of single-char strings
     plain_glyphs:   tuple                # rows × cols — the tiled plaintext
     cell_tolerance: tuple                # rows × cols of ints
-    align_true:     int
-    align_range:    int                  # dial spans 0 .. align_range
-    align_tolerance: int                 # beyond this, nothing resolves at all
+    align_true_x:   int
+    align_true_y:   int
+    align_span_x:   int                  # x walks 0 .. align_span_x
+    align_span_y:   int                  # y walks 0 .. align_span_y
+    align_falloff:  float                # tolerance-distribution exponent
     plaintext:      str | None
     hash_value:     str
     # Defaults last (dataclass field order).
@@ -2478,6 +2488,30 @@ class CipherBlockData:
     def crackable(self) -> bool:
         """Whether stage 2 exists for this block at all."""
         return self.plaintext is not None and self.tier != "strong"
+
+    @property
+    def align_true(self) -> tuple[int, int]:
+        """The true coordinate, as one (x, y) pair."""
+        return (self.align_true_x, self.align_true_y)
+
+    @property
+    def max_walk(self) -> int:
+        """Manhattan distance across the whole pad, corner to corner.
+
+        The worst case a DIRECT walk can cost, so it is also the number the
+        step budget has to stay clear of.
+        """
+        return self.align_span_x + self.align_span_y
+
+    def error_at(self, x: int, y: int) -> int:
+        """Manhattan distance from (x, y) to the true coordinate.
+
+        Manhattan rather than Chebyshev on purpose — see the note on
+        config.CIPHER_ALIGN_SPAN. Every arrow press must move this by exactly
+        one, in one direction or the other, or the pad has dead zones where a
+        keypress appears to do nothing.
+        """
+        return abs(x - self.align_true_x) + abs(y - self.align_true_y)
 
 
 @dataclass(frozen=True)
@@ -2545,18 +2579,19 @@ def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
             cipher[0][i] = ch
 
     plaintext = crack_password(candidate)
-    align_range = config.CIPHER_ALIGN_RANGE[tier]
-    align_tol   = config.CIPHER_ALIGN_TOLERANCE[tier]
+    span_x, span_y = config.CIPHER_ALIGN_SPAN[tier]
+    falloff        = config.CIPHER_ALIGN_FALLOFF[tier]
 
     if not plaintext or tier == "strong":
         # Strong tier: crack_password() already returns None for bcrypt, so
-        # there is no plaintext, no dial and no amount of ⏱ that changes it.
+        # there is no pad, no coordinate and no amount of ⏱ that changes it.
         return CipherBlockData(
             cols=cols, rows=rows, tier=tier, algo=algo,
             cipher_glyphs=tuple(tuple(r) for r in cipher),
             plain_glyphs=tuple(tuple(r) for r in cipher),
             cell_tolerance=tuple(tuple(0 for _ in range(cols)) for _ in range(rows)),
-            align_true=0, align_range=0, align_tolerance=0,
+            align_true_x=0, align_true_y=0,
+            align_span_x=0, align_span_y=0, align_falloff=0.0,
             plaintext=None, hash_value=h_val,
         )
 
@@ -2566,20 +2601,25 @@ def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
     flat = (unit * (cols * rows // len(unit) + 2))[:cols * rows]
     plain = [tuple(flat[y * cols:(y + 1) * cols]) for y in range(rows)]
 
-    align_true = rng.randint(0, align_range)
-    # Per-cell tolerance, uniform over 0..align_tol. A cell with tolerance t
-    # resolves whenever the dial is within t of true, so at err=0 every cell
-    # resolves and the proportion falls away smoothly as the dial drifts.
+    # The true coordinate. Drawn from the SAME rng stream the glyphs came from,
+    # so a candidate's pad is as deterministic as their block.
+    align_true_x = rng.randint(0, span_x)
+    align_true_y = rng.randint(0, span_y)
+    # Per-cell tolerance. A cell with tolerance t resolves whenever the
+    # Manhattan error is within t, so the distribution of t across the block IS
+    # the reveal curve — see config.CIPHER_ALIGN_FALLOFF for its shape and why
+    # it is convex rather than uniform.
     #
-    # The range STARTS AT ZERO, and that is load-bearing. Drawing from 1..tol
-    # instead gives every cell a tolerance of at least 1, which makes err=1
-    # render identically to err=0 — the player would see a fully legible block
-    # one step away from true and have no way to tell they were not there yet.
-    # The zero-tolerance cells are the handful of characters that refuse to
-    # settle until the dial is exactly right, which is the whole "fine-tune it
-    # exactly" beat.
+    # The range STARTS AT ZERO, and that is load-bearing. A draw that gave
+    # every cell a tolerance of at least 1 would make err=1 render identically
+    # to err=0: the player would see a fully legible block one step away from
+    # true, with no way to tell they were not there yet. The zero-tolerance
+    # cells are the handful of characters that refuse to settle until the
+    # coordinate is exactly right, which is the whole "fine-tune it exactly"
+    # beat — and rounding a u near 0 lands on exactly that.
+    max_walk = span_x + span_y
     cell_tol = tuple(
-        tuple(rng.randint(0, align_tol) for _ in range(cols))
+        tuple(round(max_walk * rng.random() ** falloff) for _ in range(cols))
         for _ in range(rows)
     )
 
@@ -2588,8 +2628,9 @@ def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
         cipher_glyphs=tuple(tuple(r) for r in cipher),
         plain_glyphs=tuple(plain),
         cell_tolerance=cell_tol,
-        align_true=align_true, align_range=align_range,
-        align_tolerance=align_tol,
+        align_true_x=align_true_x, align_true_y=align_true_y,
+        align_span_x=span_x, align_span_y=span_y,
+        align_falloff=falloff,
         plaintext=plaintext, hash_value=h_val,
         pre_revealed=bool(candidate.dossier.credential_unsalted),
     )
@@ -2659,21 +2700,21 @@ def window_log_lines(block: CipherBlockData, res: WindowResult) -> list[str]:
     return [
         head,
         "  [#c084fc][b]▲ decrypt engaged[/][/] — the block has structure",
-        ("  [dim]wrong derived key: turn the alignment dial until the text "
+        ("  [dim]wrong derived key: walk the alignment pad until the text "
          "comes into focus[/]"),
     ]
 
 
-# ── Stage 2 — the alignment dial ────────────────────────────────────────────
+# ── Stage 2 — the alignment pad ─────────────────────────────────────────────
 
 
-def render_block(block: CipherBlockData, dial: int,
+def render_block(block: CipherBlockData, x: int, y: int,
                  engaged: bool = True) -> list[list[tuple[str, bool]]]:
-    """The block as it looks at a given dial position.
+    """The block as it looks from a given pad coordinate.
 
     Returns rows of (glyph, resolved) pairs so the widget can colour resolved
     cells without recomputing which ones they are. Before a window is applied
-    (`engaged=False`) every cell is ciphertext, whatever the dial says.
+    (`engaged=False`) every cell is ciphertext, wherever the cursor sits.
 
     A pre-revealed block (UNSALTED_STORAGE) is fully resolved unconditionally:
     no salt means the stored value is exposed with no tool run at all, which is
@@ -2684,27 +2725,27 @@ def render_block(block: CipherBlockData, dial: int,
     if not engaged or not block.crackable:
         return [[(g, False) for g in row] for row in block.cipher_glyphs]
 
-    err = abs(dial - block.align_true)
+    err = block.error_at(x, y)
     out: list[list[tuple[str, bool]]] = []
-    for y in range(block.rows):
+    for gy in range(block.rows):
         row: list[tuple[str, bool]] = []
-        for x in range(block.cols):
-            if err <= block.cell_tolerance[y][x]:
-                row.append((block.plain_glyphs[y][x], True))
+        for gx in range(block.cols):
+            if err <= block.cell_tolerance[gy][gx]:
+                row.append((block.plain_glyphs[gy][gx], True))
             else:
-                row.append((block.cipher_glyphs[y][x], False))
+                row.append((block.cipher_glyphs[gy][gx], False))
         out.append(row)
     return out
 
 
-def alignment_locked(block: CipherBlockData, dial: int) -> bool:
-    """True when the dial is exactly right and the credential resolves."""
+def alignment_locked(block: CipherBlockData, x: int, y: int) -> bool:
+    """True when the cursor is exactly on the key and the credential resolves."""
     if block.pre_revealed:
         return True
-    return block.crackable and dial == block.align_true
+    return block.crackable and (x, y) == block.align_true
 
 
-def resolved_fraction(block: CipherBlockData, dial: int) -> float:
+def resolved_fraction(block: CipherBlockData, x: int, y: int) -> float:
     """Fraction of cells currently showing plaintext.
 
     Used by the widget for the lock indicator and by tests to assert the
@@ -2715,26 +2756,76 @@ def resolved_fraction(block: CipherBlockData, dial: int) -> float:
         return 1.0
     if not block.crackable:
         return 0.0
-    err = abs(dial - block.align_true)
+    err = block.error_at(x, y)
     hit = sum(1 for row in block.cell_tolerance for t in row if err <= t)
     return hit / max(1, block.cols * block.rows)
 
 
 def hint_band(block: CipherBlockData, upgrades: set | None = None
-              ) -> tuple[int, int] | None:
-    """The dial range Credential HUD marks, or None without the upgrade.
+              ) -> tuple[int, int, int, int] | None:
+    """The pad BOX Credential HUD marks, or None without the upgrade.
 
-    Returns an INCLUSIVE (low, high) span containing the true value, widened
-    by config.CIPHER_HINT_BAND. Per #54's lesson it narrows the search without
-    answering it, and the base tier marks nothing at all.
+    Returns an INCLUSIVE (x0, y0, x1, y1) box containing the true coordinate,
+    widened on each axis by config.CIPHER_HINT_FRACTION of THAT axis's span.
+    Per #54's lesson it narrows the search without answering it, and the base
+    tier marks nothing.
+
+    Per-axis rather than one shared half-width: the pads are much wider than
+    they are tall, so a single figure large enough to be a hint on X swallows
+    the whole of Y and hands that axis over for free.
     """
     if config.UPGRADE_HASH_HIGHLIGHT not in (upgrades or ()):
         return None
     if not block.crackable:
         return None
-    band = config.CIPHER_HINT_BAND
-    return (max(0, block.align_true - band),
-            min(block.align_range, block.align_true + band))
+    bx = max(1, round(block.align_span_x * config.CIPHER_HINT_FRACTION))
+    by = max(1, round(block.align_span_y * config.CIPHER_HINT_FRACTION))
+    return (max(0, block.align_true_x - bx),
+            max(0, block.align_true_y - by),
+            min(block.align_span_x, block.align_true_x + bx),
+            min(block.align_span_y, block.align_true_y + by))
+
+
+def step_overage_charge(steps_before: int, steps_after: int) -> int:
+    """⏱ owed for crossing step thresholds between two step counts.
+
+    The budget is a staircase, not a meter: the first
+    config.CIPHER_DIAL_FREE_STEPS presses are free, and every
+    CIPHER_DIAL_OVERAGE_BLOCK presses after that bills
+    CIPHER_DIAL_OVERAGE_COST. This returns only what the move just taken owes,
+    so callers charge incrementally and never have to remember what they have
+    already paid.
+
+    Expressed as (blocks crossed after) − (blocks crossed before) rather than
+    by testing a single step against a threshold, so a multi-step move is
+    billed for every boundary it passes rather than at most one.
+    """
+    def _blocks(steps: int) -> int:
+        over = steps - config.CIPHER_DIAL_FREE_STEPS
+        if over <= 0:
+            return 0
+        return -(-over // config.CIPHER_DIAL_OVERAGE_BLOCK)   # ceil
+
+    return (_blocks(steps_after) - _blocks(steps_before)) * config.CIPHER_DIAL_OVERAGE_COST
+
+
+def steps_until_charge(steps: int) -> int:
+    """How many more presses until the next ⏱ lands. Always at least 1.
+
+    Drives the footer counter, so it must agree with step_overage_charge()
+    exactly — a readout that is off by one is worse than no readout at all.
+
+    Derived by ASKING that function rather than re-deriving the boundaries from
+    the constants. The arithmetic version of this was wrong in both branches on
+    the first attempt (the free allowance runs to FREE_STEPS + 1 presses, not
+    FREE_STEPS, and the later boundaries are offset by that same one), and any
+    second implementation of the staircase is a second place for it to drift.
+    The loop runs at most OVERAGE_BLOCK times.
+    """
+    k = 1
+    while step_overage_charge(steps, steps + k) == 0:
+        k += 1
+    return k
 
 
 # ── Readouts ────────────────────────────────────────────────────────────────
@@ -2787,7 +2878,11 @@ def get_cipher_intro(block: CipherBlockData,
         "",
         "[#c084fc][b]DECRYPTION[/][/]  [dim]X to open the window selector[/]",
         "[dim]stage 1 — choose the window matching the digest (costs ⏱)[/]",
-        "[dim]stage 2 — turn the alignment dial until the text resolves (free)[/]",
+        ("[dim]stage 2 — walk the alignment pad with the arrow keys until the "
+         "text resolves[/]"),
+        (f"[dim]         first {config.CIPHER_DIAL_FREE_STEPS} steps free, "
+         f"then {config.CIPHER_DIAL_OVERAGE_COST} ⏱ per "
+         f"{config.CIPHER_DIAL_OVERAGE_BLOCK}[/]"),
     ]
     if block.pre_revealed:
         lines += [

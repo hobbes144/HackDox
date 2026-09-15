@@ -2392,18 +2392,19 @@ def test_breach_auto_upgrade_confirms_hit_on_base_ghostscan_run():
 
 
 def test_credential_hud_band_narrows_without_answering():
-    """Credential HUD points at a BAND of the dial, never at the value.
+    """Credential HUD points at a REGION of the pad, never at the key.
 
-    Rewritten when the cipher block became a two-stage decrypt: the upgrade
-    used to tint a region of a canvas being swept, and now marks a span of the
-    alignment dial instead. The constraint it has to satisfy is unchanged, and
-    it comes from #54 — the stego tint originally covered the payload zone
-    EXACTLY, which solved the minigame for nothing and left a 30 HD$ upgrade
-    selling "the same rectangle, bluer".
+    Rewritten twice now. The upgrade first tinted a region of a canvas being
+    swept, then marked a span of a one-dimensional alignment dial, and now
+    marks a BOX on the two-axis alignment pad. The constraint it has to satisfy
+    has never changed, and it comes from #54 — the stego tint originally
+    covered the payload zone EXACTLY, which solved the minigame for nothing and
+    left a 30 HD$ upgrade selling "the same rectangle, bluer".
 
-    So: the band must CONTAIN the true value and be strictly WIDER than it
-    wherever the dial has room, and it must never collapse to a single
-    position, which would simply be the answer.
+    So: the box must CONTAIN the true coordinate, stay inside the pad, and be
+    strictly wider than one square on BOTH axes wherever the pad has room.
+    Collapsing on either axis is the failure — a box one column wide hands the
+    player X outright and leaves only a line to walk.
     """
     from gameengine.core import tools_bridge
 
@@ -2413,22 +2414,30 @@ def test_credential_hud_band_narrows_without_answering():
         c = candidate_gen.generate(seed, day, 0)
         block = tools_bridge.build_cipher_block(c, day.number)
         if not block.crackable:
-            continue          # bcrypt — no dial to hint at
+            continue          # bcrypt — no pad to hint at
         checked += 1
 
         band = tools_bridge.hint_band(block, {config.UPGRADE_HASH_HIGHLIGHT})
-        assert band is not None, "the upgrade produced no band on a live dial"
-        lo, hi = band
-        assert lo <= block.align_true <= hi, (
-            f"band {band} does not contain the true alignment "
-            f"{block.align_true}")
-        assert 0 <= lo and hi <= block.align_range, (
-            f"band {band} runs outside the dial 0..{block.align_range}")
-        # Wider than a single position wherever the dial has room to be wider.
-        if block.align_range > 0:
-            assert hi > lo, (
-                f"band {band} is a single dial position — that is the answer, "
-                f"not a hint")
+        assert band is not None, "the upgrade produced no box on a live pad"
+        x0, y0, x1, y1 = band
+        tx, ty = block.align_true
+        assert x0 <= tx <= x1 and y0 <= ty <= y1, (
+            f"box {band} does not contain the true coordinate {block.align_true}")
+        assert 0 <= x0 and x1 <= block.align_span_x, (
+            f"box {band} runs outside the pad's X axis 0..{block.align_span_x}")
+        assert 0 <= y0 and y1 <= block.align_span_y, (
+            f"box {band} runs outside the pad's Y axis 0..{block.align_span_y}")
+        if block.align_span_x > 0:
+            assert x1 > x0, (
+                f"box {band} is a single column — that hands the player X")
+        if block.align_span_y > 0:
+            assert y1 > y0, (
+                f"box {band} is a single row — that hands the player Y")
+        # ...and it must still leave real searching to do. A box covering most
+        # of the pad would be a hint; a box covering nearly none of it is the
+        # answer with extra steps.
+        area = (x1 - x0 + 1) * (y1 - y0 + 1)
+        assert area > 1, f"box {band} marks a single square — that is the key"
     assert checked, "guard is inert — no crackable candidate was examined"
 
 
