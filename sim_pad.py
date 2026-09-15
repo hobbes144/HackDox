@@ -16,7 +16,7 @@ def frac(b, x, y):
     return tb.resolved_fraction(b, x, y)
 
 def play(b, patience=2):
-    x = y = 0
+    x, y = b.start_cursor
     steps = 0
     axis = 0
     stuck_axes = 0

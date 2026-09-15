@@ -470,17 +470,21 @@ def test_a_direct_walk_is_always_free():
     still gets billed for the pad's size, and the fee stops meaning "you
     wandered" — which is the only thing it is supposed to mean.
     """
-    worst = max(sx + sy for sx, sy in config.CIPHER_ALIGN_SPAN.values())
-    assert worst < config.CIPHER_DIAL_FREE_STEPS, (
-        f"a perfect walk across the largest pad takes {worst} steps but only "
-        f"{config.CIPHER_DIAL_FREE_STEPS} are free")
     checked = 0
+    worst = 0
     for _cand, block in _crackable_blocks(8, seeds=25):
         checked += 1
-        direct = block.error_at(0, 0)
+        # From the CENTRE, which is where the cursor actually starts.
+        direct = block.error_at(*block.start_cursor)
+        worst = max(worst, direct, block.worst_direct_walk)
         assert tools_bridge.step_overage_charge(0, direct) == 0, (
             f"walking straight to the key on a {block.tier} block costs ⏱")
+        assert direct <= block.worst_direct_walk, (
+            "worst_direct_walk under-reports the real worst case")
     assert checked, "guard is inert"
+    assert worst < config.CIPHER_DIAL_FREE_STEPS, (
+        f"a perfect walk on the largest pad takes {worst} steps but only "
+        f"{config.CIPHER_DIAL_FREE_STEPS} are free")
 
 
 def test_the_budget_bills_every_boundary_a_move_crosses():
@@ -655,53 +659,136 @@ def test_day_3_is_solvable_with_day_3_tools():
 # ── Cascade into the tracking surfaces ──────────────────────────────────────
 
 
-def test_every_credential_kind_is_grouped_and_clustered_together():
-    """All five credential violations track on one board group.
+def test_every_hashcrack_kind_is_grouped_and_clustered_together():
+    """Every kind Hashcrack reveals tracks on the CREDENTIAL board group.
 
     WEAK_ENCRYPTION reached this test the hard way: it was retiered
     DOSSIER -> HASHCRACK while its catalogue entry stayed under DOSSIER, so the
-    board filed it under a group whose tool no longer revealed it. A kind's
-    group and its revealing tool are allowed to differ (UNSALTED_STORAGE does,
-    deliberately) — what is not allowed is a credential kind tracking somewhere
-    other than with the credentials.
+    board filed it under a group whose tool no longer revealed it.
+
+    REPHRASED 2026-09-15, and the rephrasing is the point. This used to assert
+    a hardcoded list of "the five credential violations", with UNSALTED_STORAGE
+    among them as a documented group/tier mismatch. UNSALTED_STORAGE has since
+    moved to the DOSSIER group to sit with the evidence that reveals it, so a
+    hardcoded list would now just be a second copy of the catalogue that has to
+    be edited in step with it — a test that can only ever restate the thing it
+    is testing.
+
+    Asserted as the RULE instead: the CREDENTIAL group is exactly the set of
+    kinds whose revealing tool is Hashcrack. That still catches the original
+    bug (a kind whose group and tool disagree), and it keeps working when kinds
+    move, without anyone updating a literal.
     """
-    want = {
-        DiscrepancyKind.WEAK_ENCRYPTION, DiscrepancyKind.UNSALTED_STORAGE,
-        DiscrepancyKind.WEAK_CREDENTIAL, DiscrepancyKind.LEAKED_PASSWORD,
-        DiscrepancyKind.CROSS_BREACH_REUSE,
-    }
+    from gameengine.core.models import ToolName
+
+    want = {k for k, (tool, _sev) in candidate_gen._SEVERITY_REVEAL.items()
+            if tool is ToolName.HASHCRACK}
+    assert want, "guard is inert — no Hashcrack-tier kind exists"
+
     grouped = {k for g, k, _lbl in rules_content.VIOLATION_CATALOG
                if g == "CREDENTIAL"}
     assert grouped == want, (
-        f"CREDENTIAL group is {sorted(k.name for k in grouped)}, expected "
-        f"{sorted(k.name for k in want)}")
+        f"CREDENTIAL group is {sorted(k.name for k in grouped)}, but the kinds "
+        f"Hashcrack reveals are {sorted(k.name for k in want)}")
 
     clustered = {k for g, _cid, _lbl, kinds in rules_content.VIOLATION_CLUSTERS
                  if g == "CREDENTIAL" for k in kinds}
     assert clustered == want, "board clusters disagree with the catalogue"
 
+    # And the kind that left: UNSALTED_STORAGE must now be grouped where its
+    # evidence is, with group and tier finally agreeing.
+    us = DiscrepancyKind.UNSALTED_STORAGE
+    assert candidate_gen._SEVERITY_REVEAL[us][0] is ToolName.DOSSIER
+    assert any(g == "DOSSIER" and k is us
+               for g, k, _lbl in rules_content.VIOLATION_CATALOG), (
+        "UNSALTED_STORAGE is DOSSIER-tier but not in the DOSSIER group")
+
 
 def test_unsalted_storage_is_documented_before_hashcrack_unlocks():
     """A kind must never be plantable and undocumented on the same day.
 
-    UNSALTED_STORAGE is catalogued under CREDENTIAL but tiered DOSSIER, so it
-    is plantable from day 1 while the CREDENTIAL rules tab stays locked until
-    day 3. The locked tab therefore has to document it — otherwise a day-1
-    player meets a chip on the evidence board with nowhere to look it up.
+    UNSALTED_STORAGE is DOSSIER-tier, so it is plantable from day 1 while the
+    CREDENTIAL tab stays locked until day 3. A day-1 player who meets the chip
+    on the evidence board must have somewhere to look it up.
+
+    WHERE that somewhere is moved on 2026-09-15. It used to be a violation
+    table rendered on the LOCKED credentials tab; the kind now lives in the
+    DOSSIER group and is documented on the DOSSIER tab, next to the plaintext
+    that reveals it. The requirement is unchanged — only the address is — so
+    this asserts the requirement and lets the address follow the catalogue.
     """
-    locked = rules_content.build_creds_text(load_day(1), set())
-    assert "UNSALTED_STORAGE" in locked, (
-        "the locked CREDENTIAL tab does not document the one credential "
-        "violation reachable without the tool")
-    # ...and it must not spoil the kinds that ARE gated.
-    for gated in ("LEAKED_PASSWORD", "CROSS_BREACH_REUSE", "WEAK_CREDENTIAL"):
+    day1 = load_day(1)
+    dossier = rules_content.build_dossier_text(day1)
+    assert "UNSALTED_STORAGE" in dossier, (
+        "the DOSSIER tab does not document the one credential violation "
+        "reachable without any tool, which is plantable from day 1")
+    assert "UNSALTED" in dossier
+
+    # The locked credentials tab must not spoil the kinds that ARE gated...
+    locked = rules_content.build_creds_text(day1, set())
+    for gated in ("LEAKED_PASSWORD", "CROSS_BREACH_REUSE", "WEAK_CREDENTIAL",
+                  "WEAK_ENCRYPTION"):
         assert gated not in locked, (
             f"{gated} is documented on a locked tab before its tool exists")
+    # ...and must point at where the un-gated one is, rather than going silent.
+    assert "DOSSIER" in locked, (
+        "the locked tab neither documents the dossier-tier credential kind nor "
+        "says where it went")
 
     unlocked = rules_content.build_creds_text(load_day(5), {"hashcrack"})
-    for kind in ("UNSALTED_STORAGE", "LEAKED_PASSWORD", "CROSS_BREACH_REUSE",
+    for kind in ("LEAKED_PASSWORD", "CROSS_BREACH_REUSE",
                  "WEAK_CREDENTIAL", "WEAK_ENCRYPTION"):
         assert kind in unlocked, f"{kind} missing from the unlocked tab"
+
+
+def test_unsalted_storage_severity_steps_up_when_hashcrack_arrives():
+    """Minor until day 3, major from day 3 (Nick, 2026-09-15).
+
+    Before Hashcrack there is no credential economy for the finding to sit in
+    and no tool to corroborate it with, so it files as a note. From the day the
+    tool lands, the same finding is a real storage failure.
+
+    Asserted on the PLANTED discrepancy as well as the table, because those are
+    two different code paths — the generator stamps a severity onto each
+    Discrepancy at plant time, and the rules page looks one up per kind. They
+    drifting apart is exactly how a violation ends up filed one way on the
+    evidence board and another on the rules page.
+    """
+    from gameengine.core.models import ToolName
+
+    us = DiscrepancyKind.UNSALTED_STORAGE
+    assert candidate_gen.severity_for(us, 1) == "minor"
+    assert candidate_gen.severity_for(us, 2) == "minor"
+    assert candidate_gen.severity_for(us, 3) == "major"
+    assert candidate_gen.severity_for(us, 20) == "major"
+    # No day in hand -> the settled weight, never the lower one.
+    assert candidate_gen.severity_for(us, None) == "major"
+
+    # A kind with no step is unaffected on every day.
+    for d in (1, 3, 20, None):
+        assert candidate_gen.severity_for(DiscrepancyKind.HOSTILE_CHAT, d) == \
+            candidate_gen._SEVERITY_REVEAL[DiscrepancyKind.HOSTILE_CHAT][1]
+
+    # The generator stamps the day's value onto the planted discrepancy.
+    seen: dict[int, set[str]] = {}
+    for day_number in (1, 8):
+        day = load_day(day_number)
+        for seed in range(60):
+            for slot in range(day.candidate_count):
+                c = candidate_gen.generate(seed, day, slot)
+                for d in c.truth.discrepancies:
+                    if d.kind is us:
+                        seen.setdefault(day_number, set()).add(d.severity)
+    assert seen.get(1), "guard is inert — no day-1 unsalted candidate"
+    assert seen.get(8), "guard is inert — no day-8 unsalted candidate"
+    assert seen[1] == {"minor"}, f"day 1 planted {seen[1]}"
+    assert seen[8] == {"major"}, f"day 8 planted {seen[8]}"
+
+    # And the rules table prints the day's value, not the settled one.
+    early = rules_content.build_dossier_text(load_day(1))
+    assert "UNSALTED_STORAGE" in early
+    row = next(ln for ln in early.split("\n") if "UNSALTED_STORAGE" in ln)
+    assert "minor" in row, f"day-1 rules row reads {row!r}"
 
 
 def test_the_rules_page_shows_the_redistributed_severities():
@@ -763,11 +850,13 @@ def test_panel_walks_the_two_stages():
     assert p.attempts == 1
 
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
-    assert p.state == p.ENGAGED and p.cursor == (0, 0)
+    assert p.state == p.ENGAGED and p.cursor == block.start_cursor, (
+        "the pad cursor does not start in the centre")
 
     tx, ty = block.align_true
-    p.move_cursor(tx, 0)
-    p.move_cursor(0, ty)
+    cx, cy = p.cursor
+    p.move_cursor(tx - cx, 0)
+    p.move_cursor(0, ty - cy)
     assert p.locked and p.cursor == block.align_true
 
 
@@ -776,6 +865,7 @@ def test_panel_cursor_is_clamped_to_the_pad():
     p = _panel(cand)
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
+    assert p.cursor == block.start_cursor
     p.move_cursor(-9999, -9999)
     assert p.cursor == (0, 0)
     p.move_cursor(9999, 9999)
@@ -795,12 +885,17 @@ def test_panel_does_not_bill_steps_it_did_not_take():
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
     assert p.steps == 0
+    # Walk to a corner first — the cursor now starts in the CENTRE, so no
+    # single press is against a wall from there.
+    p.move_cursor(-block.align_span_x, -block.align_span_y)
+    assert p.cursor == (0, 0)
+    at_corner = p.steps
     assert p.move_cursor(-1, 0) == 0, "stepping off the left edge counted"
     assert p.move_cursor(0, -1) == 0, "stepping off the top edge counted"
-    assert p.steps == 0
+    assert p.steps == at_corner
 
     assert p.move_cursor(1, 0) == 1
-    assert p.steps == 1
+    assert p.steps == at_corner + 1
     # A move partly clamped counts only the part that happened.
     p.move_cursor(block.align_span_x, 0)          # runs to the right edge
     at_edge = p.steps
@@ -814,9 +909,10 @@ def test_panel_keeps_an_engaged_block_when_the_player_leaves():
     p = _panel(cand)
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
+    cx, cy = p.cursor
     p.move_cursor(3, 1)
     p.close()
-    assert p.state == p.ENGAGED and p.cursor == (3, 1), (
+    assert p.state == p.ENGAGED and p.cursor == (cx + 3, cy + 1), (
         "walking away reset a window the player already paid for")
     assert p.steps == 4, "leaving decrypt mode reset the step budget"
     p.open_selector()
@@ -831,7 +927,7 @@ def test_panel_resets_between_candidates():
         p.block, p.block.tier, _rich_state()))
     p.move_cursor(2, 1)
     p.load_candidate(candidate_gen.generate(3, day, 1), 8)
-    assert p.attempts == 0 and p.cursor == (0, 0)
+    assert p.attempts == 0 and p.cursor == p.block.start_cursor
     assert p.steps == 0, (
         "the step budget carried over to the next candidate — one player's "
         "wandering would bill the next credential")
@@ -899,8 +995,7 @@ def test_panel_never_shows_a_progress_percentage():
     p = _panel(cand)
     p.open_selector()
     p.apply_result(tools_bridge.apply_window(block, block.tier, _rich_state()))
-    spots = [(0, 0), (block.align_span_x // 2, block.align_span_y // 2),
-             block.align_true]
+    spots = [(0, 0), block.start_cursor, block.align_true]
     for x, y in spots:
         cx, cy = p.cursor
         p.move_cursor(x - cx, y - cy)

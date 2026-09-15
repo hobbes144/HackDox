@@ -62,12 +62,31 @@ AFFILIATIONS_LEGIT = [
 # render it as though it were an organisation.
 NO_AFFILIATION_STATED = "(none listed)"
 
+# Modest-but-STATED affiliations. Every entry has to be something the candidate
+# actually claimed, however thin — "a small claim" and "no claim" are different
+# findings, and this pool is only the former.
+#
+# It used to contain the literal string "(none listed)", which IS
+# NO_AFFILIATION_STATED above: the sentinel that is supposed to mean
+# AFFILIATION_NOT_STATED was also an ordinary draw. A thin-pool archetype
+# therefore showed the evidence marker about one time in five without carrying
+# the violation — measured at 344 of 4,315 non-carriers, spread across
+# clumsy_cutie, bad_actor, dark_web, the_incompatible and white_hat. A player
+# reading the one dossier field the rules page tells them to read got a false
+# positive, and denying on it was punished.
+#
+# Same failure as #51 (a dossier field that does not track the kind it is meant
+# to evidence), and it survived #56's "make the affiliation evidence real
+# rather than implied" pass because nothing ever checked the other direction.
+# Found 2026-09-15 by the new dossier-tier guard, the first time it ran — see
+# test_dossier_tier_evidence_is_present_for_carriers_and_absent_for_others.
+# The sentinel is now reachable ONLY by planting the kind.
 AFFILIATIONS_THIN = [
     "Freelance Security Researcher",
-    "(none listed)",
     "Independent Hobbyist",
     "Self-employed",
     "Personal project",
+    "Between roles",
 ]
 
 # Prestigious institutions used by The Professional (and faked by Sneaky Buggers)
@@ -427,6 +446,20 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             # deliberate, and only visible if you go looking. Lands in the
             # critical slot this archetype already has.
             DiscrepancyKind.CROSS_BREACH_REUSE,
+            # 2026-09-15: BREACH_HIT added so that a Sneaky Bugger carrying
+            # CROSS_BREACH_REUSE can also carry the Ghostscan-side finding that
+            # corroborates it. Before this, BREACH_HIT was absent from 75.7% of
+            # all CROSS_BREACH_REUSE carriers and EVERY one of those was a
+            # Sneaky Bugger — not by design, simply because the kind was not in
+            # this list and so could never be selected here.
+            #
+            # Deliberately eligible rather than implied: #61(d) removed
+            # CROSS_BREACH_REUSE from _IMPLIED_KINDS on purpose, so that the two
+            # stay distinct kinds in ground truth and the breach-panel evidence
+            # is reconciled at scoring time instead
+            # (test_breach_hit_flag_credited_against_cross_breach_reuse). This
+            # lets the pairing happen often without asserting it always.
+            DiscrepancyKind.BREACH_HIT,
         ),
         handle_style="academic",
         # #56: moved elite -> legit. A claimed elite/trusted affiliation is now
@@ -691,6 +724,45 @@ _EXCLUSIVE_ARTIFACT_GROUPS: tuple[frozenset[DiscrepancyKind], ...] = (
 # the norm and only the exceptions are spelled out.
 _INTRO_DAY_OVERRIDE: dict[DiscrepancyKind, int] = {}
 
+# Kinds whose severity ESCALATES partway through the campaign:
+#   kind -> (severity before the step, day the step lands, severity from then)
+#
+# The Overseer's policy tightens as the player gains the tools to act on it,
+# and a kind whose whole significance changes when a tool arrives should say
+# so rather than being filed at its endgame weight from day 1.
+#
+# UNSALTED_STORAGE is the case this exists for (Nick, 2026-09-15). Before
+# Hashcrack, a credential stored in the clear is something the player can SEE
+# on the dossier but can do nothing else about — there is no tool to
+# corroborate it with and no credential economy for it to sit in. It is a
+# note. From day 3, when Hashcrack arrives and the whole credential family
+# becomes live, the same finding is a real storage failure and files as major.
+#
+# Deliberately a step function and not a curve: the player is told about rule
+# changes at the day boundary (rules_engine.diff_rulesets), so a severity that
+# drifted would be a change they were never told about.
+_SEVERITY_BY_DAY: dict[DiscrepancyKind, tuple[str, int, str]] = {
+    DiscrepancyKind.UNSALTED_STORAGE: ("minor", 3, "major"),
+}
+
+
+def severity_for(kind: DiscrepancyKind, day_number: int | None = None) -> str:
+    """`kind`'s severity on the given day.
+
+    Pass a day wherever one is available. `None` means "the kind's settled
+    weight" and returns the post-step value — the right default for a
+    reference table with no day in hand, and never lower than the real answer,
+    so nothing under-reports a violation's cost.
+    """
+    _tool, base = _SEVERITY_REVEAL[kind]
+    step = _SEVERITY_BY_DAY.get(kind)
+    if step is None:
+        return base
+    before, on_day, after = step
+    if day_number is None:
+        return after
+    return before if day_number < on_day else after
+
 
 def intro_day(kind: DiscrepancyKind) -> int:
     """The earliest day `kind` may be planted (its revealing tool's unlock day)."""
@@ -951,6 +1023,25 @@ _IMPLIED_KINDS: dict[DiscrepancyKind, DiscrepancyKind] = {
     DiscrepancyKind.LEAKED_PASSWORD: DiscrepancyKind.BREACH_HIT,
 }
 
+# Kind -> the corroborating kind on another tool that SHOULD usually accompany
+# it. Unlike _IMPLIED_KINDS above, a companion is not planted for free: it is
+# merely moved to the front of the queue for a slot the archetype already has,
+# so it still costs budget and can still lose to a forced violation.
+#
+# That difference is deliberate. CROSS_BREACH_REUSE was removed from
+# _IMPLIED_KINDS by #61(d) precisely so the two kinds stay distinct in ground
+# truth; re-adding it there would undo that. A preference gets the pairing to
+# happen most of the time — which is what "BREACH_HIT should exist whenever
+# there is a cross-breach" actually needs — without asserting it always, so
+# the player still cannot read one as proof of the other.
+#
+# Only useful when the companion's severity tier is filled AFTER the trigger's:
+# the reordering happens between the major and minor passes, so a minor
+# companion to a critical or major trigger works, and the reverse would not.
+_COMPANION_KINDS: dict[DiscrepancyKind, DiscrepancyKind] = {
+    DiscrepancyKind.CROSS_BREACH_REUSE: DiscrepancyKind.BREACH_HIT,
+}
+
 
 def _roll_discrepancies(
     rng: random.Random,
@@ -1022,8 +1113,25 @@ def _roll_discrepancies(
     # This is a STABLE sort applied to an already-seeded shuffle, so the
     # result stays a pure function of (seed, day, slot): within each tier the
     # shuffled order is preserved, only the tiers are reordered.
+    #
+    # HOSTILE_CHAT is exempt, and the exemption is not special-pleading (#77).
+    # The lever's premise is that dossier-tier evidence sits in plain sight for
+    # free, so pushing it back makes the late game lean on the tool economy.
+    # HOSTILE_CHAT does not fit that premise: its evidence is the chat panel's
+    # ⚠ marker, which is gated behind the 20 HD$ Sentiment Scanner. It is the
+    # one dossier-tier kind the player already has to pay to read, so demoting
+    # it taxes them twice.
+    #
+    # Left in, the consequences were severe rather than cosmetic. HOSTILE_CHAT
+    # is the ONLY dossier-tier kind in Bad Actor's eligible set, so sorting it
+    # last meant its two major slots always filled from the three tool-tier
+    # kinds first: measured at 0 of 3,200 hard-band Bad Actors carrying it,
+    # while 3,200 of 3,200 still talked hostile. The violation simply did not
+    # exist for the last eight days of the campaign, and the upgrade sold to
+    # detect it had nothing to find.
     if difficulty_band in config.DIFFICULTY_BANDS_TOOL_BIASED:
-        eligible.sort(key=lambda k: _SEVERITY_REVEAL[k][0] == ToolName.DOSSIER)
+        eligible.sort(key=lambda k: (_SEVERITY_REVEAL[k][0] == ToolName.DOSSIER
+                                     and k is not DiscrepancyKind.HOSTILE_CHAT))
 
     def take(severity: str, count: int) -> None:
         nonlocal eligible
@@ -1031,7 +1139,7 @@ def _roll_discrepancies(
             for kind in list(eligible):
                 if kind in used:
                     continue
-                _, kind_sev = _SEVERITY_REVEAL[kind]
+                kind_sev = severity_for(kind, day_number)
                 if kind_sev == severity:
                     revealed_by, _ = _SEVERITY_REVEAL[kind]
                     chosen.append(Discrepancy(
@@ -1050,7 +1158,8 @@ def _roll_discrepancies(
     for kind in forced_kinds:
         if kind in used or kind not in eligible:
             continue
-        revealed_by, kind_sev = _SEVERITY_REVEAL[kind]
+        revealed_by, _base_sev = _SEVERITY_REVEAL[kind]
+        kind_sev = severity_for(kind, day_number)
         budget_for_sev = getattr(spec.budget, kind_sev)
         if forced_taken[kind_sev] >= budget_for_sev:
             continue
@@ -1068,6 +1177,36 @@ def _roll_discrepancies(
 
     take("critical", spec.budget.critical - forced_taken["critical"])
     take("major",    spec.budget.major    - forced_taken["major"])
+
+    # ── Companion preference ─────────────────────────────────────────────
+    # Some kinds have a corroborating finding on ANOTHER tool that ought to be
+    # there most of the time. CROSS_BREACH_REUSE is the case: a password can
+    # only recur across breach corpora if the account is in those corpora, so
+    # Ghostscan's BREACH_HIT is the natural companion to Hashcrack's reuse
+    # finding, and the player who checks both tools should usually see both.
+    #
+    # This is a PREFERENCE, not an implication, and the distinction is the
+    # whole reason it lives here rather than in _IMPLIED_KINDS. #61(d)
+    # deliberately took CROSS_BREACH_REUSE out of that table so the two stay
+    # distinct kinds in ground truth, reconciled at scoring time instead
+    # (test_breach_hit_flag_credited_against_cross_breach_reuse). An implication
+    # would plant BREACH_HIT free and unconditionally, re-creating exactly what
+    # that change removed. A preference only reorders the candidates for a slot
+    # the archetype already has, so the companion still costs a budget slot,
+    # still loses to a forced violation, and is still absent often enough that
+    # the player cannot treat one as proof of the other.
+    #
+    # Before this, BREACH_HIT was missing from 75.7% of CROSS_BREACH_REUSE
+    # carriers and every single one of those was a Sneaky Bugger, which simply
+    # had no BREACH_HIT in its eligible_kinds at all. Adding it there took the
+    # gap to 59%; the archetype has one minor slot and four minor kinds
+    # competing for it, so eligibility alone was never going to be enough.
+    _chosen_so_far = {d.kind for d in chosen}
+    _preferred = [k for k in eligible
+                  if any(_COMPANION_KINDS.get(c) == k for c in _chosen_so_far)]
+    if _preferred:
+        eligible = _preferred + [k for k in eligible if k not in _preferred]
+
     take("minor",    spec.budget.minor    - forced_taken["minor"])
 
     # ── Implied discrepancies ────────────────────────────────────────────
@@ -1091,7 +1230,8 @@ def _roll_discrepancies(
     chosen_kinds = {d.kind for d in chosen}
     for trigger, implied in _IMPLIED_KINDS.items():
         if trigger in chosen_kinds and implied not in used:
-            revealed_by, severity = _SEVERITY_REVEAL[implied]
+            revealed_by, _base = _SEVERITY_REVEAL[implied]
+            severity = severity_for(implied, day_number)
             chosen.append(Discrepancy(
                 kind=implied,
                 severity=severity,  # type: ignore[arg-type]
@@ -1139,15 +1279,43 @@ def _build_chat(
     rng.shuffle(base)
     n = rng.randint(3, min(5, max(3, len(base))))
     minute = rng.randint(0, 30)
+
+    # #77: VOICE is not EVIDENCE, and the tag has to tell them apart.
+    #
+    # An archetype's `tone` is its dialogue register — how it always talks.
+    # HOSTILE_CHAT is a violation this particular candidate either rolled or
+    # did not. Bad Actor is the one archetype where those two collide: its
+    # tone is literally the string "hostile", every pool line was tagged with
+    # it, and typewriter.set_candidate gates the Sentiment Scanner's red ⚠ on
+    # `tag == "hostile"`. So every Bad Actor was marked as carrying a violation
+    # 58.1% of them did not have — and on the hard band (days 13-20), where the
+    # tool-biased sort pushes the only DOSSIER-tier kind in their eligible set
+    # to the back of the queue, 100% of them were marked and 0% carried it. A
+    # 20 HD$ upgrade that reports a violation which is absent more often than
+    # present is worse than not owning it.
+    #
+    # The fix is one tag, not one flag: an archetype whose voice is hostile but
+    # whose ground truth is not gets "hostile_flavor", which the widget styles
+    # identically (the dialogue must still READ hostile — that is the
+    # archetype) but which no evidence check looks at. Only a candidate who
+    # actually rolled HOSTILE_CHAT gets the evidence-bearing "hostile".
+    has_hostile = any(d.kind == DiscrepancyKind.HOSTILE_CHAT for d in discrepancies)
+    line_tag = spec.tone
+    if spec.tone == "hostile" and not has_hostile:
+        line_tag = "hostile_flavor"
+
     for i, text in enumerate(base[:n]):
         lines.append(ChatLine(
             timestamp=f"10:{(minute + i * 2) % 60:02d}",
             text=text,
-            tag=spec.tone,
+            tag=line_tag,
         ))
 
-    # If a discrepancy implies a chat hint, splice it.
-    has_hostile = any(d.kind == DiscrepancyKind.HOSTILE_CHAT for d in discrepancies)
+    # If a discrepancy implies a chat hint, splice it. The base lines above
+    # already carry the real "hostile" tag in this branch, so a genuinely
+    # hostile candidate reads as flagged throughout rather than only on this
+    # one appended line — which is what the issue asked for, and what makes
+    # the Scanner's signal proportional to the evidence instead of binary.
     if has_hostile and lines:
         lines.append(ChatLine(
             timestamp=f"10:{(minute + n * 2) % 60:02d}",
@@ -1163,7 +1331,10 @@ def _build_chat(
         lines.append(ChatLine(
             timestamp=f"10:{(minute + (base_index + j) * 2) % 60:02d}",
             text=text,
-            tag=spec.tone,
+            # `line_tag`, not `spec.tone` — a scripted line is still one of
+            # this candidate's chat lines, so it must not be the one place the
+            # evidence tag leaks back in (#77).
+            tag=line_tag,
         ))
     return tuple(lines)
 
@@ -1318,14 +1489,32 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     cand_id = _hashlib.sha256(
         repr((game_seed, day.number, slot_index, "id")).encode()).hexdigest()[:12]
 
-    # Generate submitted_image_path for candidates with stego discrepancies
-    _st_images = ["profile.png", "avatar.jpg", "header.png", "screenshot.png"]
-    _has_st = any(d.kind in (
-        DiscrepancyKind.STEGO_PAYLOAD_PRESENT, DiscrepancyKind.COVERT_C2_CHANNEL,
-        DiscrepancyKind.ENCRYPTED_PAYLOAD,   # v2: also ships a suspect image
-    ) for d in discrepancies)
+    # EVERY candidate submits an image (#78), carrier or not.
+    #
+    # This used to be gated on the candidate actually carrying a stego kind,
+    # which made the dossier's Image field a free, perfect readout of ground
+    # truth: measured at a correlation of 1.000 across 72,400 candidates, with
+    # zero decoys in either direction. Once Stegotool unlocked on day 5 the
+    # player never had to open it — a filename meant guilty and "(none)" meant
+    # clean, for 0 ⏱. The invariant documented at _STEGO_ARTIFACT_KINDS above
+    # ("every candidate submits exactly ONE image") was written for this code
+    # and the code never honoured it; now it does.
+    #
+    # The pool is deliberately much larger than the four names it carried while
+    # only ~10% of candidates drew from it. With every candidate drawing, four
+    # names collide inside a single six-slot roster, and a filename shared by
+    # two candidates is just the next pattern to read. Shapes are mixed
+    # (generic, camera-style, descriptive) so that no one shape is a tell
+    # either.
+    _st_images = [
+        "profile.png", "avatar.jpg", "header.png", "screenshot.png",
+        "headshot.jpg", "id_scan.png", "badge_photo.jpg", "portrait.png",
+        "img_0412.jpg", "img_2208.jpg", "dsc_00917.jpg", "photo_2024.png",
+        "team_offsite.jpg", "conf_badge.png", "workstation.png", "desk.jpg",
+        "signature.png", "whiteboard.jpg",
+    ]
     _rng_st = random.Random(int(cand_id, 16) ^ 0xDE4DC0DE)
-    submitted_image_path: str | None = _rng_st.choice(_st_images) if _has_st else None
+    submitted_image_path: str = _rng_st.choice(_st_images)
 
     # Generate the submitted credential — issue #29: EVERY candidate now
     # submits a password in encrypted form. The hash shape encodes the
@@ -1396,24 +1585,42 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
 
     # #59: WEAK_ENCRYPTION is DERIVED from the artifact rather than rolled ahead
     # of it. "The weakest encryption is used" is a property of the hash, so every
-    # md5 candidate carries it - unconditionally, including unsalted ones. Before
-    # this only 199 of 432 md5 candidates flagged it, which meant the dossier's
-    # WEAK ENC chip sometimes corresponded to a violation and sometimes didn't.
+    # md5 candidate carries it. Before this only 199 of 432 md5 candidates
+    # flagged it, which meant the dossier's WEAK ENC chip sometimes corresponded
+    # to a violation and sometimes didn't.
     #
     # Deriving also inverts the dependency the right way round: the artifact
     # determines the violation, instead of a violation being asserted and an
     # artifact built to match. Getting that backwards is the shape behind
     # several bugs in this file's history.
     #
+    # ...WITH ONE EXCLUSION, added 2026-09-15. An UNSALTED_STORAGE candidate is
+    # stored IN THE CLEAR: there is no encryption there to be weak, so
+    # WEAK_ENCRYPTION is not a second finding about them, it is a category
+    # error. The generator still builds them an md5 digest internally (the
+    # cipher block needs something to key off, and `pre_revealed` opens it
+    # immediately), but that digest is an implementation detail the player is
+    # never shown — shared._password_markup returns early for unsalted
+    # candidates and prints the plaintext with no hash at all, precisely so it
+    # doesn't read as "still needs cracking".
+    #
+    # Without this exclusion the game told the player two contradictory things
+    # about one candidate: the dossier said "there is no crypto here" while the
+    # Hashcrack block header said "digest: 32 hex characters" — and scored them
+    # on both violations. Measured: 1,792 of 2,192 unsalted candidates (81.8%)
+    # carried both, and on every day from 3 onward the rate was 100%.
+    #
     # Still respects the two filters a rolled kind would: the #31 evidence-tier
     # gate and the day's allowed_violations whitelist. A clean archetype can
     # never pick one up because clean candidates are never given an md5 hash.
     if (submitted_hash and len(submitted_hash) == 32
+            and not _has_unsalt
             and not submitted_hash.startswith("$2b$")
             and intro_day(DiscrepancyKind.WEAK_ENCRYPTION) <= day.number
             and (not day.allowed_violations
                  or DiscrepancyKind.WEAK_ENCRYPTION in day.allowed_violations)):
-        _rb, _sv = _SEVERITY_REVEAL[DiscrepancyKind.WEAK_ENCRYPTION]
+        _rb, _ = _SEVERITY_REVEAL[DiscrepancyKind.WEAK_ENCRYPTION]
+        _sv = severity_for(DiscrepancyKind.WEAK_ENCRYPTION, day.number)
         discrepancies.append(Discrepancy(
             kind=DiscrepancyKind.WEAK_ENCRYPTION,
             severity=_sv,          # type: ignore[arg-type]

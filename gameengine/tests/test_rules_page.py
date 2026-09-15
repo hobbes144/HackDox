@@ -276,11 +276,19 @@ def test_rules_screen_evidence_board_respects_unlocked_tools():
     state_obj = EvidenceState()
     screen = RulesScreen(day, state_obj, unlocked_tools={"ghostscan"})
     groups = {g for g, _k, _l in screen._ev_board._items}
-    # CREDENTIAL joins these two from day 1: UNSALTED_STORAGE is grouped there
-    # but tiered DOSSIER, so it is observable before Hashcrack exists. The
-    # gating rule is per-KIND (by its revealing tool), never per-group — see
-    # test_locked_tools_remove_whole_categories_rather_than_leaving_holes.
-    assert groups == {"DOSSIER", "OSINT", "CREDENTIAL"}
+    # Back to {DOSSIER, OSINT} on 2026-09-15. CREDENTIAL briefly appeared here
+    # because UNSALTED_STORAGE was grouped there while tiered DOSSIER, so one
+    # chip in it was observable before Hashcrack existed. That kind has since
+    # moved to the DOSSIER group, where its tier already was, so every
+    # remaining CREDENTIAL kind needs Hashcrack and the group is correctly
+    # absent with only ghostscan unlocked.
+    #
+    # The RULE has not changed, and it is the thing to hold on to if this flips
+    # again: a group appears exactly when at least one of its kinds is
+    # observable, judged per KIND by that kind's own revealing tool, never per
+    # group. Both spellings of this assertion were correct under that rule at
+    # different times.
+    assert groups == {"DOSSIER", "OSINT"}
 
 
 def test_every_violation_has_a_worked_example():

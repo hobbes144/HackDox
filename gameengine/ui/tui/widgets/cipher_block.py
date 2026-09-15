@@ -111,7 +111,7 @@ class CipherBlockPanel(VerticalScroll):
     def load_candidate(self, candidate: Candidate, day: int = 1) -> None:
         self._block = tools_bridge.build_cipher_block(candidate, day)
         self._sel = 0
-        self._x = self._y = 0
+        self._x, self._y = self._block.start_cursor
         self._steps = 0
         self._applied = None
         self._attempts = 0
@@ -153,7 +153,8 @@ class CipherBlockPanel(VerticalScroll):
         if res.outcome == tools_bridge.CIPHER_WINDOW_ENGAGED:
             self._applied = res.chosen
             self._state = self.ENGAGED
-            self._x = self._y = 0
+            # Centre, not a corner — see CipherBlockData.start_cursor.
+            self._x, self._y = self._block.start_cursor
         elif res.outcome == tools_bridge.CIPHER_WINDOW_STALLED:
             self._applied = res.chosen
             self._state = self.STALLED
@@ -301,18 +302,41 @@ class CipherBlockPanel(VerticalScroll):
                        "somewhere inside it[/]")
         return out
 
-    def _budget_line(self) -> str:
-        """The step-budget readout: steps spent, and what the next ones cost.
+    _METER_WIDTH: ClassVar[int] = 24
 
-        Shown as a countdown rather than a running total because the number
-        the player can act on is "how many more presses before this starts
-        costing me", not "how many have I used".
+    def _budget_line(self) -> str:
+        """The travelled-distance meter: how far you have walked, and what the
+        next steps cost.
+
+        A BAR rather than a bare number, because the question the player is
+        actually asking is "am I nearly out?", and a number answers that only
+        if they also remember the allowance. The bar fills across the free
+        steps and then keeps going in amber, so the moment it crosses is
+        visible without reading anything.
+
+        Note this deliberately measures DISTANCE TRAVELLED, not distance
+        remaining — the pad never tells the player how far the key is, and a
+        meter that emptied toward zero would be exactly that readout. This one
+        only reports what they have spent, which they already know.
         """
+        free = config.CIPHER_DIAL_FREE_STEPS
         left = tools_bridge.steps_until_charge(self._steps)
-        if self._steps < config.CIPHER_DIAL_FREE_STEPS:
-            return (f"[dim]{self._steps} steps  ·  {left} free before "
-                    f"{config.CIPHER_DIAL_OVERAGE_COST} ⏱ per "
+        filled = min(self._METER_WIDTH,
+                     round(self._steps / max(1, free) * self._METER_WIDTH))
+        if self._steps <= free:
+            bar = (f"[#00ffd5]{'█' * filled}[/]"
+                   f"[#2e3d4f]{'░' * (self._METER_WIDTH - filled)}[/]")
+            return (f"{bar}  [dim]{self._steps} travelled  ·  {left} free "
+                    f"before {config.CIPHER_DIAL_OVERAGE_COST} ⏱ per "
                     f"{config.CIPHER_DIAL_OVERAGE_BLOCK}[/]")
-        return (f"[#ff8c42]{self._steps} steps  ·  over budget — "
+        # Past the allowance the bar is full and the overage rides on top of
+        # it, so "how far over" stays legible instead of pinning silently.
+        over = self._steps - free
+        over_cells = min(self._METER_WIDTH,
+                         round(over / max(1, config.CIPHER_DIAL_OVERAGE_BLOCK
+                                          * 4) * self._METER_WIDTH))
+        bar = (f"[#ff8c42]{'█' * self._METER_WIDTH}[/]"
+               f"[#ff5470]{'▓' * over_cells}[/]")
+        return (f"{bar}  [#ff8c42]{self._steps} travelled  ·  {over} over — "
                 f"{config.CIPHER_DIAL_OVERAGE_COST} ⏱ every "
                 f"{config.CIPHER_DIAL_OVERAGE_BLOCK}, next in {left}[/]")

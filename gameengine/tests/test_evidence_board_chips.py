@@ -66,7 +66,7 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
         ("Identity Confirmation",
          ["Affiliation not stated", "Disposable email domain"]),
         ("Personal",
-         ["Hostile chat"]),
+         ["Hostile chat", "Unsalted / plaintext storage"]),
     ]),
     ("OSINT", [
         ("Association Confirmation",
@@ -78,12 +78,15 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
          ["Breach hit", "Email / GitHub mismatch",
           "Threat-forum handle match"]),
     ]),
+    # 2026-09-15: UNSALTED_STORAGE left CREDENTIAL for DOSSIER/Personal (its
+    # evidence is the plaintext on the dossier, and group now agrees with tier),
+    # and WEAK_CREDENTIAL moved Exposure -> Storage. The line is now "what the
+    # credential IS" vs "where it has already been".
     ("CREDENTIAL", [
         ("Credential Storage",
-         ["Weak password encryption", "Unsalted / plaintext storage"]),
+         ["Weak password encryption", "Weak credential"]),
         ("Credential Exposure",
-         ["Weak credential", "Leaked password",
-          "Cross-breach password reuse"]),
+         ["Leaked password", "Cross-breach password reuse"]),
     ]),
     ("FORENSICS", [
         ("Access Timing",
@@ -915,9 +918,27 @@ def test_down_moves_one_grid_row_and_keeps_the_column():
 
 
 def test_the_cursor_remembers_its_column_across_a_narrower_row():
-    """A 3/1/3 grid: stepping down through the single-button row and on must come
-    back to column 2, not drift left and stay there. Without a remembered column
-    the cursor silently walks to the left edge over a few presses."""
+    """Stepping down THROUGH narrower rows and out must restore the column,
+    not drift left and stay there.
+
+    GENERALISED 2026-09-15, twice, and the second pass found a better test.
+
+    It originally hunted for a row of exactly ONE chip between two wider rows,
+    which existed only because the Personal cluster happened to hold a single
+    kind. UNSALTED_STORAGE joined that cluster and the fixture stopped finding
+    its shape. The first rewrite looked for a single narrower row — and the
+    board's real shape is [2,2,3,3,3,2,2,2,2,3,3], which has no such row
+    either: the narrow region is a RUN of four.
+
+    A run is the better fixture anyway. The failure this guards against is
+    stated as "the cursor silently walks to the left edge over a few presses",
+    and only a run of narrow rows exercises "a few". A single narrow row can be
+    survived by remembering the last column; a run can only be survived by
+    remembering the column the cursor ORIGINALLY left.
+
+    Expressed entirely in terms of the widths it finds, so it stops being
+    hostage to how many kinds happen to sit in a cluster.
+    """
     async def run():
         _st, board, app = await _mounted((200, 55))
         async with app.run_test(size=(200, 55)) as pilot:
@@ -925,21 +946,51 @@ def test_the_cursor_remembers_its_column_across_a_narrower_row():
             board.focus()
             await pilot.pause(0.1)
             rows = board._grid
-            narrow = next(r for r in range(1, len(rows) - 1)
-                          if len(rows[r]) == 1 and len(rows[r - 1]) > 1
-                          and len(rows[r + 1]) > 1)
-            board._cursor = rows[narrow - 1][-1]
-            board._desired_col = len(rows[narrow - 1]) - 1
-            await pilot.press("down")           # onto the single-button row
-            await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (narrow, 0)
-            await pilot.press("down")           # and out the other side
+            widths = [len(r) for r in rows]
+
+            # A run of rows all narrower than the row above it, followed by a
+            # row wider than the run.
+            found = None
+            for start in range(1, len(rows)):
+                if widths[start] >= widths[start - 1] or widths[start - 1] < 2:
+                    continue
+                end = start
+                while end + 1 < len(rows) and widths[end + 1] <= widths[start]:
+                    end += 1
+                if end + 1 < len(rows) and widths[end + 1] > widths[start]:
+                    found = (start, end)
+                    break
+            assert found is not None, (
+                f"no run of narrower rows bounded by wider ones in {widths} — "
+                f"guard is inert")
+            start, end = found
+            narrow_w = max(widths[start:end + 1])
+
+            start_col = widths[start - 1] - 1
+            board._cursor = rows[start - 1][-1]
+            board._desired_col = start_col
+            assert start_col > narrow_w - 1, (
+                "the starting column is not actually past the narrow rows, so "
+                "nothing would be clamped — guard is inert")
+
+            # Down through every narrow row: each one clamps to its own width.
+            for r in range(start, end + 1):
+                await pilot.press("down")
+                await pilot.pause(0.05)
+                assert board._pos[board._cursor] == (r, widths[r] - 1), (
+                    f"row {r} did not clamp to its last column")
+
+            # ...and out the far side, where the original column must return.
+            await pilot.press("down")
             await pilot.pause(0.05)
             row, col = board._pos[board._cursor]
-            assert (row, col) == (narrow + 1,
-                                 min(board._desired_col,
-                                     len(rows[narrow + 1]) - 1))
-            assert col > 0, "the cursor drifted to the left edge and stayed"
+            assert row == end + 1
+            assert col == min(start_col, widths[end + 1] - 1), (
+                f"left column {start_col}, crossed {end - start + 1} narrow "
+                f"rows, came back to {col} — the remembered column was lost")
+            assert col > narrow_w - 1, (
+                "the cursor stayed clamped to the narrow rows' width instead of "
+                "restoring the column it came from")
     asyncio.run(run())
 
 

@@ -2496,12 +2496,35 @@ class CipherBlockData:
 
     @property
     def max_walk(self) -> int:
-        """Manhattan distance across the whole pad, corner to corner.
-
-        The worst case a DIRECT walk can cost, so it is also the number the
-        step budget has to stay clear of.
-        """
+        """Manhattan distance across the whole pad, corner to corner."""
         return self.align_span_x + self.align_span_y
+
+    @property
+    def start_cursor(self) -> tuple[int, int]:
+        """Where the pad cursor begins — the CENTRE, not a corner.
+
+        Centre rather than (0, 0) for two reasons, and the second is the one
+        that matters. It halves the worst-case direct walk, from the pad's full
+        diagonal to half of it, so the step budget has far more headroom for a
+        player who walks straight. And it removes a free bit of information: a
+        corner start means the first press is never ambiguous, because three of
+        the four directions are walls. From the middle, every direction is
+        live, and the player has to read the block to choose one.
+        """
+        return (self.align_span_x // 2, self.align_span_y // 2)
+
+    @property
+    def worst_direct_walk(self) -> int:
+        """Steps a player who walks STRAIGHT at the key could face, worst case.
+
+        Measured from `start_cursor`, so it tracks the centre start rather than
+        assuming a corner: the farthest square from the middle of the pad is a
+        corner, at roughly half the full diagonal. This is the number the free
+        step allowance has to clear — see test_a_direct_walk_is_always_free.
+        """
+        sx, sy = self.start_cursor
+        return (max(sx, self.align_span_x - sx)
+                + max(sy, self.align_span_y - sy))
 
     def error_at(self, x: int, y: int) -> int:
         """Manhattan distance from (x, y) to the true coordinate.

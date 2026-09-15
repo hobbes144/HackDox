@@ -35,6 +35,17 @@ from gameengine.core.models import Day, DiscrepancyKind, ToolName
 VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     # DOSSIER (no tool)
     ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
+    # UNSALTED_STORAGE moved CREDENTIAL -> DOSSIER (Nick, 2026-09-15). It was
+    # always DOSSIER-TIER — its evidence is the plaintext sitting on the
+    # dossier, readable on day 1 with no tool — but it was GROUPED under
+    # CREDENTIAL, which split the two apart and put the chip on a board tab the
+    # player could not yet see the evidence for. Group and tier now agree.
+    #
+    # The separation that split cost is gone too: since the same date an
+    # unsalted candidate no longer also carries WEAK_ENCRYPTION (there is no
+    # algorithm there to be weak), so nothing about this kind lives on the
+    # Hashcrack side any more.
+    ("DOSSIER",     DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
     ("DOSSIER",     DiscrepancyKind.AFFILIATION_NOT_STATED, "Affiliation not stated"),
     ("DOSSIER",     DiscrepancyKind.DISPOSABLE_EMAIL,       "Disposable email domain"),
 
@@ -79,7 +90,6 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     # gap that opens — a rules tab locked until day 3 documenting a kind
     # plantable on day 1 — is closed by build_creds_text's locked branch.
     ("CREDENTIAL",  DiscrepancyKind.WEAK_ENCRYPTION,        "Weak password encryption"),
-    ("CREDENTIAL",  DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
     ("CREDENTIAL",  DiscrepancyKind.LEAKED_PASSWORD,        "Leaked password"),
     ("CREDENTIAL",  DiscrepancyKind.WEAK_CREDENTIAL,        "Weak credential"),
     ("CREDENTIAL",  DiscrepancyKind.CROSS_BREACH_REUSE,     "Cross-breach password reuse"),
@@ -93,6 +103,18 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
 _SEVERITY: dict[DiscrepancyKind, str] = {
     kind: sev for kind, (_tool, sev) in candidate_gen._SEVERITY_REVEAL.items()
 }
+def _day_severity(kind: DiscrepancyKind, day: Day | None) -> str:
+    """`kind`'s severity as of `day` — see candidate_gen._SEVERITY_BY_DAY.
+
+    A couple of kinds escalate partway through the campaign (UNSALTED_STORAGE
+    is minor until Hashcrack arrives on day 3, major after). The rules page has
+    a Day in hand at every call site, so it can print the weight that actually
+    applies today rather than the endgame one. With no day it falls back to the
+    settled weight, which is never lower than the real answer.
+    """
+    return candidate_gen.severity_for(kind, day.number if day else None)
+
+
 _TOOL: dict[DiscrepancyKind, ToolName] = {
     kind: tool for kind, (tool, _sev) in candidate_gen._SEVERITY_REVEAL.items()
 }
@@ -224,8 +246,14 @@ VIOLATION_CLUSTERS: list[
     ("DOSSIER",    "dossier-identity", "Identity Confirmation", (
         DiscrepancyKind.AFFILIATION_NOT_STATED,
         DiscrepancyKind.DISPOSABLE_EMAIL)),
+    # "Personal" is the candidate's own conduct, as opposed to the identity
+    # claims in the cluster above: how they spoke to you, and how they kept
+    # their own credential. UNSALTED_STORAGE joined it 2026-09-15 with the
+    # group move — storing your password in the clear is a thing this person
+    # did, not a property of the site.
     ("DOSSIER",    "dossier-personal", "Personal", (
-        DiscrepancyKind.HOSTILE_CHAT,)),
+        DiscrepancyKind.HOSTILE_CHAT,
+        DiscrepancyKind.UNSALTED_STORAGE)),
     # OSINT / Ghostscan — the claim, the fabrication, the trace left elsewhere.
     ("OSINT",      "osint-association", "Association Confirmation", (
         DiscrepancyKind.MISSING_PUBLIC_PROFILE,
@@ -244,11 +272,20 @@ VIOLATION_CLUSTERS: list[
     # stored is a different question from WHETHER it has already been exposed,
     # and the player checks them at different moments — storage off the block's
     # header, exposure off the recovered plaintext.
+    # 2026-09-15: UNSALTED_STORAGE left for DOSSIER/Personal and
+    # WEAK_CREDENTIAL arrived from cred-exposure, leaving a clean 2/2 split.
+    #
+    # The line between them is now "what the credential IS" versus "where it
+    # has already been". A weak algorithm and a weak password are both
+    # properties of the artifact in front of you, readable off one cracked
+    # block; a leak and a reuse are facts about the outside world, and both
+    # need the breach corpus to establish. That also matches how they are
+    # found: the first pair comes out of the cipher block alone, the second
+    # pair is Hashcrack corroborated by Ghostscan.
     ("CREDENTIAL", "cred-storage", "Credential Storage", (
         DiscrepancyKind.WEAK_ENCRYPTION,
-        DiscrepancyKind.UNSALTED_STORAGE)),
+        DiscrepancyKind.WEAK_CREDENTIAL)),
     ("CREDENTIAL", "cred-exposure", "Credential Exposure", (
-        DiscrepancyKind.WEAK_CREDENTIAL,
         DiscrepancyKind.LEAKED_PASSWORD,
         DiscrepancyKind.CROSS_BREACH_REUSE)),
     # FORENSICS / Logwatch — when, where from, and the shape of the attack.
@@ -668,7 +705,7 @@ def violation_table(day: Day | None, group: str,
     rows = sorted(
         [(k, lbl) for g, k, lbl in VIOLATION_CATALOG
          if g == group and _tool_unlocked(_TOOL.get(k), unlocked_tools)],
-        key=lambda it: _SEV_RANK.get(_SEVERITY.get(it[0], "minor"), 0),
+        key=lambda it: _SEV_RANK.get(_day_severity(it[0], day), 0),
     )
     accent = GROUP_ACCENT.get(group, "#7dd3c0")
     out = [
@@ -677,7 +714,7 @@ def violation_table(day: Day | None, group: str,
         f"[#1c2733]{'─' * _W}[/]",
     ]
     for kind, _lbl in rows:
-        sev  = _SEVERITY.get(kind, "minor")
+        sev  = _day_severity(kind, day)
         scol = SEV_COLOR[sev]
         tool = _TOOL_LABEL.get(_TOOL.get(kind, ToolName.DOSSIER), "?")
         status, stcol = _rule_status(day, kind)
@@ -956,11 +993,27 @@ def build_dossier_text(day: Day | None) -> str:
         "  is worth opening, and what it costs to be wrong.",
         "",
         "  [#ff5470]⚠ UNSALTED[/]  the one exception, and the only credential",
-        "             violation visible without a tool. Storage has no salt at",
+        "             problem visible without a tool. Storage has no salt at",
         "             all, so the Password entry just IS the plaintext, printed",
-        "             in the clear. UNSALTED_STORAGE (major):",
+        "             in the clear — there is no hash, and nothing to crack.",
         "             e.g. [dim]monkey123  ⚠ UNSALTED[/]",
+        "",
+        # Every tag opens and closes on its own line: the rules page is
+        # validated per line (a malformed span is far easier to find when the
+        # failure names one line), so a [dim] that spans several lines is a
+        # markup error even though the joined text parses fine.
+        "             [dim]Because there is no algorithm involved, an unsalted[/]",
+        "             [dim]credential never also carries WEAK_ENCRYPTION — that[/]",
+        "             [dim]violation is about which algorithm was used, and this[/]",
+        "             [dim]one used none.[/]",
+        "",
+        (f"             [dim]UNSALTED_STORAGE files as a note until Day "
+         f"{config.TOOL_UNLOCK_DAY['hashcrack']}, when[/]"),
+        "             [dim]Hashcrack arrives and credential hygiene starts being[/]",
+        "             [dim]judged properly — from then it is a major violation.[/]",
     ]
+    lines.append("")
+    lines += violation_table(day, "DOSSIER")
 
     # ── The day's rule sheet (#49) ─────────────────────────────────────
     # Authored per day in day_NN.json and rendered VERBATIM — this is the
@@ -1073,12 +1126,12 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [#ff8c42]2. highlighted[/]  after base recon — candidate email marked ►",
         "  [#ff5470]3. confirmed[/]    after filter — red ▲ BREACH_HIT label",
         "",
-        "  [dim]The named databases always match the BREACH_MATCH rows in the",
-        "  Logwatch day log and the corpus the cipher block names when a",
-        "  credential resolves — all three surfaces agree. A single corpus is a",
-        "  BREACH_HIT (minor — they were exposed). TWO corpora holding the same",
-        "  recovered plaintext is CROSS_BREACH_REUSE (critical — being dumped is",
-        "  misfortune, still reusing it is a choice).[/]",
+        "  [dim]The named databases always match the BREACH_MATCH rows in the[/]",
+        "  [dim]Logwatch day log and the corpus the cipher block names when a[/]",
+        "  [dim]credential resolves — all three surfaces agree. A single corpus[/]",
+        "  [dim]is a BREACH_HIT (minor — they were exposed). TWO corpora holding[/]",
+        "  [dim]the same recovered plaintext is CROSS_BREACH_REUSE (critical —[/]",
+        "  [dim]being dumped is misfortune, still reusing it is a choice).[/]",
     ]
     return "\n".join(lines)
 
@@ -1089,32 +1142,34 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
 def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) -> str:
     hc = config.TOOL_COSTS["hashcrack"]
 
-    # The tab is LOCKED until Hashcrack is granted — but it must still document
-    # the credential kinds the player can already meet. UNSALTED_STORAGE is
-    # catalogued under CREDENTIAL while staying DOSSIER-tiered (see
-    # VIOLATION_CATALOG), so it is plantable from day 1, three days before this
-    # tab would otherwise open. A violation that is plantable and undocumented
-    # on the same day is unflaggable in practice: the player sees a chip on the
-    # evidence board with nowhere to look it up.
+    # The tab is LOCKED until Hashcrack is granted.
     #
-    # violation_table() already filters its rows by each kind's own revealing
-    # tool, so passing the locked tab through it prints exactly the subset that
-    # needs documenting, and nothing that would spoil the tool itself.
+    # It used to carry a violation table even while locked, because
+    # UNSALTED_STORAGE was catalogued under CREDENTIAL while staying
+    # DOSSIER-tiered — plantable from day 1, three days before this tab would
+    # open, and a violation that is plantable and undocumented on the same day
+    # is unflaggable in practice.
+    #
+    # That is no longer the case (2026-09-15): UNSALTED_STORAGE moved to the
+    # DOSSIER group and is documented on the DOSSIER tab, beside the evidence
+    # that actually reveals it. Every remaining CREDENTIAL kind needs Hashcrack,
+    # so a locked table here would be empty — and violation_table() would
+    # render a header over nothing, which tells the player something exists
+    # without saying what. The locked tab now says only that it is locked.
     if not _tool_unlocked(ToolName.HASHCRACK, unlocked_tools):
         lines = _band("HASHCRACK — CREDENTIAL ANALYSIS — LOCKED", "#3d6478")
         lines += [
             "",
             "  [#3d6478][b]⊘  Not authorized yet.[/][/]",
             (f"  [dim]Hashcrack unlocks on Day "
-             f"{config.TOOL_UNLOCK_DAY['hashcrack']}. Its cipher block, and the"),
-            "  violations only it can establish, open up the day the Overseer",
-            "  grants it.[/]",
+             f"{config.TOOL_UNLOCK_DAY['hashcrack']}. Its cipher block, and the[/]"),
+            "  [dim]violations only it can establish, open up the day the[/]",
+            "  [dim]Overseer grants it.[/]",
             "",
-            "  [dim]One credential violation needs no tool at all, and you can",
-            "  meet it today — it is listed below.[/]",
-            "",
+            "  [dim]Until then the one credential problem you can already[/]",
+            "  [dim]see — a password stored with no salt at all — is[/]",
+            "  [dim]documented on the DOSSIER tab, where its evidence is.[/]",
         ]
-        lines += violation_table(day, "CREDENTIAL", unlocked_tools=unlocked_tools)
         return "\n".join(lines)
 
     lines: list[str] = []

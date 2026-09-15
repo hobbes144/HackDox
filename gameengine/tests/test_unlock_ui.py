@@ -163,10 +163,13 @@ def test_evidence_boards_are_gated_by_unlocked_tools():
             for board in (scr.board, scr.board_c0, scr.board_gs,
                           scr.board_hc, scr.board_lw, scr.board_st):
                 groups = {g for g, _k, _l in board._items}
-                # CREDENTIAL is present from day 1: UNSALTED_STORAGE is
-                # grouped there while staying DOSSIER-tiered, so it is
-                # observable without Hashcrack. Gating is per-KIND.
-                assert groups == {"DOSSIER", "OSINT", "CREDENTIAL"}, groups
+                # {DOSSIER, OSINT} again as of 2026-09-15: UNSALTED_STORAGE
+                # moved to the DOSSIER group (its tier was always DOSSIER), so
+                # no CREDENTIAL kind is observable without Hashcrack any more.
+                # The gating rule itself is unchanged and is what matters here
+                # — per-KIND, by that kind's own revealing tool, never per
+                # group.
+                assert groups == {"DOSSIER", "OSINT"}, groups
 
             # Fully unlocked -> every group is reachable.
             state2 = GameState(seed=SEED)

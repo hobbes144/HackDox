@@ -12,7 +12,13 @@ import itertools
 import pytest
 
 from gameengine import config
-from gameengine.core import candidate_gen, persistence, rules_engine, scoring
+from gameengine.core import (
+    candidate_gen,
+    persistence,
+    rules_engine,
+    scoring,
+    tools_bridge,
+)
 from gameengine.core.candidate_gen import intro_day
 from gameengine.core.content_loader import load_day
 from gameengine.core.models import (
@@ -630,24 +636,43 @@ def test_every_upgrade_has_a_shop_category():
 
 def test_hard_band_biases_toward_tool_revealed_evidence():
     """#4 lever 3: late-game evidence should sit behind the ⏱ economy rather
-    than in plain sight on the dossier."""
+    than in plain sight on the dossier.
+
+    HOSTILE_CHAT is excluded from the count (2026-09-15, #77). It is tiered
+    DOSSIER but it is NOT free evidence: its ⚠ marker is gated behind the
+    20 HD$ Sentiment Scanner, so it already sits behind the economy this lever
+    is about, and the sort now exempts it. Counting it as dossier-tier here
+    would measure the opposite of what the lever means.
+
+    That exemption is not cosmetic — HOSTILE_CHAT is the only dossier-tier kind
+    in Bad Actor's eligible set, so sorting it last starved it to 0 of 3,200
+    hard-band Bad Actors while 3,200 of 3,200 still talked hostile. Widened to
+    measure the whole hard band rather than its first day, so a single day's
+    authored mix cannot flip the assertion.
+    """
     from gameengine.core.models import ToolName
 
-    def tool_share(day_number: int) -> float:
-        day = load_day(day_number)
+    def tool_share(day_numbers) -> float:
         dossier = tool = 0
-        for i in range(day.candidate_count):
-            for d in candidate_gen.generate(SEED, day, i).truth.discrepancies:
-                if d.revealed_by == ToolName.DOSSIER:
-                    dossier += 1
-                else:
-                    tool += 1
+        for day_number in day_numbers:
+            day = load_day(day_number)
+            for i in range(day.candidate_count):
+                for d in candidate_gen.generate(SEED, day, i).truth.discrepancies:
+                    if d.kind is DiscrepancyKind.HOSTILE_CHAT:
+                        continue          # paid evidence, see the docstring
+                    if d.revealed_by == ToolName.DOSSIER:
+                        dossier += 1
+                    else:
+                        tool += 1
         return tool / max(1, tool + dossier)
 
-    hard_day = next(d for d in range(1, config.CAMPAIGN_LAST_DAY + 1)
-                    if config.difficulty_band_for_day(d) == "hard")
-    assert load_day(hard_day).difficulty_band == "hard"
-    assert tool_share(hard_day) > tool_share(6)
+    hard_days = [d for d in range(1, config.CAMPAIGN_LAST_DAY + 1)
+                 if config.difficulty_band_for_day(d) == "hard"]
+    assert hard_days, "no hard-band day in the campaign"
+    assert load_day(hard_days[0]).difficulty_band == "hard"
+    easy_days = [d for d in range(1, config.CAMPAIGN_LAST_DAY + 1)
+                 if config.difficulty_band_for_day(d) != "hard"]
+    assert tool_share(hard_days) > tool_share(easy_days)
 
 
 def test_hard_band_keeps_the_quick_case_archetypes():
@@ -1852,28 +1877,54 @@ def test_every_generated_disposable_candidate_is_actually_detectable():
 
 
 def test_breach_hit_flag_credited_against_cross_breach_reuse():
-    """Batch-3, revisiting #61(d): CROSS_BREACH_REUSE and BREACH_HIT stay
-    distinct kinds in ground truth on purpose (Clumsy Cutie has no critical
-    budget slot to force BREACH_HIT alongside it — see the #61(d) comment on
-    tools_bridge.breach_dbs_for_candidate). But that function already makes a
-    CROSS_BREACH_REUSE carrier's email show up — labeled BREACH_HIT — in
-    Ghostscan's breach panel, so a player flagging BREACH_HIT there is
-    reading real on-screen evidence and should be credited, not scored a
-    false positive.
+    """Batch-3, revisiting #61(d): a player who flags BREACH_HIT on a
+    CROSS_BREACH_REUSE carrier is reading real on-screen evidence — the breach
+    panel labels that carrier's email BREACH_HIT whether or not the kind is in
+    ground truth — so scoring credits it rather than calling it a false
+    positive.
+
+    REBUILT 2026-09-15. This test used to SEARCH 500 seeds for a generated
+    CROSS_BREACH_REUSE carrier that lacked BREACH_HIT, and asserted it had
+    found one. After the companion-preference change (_COMPANION_KINDS), that
+    combination no longer occurs: BREACH_HIT accompanies every CROSS_BREACH_REUSE
+    carrier, up from 24% before. The search therefore fails its own
+    "test is inert" assertion.
+
+    The scoring rule it guards is NOT dead, and weakening the assertion to make
+    the search pass would have thrown away a real guard. The credit exists so
+    that a player who flags what the breach panel shows is never penalised for
+    it; the generator merely stopped being the thing that produces the
+    scenario. So the scenario is now CONSTRUCTED — take a real carrier and
+    remove BREACH_HIT from its ground truth — which tests the scoring rule at
+    the level it actually lives, instead of depending on a generator
+    distribution that was never the subject.
+
+    If the companion preference is ever removed, this keeps passing, which is
+    the point: the rule must hold either way.
     """
+    import dataclasses
+
     day = load_day(20)   # late enough for every tool/kind to be taught
-    reuse_only = None
+    carrier = None
     for seed in range(500):
         c = candidate_gen.generate(seed, day, 0)
-        kinds = {d.kind for d in c.truth.discrepancies}
-        if (DiscrepancyKind.CROSS_BREACH_REUSE in kinds
-                and DiscrepancyKind.BREACH_HIT not in kinds):
-            reuse_only = c
+        if any(d.kind is DiscrepancyKind.CROSS_BREACH_REUSE
+               for d in c.truth.discrepancies):
+            carrier = c
             break
-    assert reuse_only is not None, (
-        "no CROSS_BREACH_REUSE-without-BREACH_HIT candidate generated in "
-        "500 seeds — test is inert")
+    assert carrier is not None, (
+        "no CROSS_BREACH_REUSE candidate generated in 500 seeds — test is inert")
+
+    # Strip BREACH_HIT back out, reproducing the ground truth this rule was
+    # written for. Frozen dataclasses, so rebuild rather than mutate.
+    stripped = tuple(d for d in carrier.truth.discrepancies
+                     if d.kind is not DiscrepancyKind.BREACH_HIT)
+    reuse_only = dataclasses.replace(
+        carrier,
+        truth=dataclasses.replace(carrier.truth, discrepancies=stripped))
     actual = {d.kind for d in reuse_only.truth.discrepancies}
+    assert DiscrepancyKind.CROSS_BREACH_REUSE in actual
+    assert DiscrepancyKind.BREACH_HIT not in actual
 
     # A perfect board (every real kind flagged, nothing else) is the score
     # to match — flagging BREACH_HIT in place of, or alongside,
@@ -1881,10 +1932,10 @@ def test_breach_hit_flag_credited_against_cross_breach_reuse():
     perfect = scoring.board_accuracy_bonus(actual, reuse_only)
 
     with_breach_hit = scoring.board_accuracy_bonus(
-        (actual - {DiscrepancyKind.CROSS_BREACH_REUSE})
-        | {DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.BREACH_HIT},
-        reuse_only)
-    assert with_breach_hit == perfect
+        actual | {DiscrepancyKind.BREACH_HIT}, reuse_only)
+    assert with_breach_hit == perfect, (
+        "flagging BREACH_HIT alongside CROSS_BREACH_REUSE scored as a false "
+        "positive, but the breach panel shows that carrier's email as a hit")
 
     # Flagging ONLY BREACH_HIT in CROSS_BREACH_REUSE's place (having missed
     # or not run Hashcrack) is also a full match, not a false positive plus
@@ -1894,6 +1945,45 @@ def test_breach_hit_flag_credited_against_cross_breach_reuse():
         | {DiscrepancyKind.BREACH_HIT},
         reuse_only)
     assert breach_hit_in_place_of_reuse == perfect
+
+
+def test_breach_hit_now_accompanies_every_credential_corpus_kind():
+    """Ghostscan corroborates Hashcrack, on both corpus kinds (Nick, 2026-09-15).
+
+    LEAKED_PASSWORD has always implied BREACH_HIT (_IMPLIED_KINDS).
+    CROSS_BREACH_REUSE did not, and the gap was severe and lopsided: BREACH_HIT
+    was missing from 75.7% of its carriers, and EVERY one of those was a Sneaky
+    Bugger — not by design, but because BREACH_HIT was simply absent from that
+    archetype's eligible_kinds and so could never be selected there.
+
+    Fixed as a COMPANION PREFERENCE rather than an implication, deliberately:
+    #61(d) removed CROSS_BREACH_REUSE from _IMPLIED_KINDS so the two stay
+    distinct kinds in ground truth, and re-adding it there would have undone
+    that. The preference only reorders candidates for a slot the archetype
+    already owns, so BREACH_HIT still costs budget and can still lose to a
+    forced violation.
+    """
+    missing_reuse = missing_leaked = carriers = 0
+    for seed in range(40):
+        for day_number in range(3, config.CAMPAIGN_LAST_DAY + 1):
+            day = load_day(day_number)
+            for slot in range(day.candidate_count):
+                kinds = {d.kind for d in
+                         candidate_gen.generate(seed, day, slot).truth.discrepancies}
+                has_hit = DiscrepancyKind.BREACH_HIT in kinds
+                if DiscrepancyKind.CROSS_BREACH_REUSE in kinds:
+                    carriers += 1
+                    missing_reuse += not has_hit
+                if DiscrepancyKind.LEAKED_PASSWORD in kinds:
+                    carriers += 1
+                    missing_leaked += not has_hit
+    assert carriers, "guard is inert — no corpus-kind carrier examined"
+    assert missing_leaked == 0, (
+        f"{missing_leaked} LEAKED_PASSWORD carriers have no BREACH_HIT")
+    assert missing_reuse == 0, (
+        f"{missing_reuse} CROSS_BREACH_REUSE carriers have no BREACH_HIT — a "
+        f"password cannot recur across corpora unless the account is in them, "
+        f"so Ghostscan should corroborate what Hashcrack found")
 
 
 def test_domain_classes_are_disjoint():
@@ -2123,31 +2213,61 @@ def _credential_sweep(days=(5,), seeds=300):
                 yield candidate_gen.generate(seed, day, 0)
 
 
-def test_weak_encryption_is_exactly_the_md5_candidates():
-    """#59: WEAK_ENCRYPTION means "the weakest algorithm is used", so it must
-    track the hash exactly — every md5 candidate carries it, no other candidate
-    does.
+def test_weak_encryption_is_exactly_the_md5_candidates_that_are_salted():
+    """#59: WEAK_ENCRYPTION means "the weakest algorithm is used", so it tracks
+    the hash exactly — every md5 candidate carries it, no other candidate does.
 
     Both directions are real bugs that existed. Only 199 of 432 md5 candidates
     flagged it (so the dossier's WEAK ENC chip sometimes meant a violation and
     sometimes didn't), and 62 of 2700 carried it on a *sha256* hash — a
     weak-encryption violation on a medium-encryption credential, with nothing
     for the player to observe.
+
+    AMENDED 2026-09-15 with one exclusion: UNSALTED_STORAGE candidates.
+
+    They are stored in the clear, so there is no encryption there to be weak —
+    WEAK_ENCRYPTION on one is a category error, not a second finding. The
+    generator still builds them an md5 internally because the cipher block
+    needs something to key off, but the player is never shown it:
+    shared._password_markup returns early for unsalted candidates and prints
+    the plaintext with no hash at all. Before the exclusion the game told the
+    player two contradictory things about the same candidate — the dossier said
+    "no crypto here" while the Hashcrack header said "digest: 32 hex characters"
+    — and scored them on both violations. Measured at 1,792 of 2,192 unsalted
+    candidates (81.8%), and 100% of them on every day from 3 onward.
+
+    So the invariant is now three-way, and all three directions are asserted:
+    salted md5 always carries it, non-md5 never does, and unsalted never does.
     """
-    md5_without = sha_with = 0
-    checked = 0
+    md5_without = sha_with = unsalted_with = 0
+    checked = salted_md5 = unsalted = 0
     for c in _credential_sweep():
         checked += 1
         has = any(d.kind == DiscrepancyKind.WEAK_ENCRYPTION
                   for d in c.truth.discrepancies)
         algo = _algo(c.dossier.submitted_hash)
-        if algo == "md5" and not has:
-            md5_without += 1
+        is_unsalted = c.dossier.credential_unsalted
+        if is_unsalted:
+            unsalted += 1
+            if has:
+                unsalted_with += 1
+        elif algo == "md5":
+            salted_md5 += 1
+            if not has:
+                md5_without += 1
         if algo != "md5" and has:
             sha_with += 1
     assert checked
-    assert md5_without == 0, f"{md5_without} md5 candidates without WEAK_ENCRYPTION"
+    assert salted_md5, "guard is inert — no salted md5 candidate examined"
+    assert unsalted, "guard is inert — no unsalted candidate examined"
+    assert md5_without == 0, (
+        f"{md5_without} salted md5 candidates without WEAK_ENCRYPTION")
     assert sha_with == 0, f"{sha_with} non-md5 candidates carrying WEAK_ENCRYPTION"
+    assert unsalted_with == 0, (
+        f"{unsalted_with} UNSALTED_STORAGE candidates also carry "
+        f"WEAK_ENCRYPTION — they are stored in the clear, so there is no "
+        f"algorithm there to be weak, and the dossier explicitly shows them "
+        f"as plaintext with no hash")
 
 
 def test_weak_credential_is_reachable_on_medium_encryption():
@@ -5938,3 +6058,158 @@ def test_every_authored_day_file_matches_the_canonical_directive_copy():
         "if this fires, either the day files or "
         "_ALL_KNOWN_DIRECTIVES_BY_ID have drifted apart in id naming, and "
         "this test is silently checking nothing")
+
+
+# ─── Issue #73 — the dossier-tier evidence guard ─────────────────────────────
+#
+# EVIDENCE_TOKENS above covers the TOOL tiers: for each kind, a snippet that
+# must appear in that tool's filtered output when the kind is planted and must
+# not when it isn't. It deliberately skipped DOSSIER-tier kinds, on the
+# reasoning that their evidence is "structural" rather than tool output.
+#
+# That exemption is a blind spot, and two shipped bugs came through it:
+#
+#   #51  MISSING_PUBLIC_PROFILE was tiered DOSSIER with NO dossier evidence at
+#        all — claimed_github came from the archetype's handle style, not from
+#        whether the kind was planted. 300 of 600 day-1 candidates carried an
+#        unflaggable violation and nothing caught it until Nick found it in play.
+#   #57  DISPOSABLE_EMAIL's generator pool and detector list drifted apart, so
+#        37% of carriers were undetectable. Same blind spot, same silence.
+#
+# Both fixes repaired one kind and left the gap open. This closes it.
+#
+# The dossier-tier shape of "observable" is a PREDICATE over the free surfaces
+# — what the dossier panel renders, plus the chat script, which is the other
+# thing the player gets without spending ⏱. For each DOSSIER-tier kind the
+# predicate must be TRUE for every carrier and FALSE for every non-carrier.
+# One direction alone is not enough, and they catch different bugs:
+#
+#   true-for-every-carrier   → catches "planted but never rendered" (#51)
+#   false-for-every-other    → catches "rendered for everyone", which is a tell
+#                              that gives the violation away for free (#78's
+#                              image field was exactly this)
+#
+# A kind with no predicate that can satisfy both is unflaggable, which is the
+# thing being guarded against.
+
+def _free_surface(candidate) -> tuple[str, frozenset[str]]:
+    """Everything the player can read without spending ⏱.
+
+    The rendered dossier panel plus the chat script's tags. DossierPanel.render
+    is a pure function of the candidate, so this needs no Textual app.
+    """
+    from gameengine.ui.tui.widgets.dossier import DossierPanel
+
+    panel = DossierPanel()
+    panel.set_candidate(candidate)
+    return panel.render(), frozenset(ln.tag for ln in candidate.chat_script)
+
+
+# kind -> (name, predicate over (candidate, rendered dossier, chat tags))
+DOSSIER_EVIDENCE = {
+    # The chat panel is the surface; the evidence tag is what the Sentiment
+    # Scanner keys its ⚠ on. #77 split this from the archetype's "voice" tag
+    # precisely so this predicate can be true of carriers ONLY.
+    DiscrepancyKind.HOSTILE_CHAT: (
+        "a chat line carrying the hostile EVIDENCE tag",
+        lambda c, dossier, tags: "hostile" in tags),
+
+    # #56's sentinel. Named in the generator rather than inlined so that this
+    # sweep can recognise it.
+    DiscrepancyKind.AFFILIATION_NOT_STATED: (
+        f"the affiliation field reads {candidate_gen.NO_AFFILIATION_STATED!r}",
+        lambda c, dossier, tags:
+            c.claimed_affiliation == candidate_gen.NO_AFFILIATION_STATED),
+
+    # #57's exact failure, and the predicate has to read the DETECTOR's list to
+    # see it. tools_bridge._GS_SUSPICIOUS_DOMAINS is what the rules page renders
+    # as "DISPOSABLE" (rules_content.py:1044) — the list the player is actually
+    # told to match an email against. candidate_gen.DOMAINS_DISPOSABLE is what
+    # the generator draws from.
+    #
+    # An earlier draft of this predicate read the GENERATOR's list, and a revert
+    # check caught it: mutating that list moved both sides at once, so the drift
+    # #57 was about became invisible and the guard stayed green. Reading the
+    # detector is the whole point — if the two lists separate again, carriers
+    # stop satisfying this and the guard goes red, which is what #57 needed and
+    # did not have.
+    DiscrepancyKind.DISPOSABLE_EMAIL: (
+        "the email domain is on the list the rules page shows as disposable",
+        lambda c, dossier, tags:
+            c.email.rsplit("@", 1)[-1] in tools_bridge._GS_SUSPICIOUS_DOMAINS),
+
+    # Moved fully to DOSSIER 2026-09-15. The plaintext and the ⚠ marker are
+    # printed by _password_markup with no tool run at all.
+    DiscrepancyKind.UNSALTED_STORAGE: (
+        "the password field is printed in the clear and marked UNSALTED",
+        lambda c, dossier, tags: "UNSALTED" in dossier),
+}
+
+
+def _dossier_tier_kinds() -> set[DiscrepancyKind]:
+    from gameengine.core.models import ToolName
+    return {k for k, (tool, _sev) in candidate_gen._SEVERITY_REVEAL.items()
+            if tool is ToolName.DOSSIER}
+
+
+def test_every_dossier_tier_kind_has_a_declared_evidence_predicate():
+    """The completeness half — mirrors the tool-tier table's own check.
+
+    Without this, adding a DOSSIER-tier kind silently opts it out of the guard
+    below, which is exactly how #51 and #57 shipped. The point of the issue is
+    that a future kind is checked BY DEFAULT rather than by anyone remembering.
+    """
+    missing = sorted(k.name for k in _dossier_tier_kinds()
+                     if k not in DOSSIER_EVIDENCE)
+    assert not missing, (
+        f"DOSSIER-tier kinds with no declared dossier evidence: {missing}. "
+        f"Add a predicate to DOSSIER_EVIDENCE describing what the player can "
+        f"actually see, or the kind is scoreable but unflaggable.")
+    stale = sorted(k.name for k in DOSSIER_EVIDENCE
+                   if k not in _dossier_tier_kinds())
+    assert not stale, (
+        f"DOSSIER_EVIDENCE describes kinds that are no longer dossier-tier: "
+        f"{stale} — their evidence belongs in EVIDENCE_TOKENS now")
+
+
+def test_dossier_tier_evidence_is_present_for_carriers_and_absent_for_others():
+    """The blind spot itself, closed in both directions.
+
+    Sweeps real generated candidates rather than constructing them, because
+    both bugs this replaces were about the GENERATOR and the renderer
+    disagreeing — a constructed candidate would be built to satisfy whichever
+    of the two the test author had in mind.
+    """
+    seen: dict[DiscrepancyKind, list[int]] = {k: [0, 0, 0, 0]
+                                              for k in DOSSIER_EVIDENCE}
+    for seed in range(25):
+        for day_number in range(1, config.CAMPAIGN_LAST_DAY + 1):
+            day = load_day(day_number)
+            for slot in range(day.candidate_count):
+                c = candidate_gen.generate(seed, day, slot)
+                dossier, tags = _free_surface(c)
+                kinds = {d.kind for d in c.truth.discrepancies}
+                for kind, (_name, predicate) in DOSSIER_EVIDENCE.items():
+                    holds = bool(predicate(c, dossier, tags))
+                    carrier = kind in kinds
+                    # [carriers, carriers-without-evidence,
+                    #  non-carriers, non-carriers-with-evidence]
+                    if carrier:
+                        seen[kind][0] += 1
+                        seen[kind][1] += not holds
+                    else:
+                        seen[kind][2] += 1
+                        seen[kind][3] += holds
+
+    for kind, (name, _pred) in DOSSIER_EVIDENCE.items():
+        carriers, blind, others, leaks = seen[kind]
+        assert carriers, f"guard is inert — no {kind.name} carrier generated"
+        assert others, f"guard is inert — no {kind.name} non-carrier generated"
+        assert blind == 0, (
+            f"{blind} of {carriers} {kind.name} carriers show no dossier "
+            f"evidence ({name}) — those are scoreable but unflaggable, which "
+            f"is the #51 / #57 failure this guard exists for")
+        assert leaks == 0, (
+            f"{leaks} of {others} NON-carriers of {kind.name} show its "
+            f"evidence ({name}) — the marker is on everyone, so it identifies "
+            f"nothing and misleads a player who trusts it")

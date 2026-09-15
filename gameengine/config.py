@@ -511,20 +511,33 @@ CIPHER_ALIGN_FALLOFF: dict[str, float] = {
 # the whole pad and watch for sparkle" from a viable strategy into an
 # expensive one, which is what makes reading the block worth doing.
 #
-# Free steps must therefore stay comfortably above the worst-case DIRECT walk
-# — span_x + span_y on the largest pad, currently 36, since the cursor always
-# starts at (0, 0) — or a player who did everything right still gets billed
-# for the pad's size. See test_a_direct_walk_is_always_free.
+# Free steps must therefore stay comfortably above the worst-case DIRECT walk,
+# or a player who did everything right still gets billed for the pad's size.
+# Since the cursor starts at the CENTRE, that worst case is the distance from
+# the middle to the farthest corner — 18 on the largest pad, half what a corner
+# start would cost. See CipherBlockData.worst_direct_walk and
+# test_a_direct_walk_is_always_free, which measures it rather than assuming it.
 #
-# Calibrated against simulated players reading the block (sim_pad.py). At
-# 45/10: a clean or humanly-noisy coordinate descent pays NOTHING on 100% of
-# blocks (worst observed run, 36 steps, is the theoretical bound); a careless
-# hill-climber pays nothing 82% of the time and a mean of 0.3 ⏱; a player
-# wandering nearly at random pays a median of 1 ⏱ and a mean of 2.5. Against a
-# day-3 budget near 68 ⏱ that is a nudge, which is the intent — raise
-# OVERAGE_COST and it becomes a punishment for being bad at the minigame.
-CIPHER_DIAL_FREE_STEPS    = 45
-CIPHER_DIAL_OVERAGE_BLOCK = 10   # further steps per charge
+# RETUNED 45/10 -> 28/8 when the start moved to the centre. Halving the
+# distances halved the step counts, and at the old numbers the fee had gone
+# nearly inert: a careless player paid nothing 99% of the time, so the budget
+# was no longer pricing anything. 28/8 reproduces the profile the 45/10 pair
+# had from a corner, which is the balance that was actually wanted.
+#
+# Calibrated against simulated players reading the block (sim_pad.py):
+#
+#   clean coordinate descent   median  9 steps   pays nothing 100% of runs
+#   the same, with human slip  median  9 steps   pays nothing 100% of runs
+#   careless hill-climber      median 18 steps   pays nothing  77%, mean 0.3 ⏱
+#   near-random wandering      median 35 steps   pays nothing  40%, median 1 ⏱
+#
+# The clean profile's worst observed run is 18 steps against 28 free, so a
+# player who reads the block is never billed, with 55% headroom. Against a
+# day-3 budget near 68 ⏱ the wanderer's couple of ⏱ is a nudge, which is the
+# intent — raise OVERAGE_COST and it becomes a punishment for being bad at the
+# minigame rather than a reason to read.
+CIPHER_DIAL_FREE_STEPS    = 28
+CIPHER_DIAL_OVERAGE_BLOCK = 8    # further steps per charge
 CIPHER_DIAL_OVERAGE_COST  = 1    # ⏱ per block
 
 # ── Credential HUD hint box ───────────────────────────────────────────────
