@@ -191,6 +191,7 @@ HackDoxApp
 ### LogListPanel (`ScrollableContainer`, `widgets/log_list.py`)
 - Right column of the Logwatch page. States: `sealed` → `open` (L) → `filtered` (F)
 - `seal(entry_count, cost)` per candidate; `open(lines, target_rows, filtered)`; `jump(±1)`
+- The jumped-to row gets a `›` gutter cursor + highlight band (`cursor_row`)
 - Rows never wrap (`text-wrap: nowrap`, horizontal scroll) so a row index is its scroll offset
 
 ### DebugPanel

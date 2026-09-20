@@ -85,6 +85,16 @@ def test_base_run_unseals_the_log_and_jump_keys_walk_target_rows():
             # the target rows really are this candidate's account
             lines = _log_text(scr).split("\n")
             assert scr._candidate.email in lines[rows[0]]
+            # the jumped-to row is the one wearing the › cursor, and only it
+            cur = scr.log_lw.cursor_row
+            assert cur == rows[0]
+            assert lines[cur].startswith("›")
+            assert sum(1 for ln in lines if ln.startswith("›")) == 1
+            await pilot.press("right_square_bracket")
+            lines = _log_text(scr).split("\n")
+            if len(rows) > 1:
+                assert lines[rows[1]].startswith("›")
+                assert not lines[rows[0]].startswith("›")
             assert "▲" not in _log_text(scr), "base run must not label anything"
     asyncio.run(run())
 

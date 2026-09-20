@@ -578,8 +578,9 @@ Nick's redesign of the Logwatch page. Plan + status: project doc `claude/logwatc
 - **Generator changes (day logs re-rolled):** daytime activity fits the 08:00–18:00 shift (`LW_WORKDAY_WINDOW` now 08:05–11:30 + chain compression); a benign single typo AUTH_FAIL for ~30% of candidates; brute/stuffing attack IPs now random cities (fixed Frankfurt / unmapped 45.131 were tells). New dossier fields `claimed_role`, `claimed_location`.
 - Day 4 briefing summary + Overseer `day4_intro` reworded for the report-first flow; Rules tab 4 and the Logwatch reference panel rewritten.
 - **Tunables — all in `config.py`, "Logwatch Activity Report" block:** `LW_SHIFT_START/END/END_MARGIN` (shift), `LW_BURST_WINDOW` + `LW_BURST_ALERT` (attack alert), `LW_TRAVEL_REPORT_WINDOW`, `LW_HOSTILE_ORIGIN_FAILS`, `LW_BENIGN_TYPO_CHANCE/LEAD`, `LW_PROFILE_METRICS` (bar label, normal ceiling, scale), `LW_REPORT_WIDTH`, `LW_BAR_WIDTH(_COMPACT)`, `LW_TIMELINE_BIN_MIN(_COMPACT)`; keys `KEY_BINDINGS["log_prev_row"/"log_next_row"]`. The tier tests will tell you if a retune breaks the reveal table (e.g. an alert threshold above `LW_BRUTE_BURST_SIZE`'s minimum).
-- Known, not fixed: ~0.5% of generated days hold two candidates with the same email (same name rolled twice).
-- Tests: 584/584 (new `test_logwatch_report.py`, `test_logwatch_page.py`).
+- **Duplicate identities fixed:** ~0.5% of days used to hold two candidates with the same email/name (one account in the log for two people). `candidate_gen._resolve_identity` now rerolls a slot whose name or email an earlier slot took (salted `identity_retry_N` stream); ~1% of slots moved, every other identity is byte-identical. Pinned by `test_candidate_identities_are_unique_within_a_day`.
+- Auth log panel: the `[`/`]` jumped-to row now wears a `›` cursor and a highlight band (`LogListPanel._with_cursor`).
+- Tests: 587/587 (new `test_logwatch_report.py`, `test_logwatch_page.py`).
 
 ### 2026-08-16 (playtest fixes)
 Ad-hoc fixes from Nick's manual playtesting, applied directly (not a numbered backlog batch — see `planning_sprint.md`/`playtest_fixes.md` in project memory for the Batch 1 epic that shipped separately the same day). All 32 `gameengine/tests` pass throughout; changes also verified with 2000+-candidate generation sweeps across days 1-5.

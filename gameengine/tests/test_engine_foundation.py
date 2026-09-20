@@ -7107,3 +7107,42 @@ def test_dossier_tier_evidence_is_present_for_carriers_and_absent_for_others():
             f"{leaks} of {others} NON-carriers of {kind.name} show its "
             f"evidence ({name}) — the marker is on everyone, so it identifies "
             f"nothing and misleads a player who trusts it")
+
+
+def test_candidate_identities_are_unique_within_a_day():
+    """No two candidates on one day share an email or a full name (2026-09-19).
+
+    Slots used to roll identities independently; ~0.5% of days held two
+    candidates with the same email, so one account in the shared Logwatch log
+    belonged to two people. candidate_gen._resolve_identity rerolls a slot
+    whose name or email an earlier slot already took.
+    """
+    checked = 0
+    for day_n in range(1, 21):
+        day = load_day(day_n)
+        for seed in range(15):
+            cands = [candidate_gen.generate(seed, day, s)
+                     for s in range(day.candidate_count)]
+            emails = [c.email for c in cands]
+            names = [c.display_name for c in cands]
+            assert len(set(emails)) == len(emails), (day_n, seed, emails)
+            assert len(set(names)) == len(names), (day_n, seed, names)
+            checked += 1
+    assert checked
+
+
+def test_identity_dedupe_leaves_unique_slots_untouched():
+    """A slot with no collision keeps the identity its original roll gave it —
+    the fix may only move the ~1% of slots that actually collided."""
+    day = load_day(6)
+    moved = total = 0
+    for seed in range(30):
+        for s in range(day.candidate_count):
+            arch = candidate_gen._pick_archetype_for_slot(
+                seed, day.number, day.archetype_mix, s, day.forced_includes)
+            first, last, *_ = candidate_gen._draw_identity(
+                candidate_gen._seeded_rng(seed, day.number, s, "identity"), arch)
+            c = candidate_gen.generate(seed, day, s)
+            total += 1
+            moved += c.display_name != f"{first} {last}"
+    assert moved <= total * 0.05, f"{moved}/{total} identities moved"

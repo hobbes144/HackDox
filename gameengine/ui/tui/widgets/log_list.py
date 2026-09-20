@@ -33,6 +33,7 @@ class LogListPanel(ScrollableContainer):
         self._content: Static | None = None
         self._targets: list[int] = []
         self._cursor: int = -1
+        self._lines: list[str] = []
 
     def compose(self) -> ComposeResult:
         self._content = Static("[dim italic]Awaiting candidate...[/]",
@@ -45,6 +46,7 @@ class LogListPanel(ScrollableContainer):
         """Reset to the sealed placeholder for a new candidate."""
         self.state = self.SEALED
         self._targets, self._cursor = [], -1
+        self._lines = []
         self.border_subtitle = ""
         cost_s = f" — [#ffb454]{cost} ⏱[/]" if cost is not None else ""
         lines = [
@@ -68,7 +70,8 @@ class LogListPanel(ScrollableContainer):
         self.state = self.FILTERED if filtered else self.OPEN
         self._targets = list(target_rows)
         self._cursor = -1
-        self._set(list(lines))
+        self._lines = list(lines)
+        self._set(self._lines)
         self.border_subtitle = (f" {len(self._targets)} rows · \\[ ] jump "
                                 if self._targets else "")
         if self._targets:
@@ -82,6 +85,7 @@ class LogListPanel(ScrollableContainer):
             return False
         self._cursor = (self._cursor + delta) % len(self._targets)
         row = self._targets[self._cursor]
+        self._set(self._with_cursor(row))
         self.scroll_to(y=max(0, row - 3), animate=False)
         self.border_subtitle = (f" row {self._cursor + 1}/{len(self._targets)}"
                                 f" · \\[ ] jump ")
@@ -96,6 +100,25 @@ class LogListPanel(ScrollableContainer):
         return self._cursor
 
     # ── Internal ──────────────────────────────────────────────────────────
+
+    # The jumped-to row: a bright › in the gutter and a highlight band behind
+    # the row, so the eye lands on it after the scroll. Other target rows keep
+    # their plain yellow. (The HUD's ▸ mark, if any, is left in place.)
+    _CURSOR_BG = "#1d3a4f"
+
+    def _with_cursor(self, row: int) -> list[str]:
+        lines = list(self._lines)
+        if 0 <= row < len(lines):
+            ln = lines[row]
+            if ln.startswith("  "):
+                ln = "[b #00ffd5]›[/] " + ln[2:]
+            lines[row] = f"[on {self._CURSOR_BG}]{ln}[/]"
+        return lines
+
+    @property
+    def cursor_row(self) -> int | None:
+        """Line index of the highlighted row, or None before any jump."""
+        return self._targets[self._cursor] if self._cursor >= 0 else None
 
     def _set(self, lines: list[str]) -> None:
         if self._content is None:

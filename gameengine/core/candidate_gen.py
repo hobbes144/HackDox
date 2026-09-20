@@ -1568,16 +1568,14 @@ def _pick_archetype_for_slot(
     return bag[non_forced_pos % len(bag)]
 
 
-def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
-    """Generate the candidate for one slot of one day. Deterministic."""
-
-    archetype = _pick_archetype_for_slot(game_seed, day.number, day.archetype_mix,
-                                          slot_index, day.forced_includes)
+def _draw_identity(rng: random.Random, archetype: Archetype) -> tuple:
+    """One identity roll: (first, last, affiliation, purpose, handle, email,
+    photo_seed). The draw ORDER is the pre-2026-09-19 order inside generate(),
+    so a slot that needs no de-duplication gets exactly the identity it always
+    had (photo_seed included — it used to be the next draw on the same rng)."""
     spec = ARCHETYPE_SPECS[archetype]
-
-    rng_id = _seeded_rng(game_seed, day.number, slot_index, "identity")
-    first = rng_id.choice(FIRST_NAMES)
-    last = rng_id.choice(LAST_NAMES)
+    first = rng.choice(FIRST_NAMES)
+    last = rng.choice(LAST_NAMES)
     if spec.affiliation_pool == "legit":
         affiliation_pool = AFFILIATIONS_LEGIT
     elif spec.affiliation_pool == "elite":
@@ -1585,11 +1583,63 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     else:
         affiliation_pool = AFFILIATIONS_THIN
     purpose_pool = PURPOSES_LEGIT if spec.purpose_pool == "legit" else PURPOSES_SUSPECT
-    affiliation = rng_id.choice(affiliation_pool)
-    purpose = rng_id.choice(purpose_pool)
-    handle = _make_handle(rng_id, first, last, spec.handle_style)
+    affiliation = rng.choice(affiliation_pool)
+    purpose = rng.choice(purpose_pool)
+    handle = _make_handle(rng, first, last, spec.handle_style)
+    email = _make_email(rng, first, last, affiliation,
+                        disposable=archetype == Archetype.THE_INCOMPATIBLE)
+    photo_seed = rng.randint(0, 2**31 - 1)
+    return first, last, affiliation, purpose, handle, email, photo_seed
+
+
+# Retries before giving up on uniqueness (never reached in practice: the name
+# pool is large; a sweep over 20 days x 60 seeds needs at most 1 retry).
+_IDENTITY_RETRIES = 50
+
+
+def _resolve_identity(game_seed: int, day: Day, slot_index: int) -> tuple:
+    """This slot's identity, guaranteed unique within its day (2026-09-19).
+
+    Each slot used to roll its identity independently, so ~0.5% of days held
+    two candidates with the same email (same first name + last initial at the
+    same org, or the same full name) — one account in the Logwatch log
+    belonging to two people. Slots are now resolved in order: a slot whose
+    full name or email is already taken by an EARLIER slot rerolls from a
+    salted retry stream until it is unique. Earlier slots never depend on
+    later ones, so generation stays per-slot deterministic, and slots with no
+    collision keep their original identity byte-for-byte.
+
+    (The later DISPOSABLE_EMAIL override in generate() builds
+    first.last+NN@throwaway — unique whenever the name is.)
+    """
+    taken_names: set[tuple[str, str]] = set()
+    taken_emails: set[str] = set()
+    ident: tuple = ()
+    for s in range(slot_index + 1):
+        arch = _pick_archetype_for_slot(game_seed, day.number, day.archetype_mix,
+                                        s, day.forced_includes)
+        ident = _draw_identity(_seeded_rng(game_seed, day.number, s, "identity"), arch)
+        n = 0
+        while (((ident[0], ident[1]) in taken_names or ident[5] in taken_emails)
+               and n < _IDENTITY_RETRIES):
+            n += 1
+            ident = _draw_identity(
+                _seeded_rng(game_seed, day.number, s, f"identity_retry_{n}"), arch)
+        taken_names.add((ident[0], ident[1]))
+        taken_emails.add(ident[5])
+    return ident
+
+
+def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
+    """Generate the candidate for one slot of one day. Deterministic."""
+
+    archetype = _pick_archetype_for_slot(game_seed, day.number, day.archetype_mix,
+                                          slot_index, day.forced_includes)
+    spec = ARCHETYPE_SPECS[archetype]
+
     is_incompatible = archetype == Archetype.THE_INCOMPATIBLE
-    email = _make_email(rng_id, first, last, affiliation, disposable=is_incompatible)
+    first, last, affiliation, purpose, handle, email, photo_seed = \
+        _resolve_identity(game_seed, day, slot_index)
 
     rng_disc = _seeded_rng(game_seed, day.number, slot_index, "discrepancies")
     discrepancies = _roll_discrepancies(rng_disc, spec, day.number,
@@ -1858,7 +1908,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
         display_name=f"{first} {last}",
         handle=handle,
         email=email,
-        photo_seed=rng_id.randint(0, 2**31 - 1),
+        photo_seed=photo_seed,
         claimed_purpose=purpose,
         claimed_affiliation=affiliation,
         dossier=dossier,
