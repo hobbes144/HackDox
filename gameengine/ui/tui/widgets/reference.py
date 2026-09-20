@@ -6,13 +6,7 @@ from typing import ClassVar
 
 from textual.widgets import Static
 
-from gameengine.ui.tui.shared import (
-    _REF_CANDIDATE,
-    _REF_GHOSTSCAN,
-    _REF_HASHCRACK,
-    _REF_LOGWATCH,
-    _REF_STEGOTOOL,
-)
+from gameengine.ui.tui.shared import REFERENCE_BUILDERS
 
 
 class ReferencePanel(Static):
@@ -20,13 +14,10 @@ class ReferencePanel(Static):
 
     can_focus = True
 
-    _CONTENT: ClassVar[dict[str, str]] = {
-        "candidate": _REF_CANDIDATE,
-        "ghostscan": _REF_GHOSTSCAN,
-        "hashcrack": _REF_HASHCRACK,
-        "logwatch":  _REF_LOGWATCH,
-        "stegotool": _REF_STEGOTOOL,
-    }
+    # Built on demand from shared.REFERENCE_BUILDERS (2026-09-19) so the
+    # default text is derived from config/tools_bridge like the live panels
+    # IntakeScreen pushes via update_content().
+    _CONTENT: ClassVar[dict] = REFERENCE_BUILDERS
 
     def __init__(self, mode: str, widget_id: str) -> None:
         super().__init__(id=widget_id, classes="panel")
@@ -41,4 +32,5 @@ class ReferencePanel(Static):
     def render(self) -> str:
         if hasattr(self, "_override") and self._override is not None:
             return self._override
-        return self._CONTENT.get(self._mode, "")
+        builder = self._CONTENT.get(self._mode)
+        return builder() if builder else ""

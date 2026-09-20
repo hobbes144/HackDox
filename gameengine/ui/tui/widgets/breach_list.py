@@ -110,7 +110,7 @@ class BreachListPanel(VerticalScroll):
 
         for db_name, _year, count_label, entries in self._lists:
             # db_name is the canonical name, e.g. "Collection #1 (2019)" —
-            # identical to what appears in the Hashcrack BREACH_MATCH log entry.
+            # identical to the corpus the Hashcrack cipher readout names.
             bar = "─" * max(1, 32 - len(db_name))
             lines.append(f"\n[#3a4a58]── {db_name} {bar}[/]")
             lines.append(f"[#2e3d4f]   {count_label}[/]")

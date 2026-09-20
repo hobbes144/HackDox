@@ -21,6 +21,10 @@
   "forced_includes": {
     "5": "sneaky_bugger"
   },
+  "_comment_carrier": "2026-09-19: slot 5's image is pinned CONVENTIONAL. Its encrypted_payload would otherwise roll a carrier shape like any other scripted carrier, and on day 11 every shape rule disqualifies (rule_signal_relay_payload tightened back to a deny this morning after its day 8-10 advisory spell, rule_recursive_payload is fixed, and DW-06 does not soften hostile payloads until day 13) — so any glyph would turn this deliberately rules-clean candidate into a rules DENY and erase the divergence the day exists to show. See test_day_11_sneaky_bugger_diverges_between_the_two_tracks.",
+  "carrier_shape": {
+    "5": "conventional"
+  },
   "forced_violations": {
     "5": ["sock_puppet_accounts", "encrypted_payload", "typosquat_handle"]
   },

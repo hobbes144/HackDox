@@ -119,6 +119,18 @@ class DiscrepancyKind(str, Enum):
     # independent of whether the underlying password turns out to be strong)
     WEAK_ENCRYPTION         = "weak_encryption"        # password stored with a weak (MD5) algorithm
 
+    # ── Stegotool-revealed: carrier SHAPE (2026-09-19) ────────────────────
+    # A second, independent evidence axis on the stamp minigame. The payload
+    # colour kinds above (STEGO_PAYLOAD_PRESENT / ENCRYPTED_PAYLOAD /
+    # COVERT_C2_CHANNEL) say WHAT the hidden data is; these say what it is
+    # FOR, read off the geometric glyph the carrier cells form on the grid.
+    # A conventional carrier (clumped blocks / sequential runs) carries none
+    # of these. They are free riders — planted only alongside a colour kind,
+    # never budgeted (see candidate_gen._STEGO_SHAPE_KINDS).
+    SIGNAL_COMMS_PAYLOAD    = "signal_comms_payload"   # CROSS glyph: + or X, strokes intersect
+    RECURSIVE_PAYLOAD       = "recursive_payload"      # ENCLOSED glyph: hollow ring / diamond
+    HOSTILE_PAYLOAD         = "hostile_payload"        # SLASH glyph: 2-4 parallel, non-touching strokes
+
 
 class Performance(str, Enum):
     """Bucketed end-of-day rating used to select Overseer outro dialogue."""
@@ -223,6 +235,14 @@ class Dossier:
     # rendered on the dossier, only in the sweep and the filter. None when there
     # is no mismatch.
     actual_affiliation:    str | None = None
+    # 2026-09-19 Logwatch report overhaul - the profile header of the Activity
+    # Report. Both are CLAIMS, shown to the player: the job role the candidate
+    # gives (derived from their stated purpose) and the city they say they work
+    # from. The claimed internal IP resolves to this city on the report; any
+    # other login origin is compared against it. Defaults keep hand-built test
+    # dossiers valid.
+    claimed_role:          str = "Unlisted"
+    claimed_location:      str = "On-site"
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────
@@ -415,6 +435,12 @@ class Day:
     # though it was `fixed` right up until the day it left. Empty by default,
     # so every pre-#37 day (and every hand-built test Day) is unaffected.
     directive_removed_rule_ids: frozenset[str] = frozenset()
+    # 2026-09-19 — scripted slots whose stego carrier is PINNED conventional
+    # (day JSON: "carrier_shape": {"<slot>": "conventional"}). A scripted slot
+    # otherwise rolls a carrier shape like any other (or plants the shape kind
+    # its forced_violations names); pinning is how a script whose verdict
+    # depends on its exact kinds keeps a plain image. Empty by default.
+    conventional_carrier_slots: frozenset[int] = frozenset()
 
 
 # ─── Day results & game state ───────────────────────────────────────────────

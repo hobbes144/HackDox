@@ -71,12 +71,6 @@
       "severity": "disqualifying"
     },
     {
-      "id": "rule_unsalted_storage",
-      "text": "Deny any candidate submitting an unsalted / plaintext-equivalent credential — it cracks on the first attempt.",
-      "predicate": "has_discrepancy:unsalted_storage",
-      "severity": "disqualifying"
-    },
-    {
       "id": "rule_threat_forum",
       "text": "Deny any candidate whose handle matches a known threat / dark-web forum account.",
       "predicate": "has_discrepancy:threat_forum_match",
@@ -84,9 +78,9 @@
     },
     {
       "id": "rule_unsalted_storage",
-      "text": "Deny any candidate whose submitted credential is unsalted / plaintext-equivalent — the password is exposed outright on the dossier.",
+      "text": "Deny any candidate whose stored credential is unsalted / plaintext-equivalent once Hashcrack is live — until then it is a flag, not a deny.",
       "predicate": "has_discrepancy:unsalted_storage",
-      "severity": "disqualifying"
+      "severity": "weighted"
     },
     {
       "id": "rule_claimed_ip",
@@ -164,6 +158,25 @@
       "severity": "disqualifying"
     },
     {
+      "id": "rule_signal_relay_payload",
+      "text": "Deny any candidate whose submitted image carrier forms a crossing glyph — a signal-communications payload.",
+      "predicate": "has_discrepancy:signal_comms_payload",
+      "severity": "disqualifying",
+      "mutability": "overseer_variable"
+    },
+    {
+      "id": "rule_recursive_payload",
+      "text": "Deny any candidate whose submitted image carrier forms a closed, hollow glyph — a recursive payload.",
+      "predicate": "has_discrepancy:recursive_payload",
+      "severity": "disqualifying"
+    },
+    {
+      "id": "rule_hostile_payload",
+      "text": "Deny any candidate whose submitted image carrier forms parallel slash strokes — a hostile payload.",
+      "predicate": "has_discrepancy:hostile_payload",
+      "severity": "disqualifying"
+    },
+    {
       "id": "rule_burner_identity",
       "text": "Deny any candidate whose public accounts were all created within days of each other.",
       "predicate": "has_discrepancy:burner_identity",
@@ -180,12 +193,6 @@
       "text": "Flag (do not auto-deny) activity outside business hours — common enough to be innocent alone.",
       "predicate": "has_discrepancy:after_hours_access",
       "severity": "weighted"
-    },
-    {
-      "id": "rule_cross_breach_reuse",
-      "text": "Deny any candidate whose cracked password recurs across multiple breach corpora.",
-      "predicate": "has_discrepancy:cross_breach_reuse",
-      "severity": "disqualifying"
     }
   ],
   "quotas": {
@@ -206,6 +213,7 @@
     "affiliation_not_stated",
     "weak_encryption"
   ],
+  "_comment_script": "Slot 0 is the clean admit. 1 is the quick deny: a throwaway email, nothing else wrong. 2 is ordinary noise to wave through. 3 is the day's comparison: a Clumsy Cutie whose password sits on the dossier in the clear (UNSALTED — a FLAG until Hashcrack arrives on day 3) AND who signed up with a throwaway address (a DENY). The deny comes from the email, and the lesson is that the unsalted password is noted, not denied on, today. 2026-09-19: disposable_email was added to slot 3 when UNSALTED_STORAGE became a flag until Hashcrack — before that the slot was denied on the unsalted password alone, and with only flags left on it the rulebook said ADMIT to a DENY candidate on every seed. 4 is a second clean admit. 5 is the hostile deny.",
   "forced_includes": {
     "0": "obvious_admit",
     "1": "the_incompatible",
@@ -219,14 +227,15 @@
       "disposable_email"
     ],
     "3": [
-      "unsalted_storage"
+      "unsalted_storage",
+      "disposable_email"
     ],
     "5": [
       "hostile_chat"
     ]
   },
   "rule_sheet": {
-    "summary": "Dossier only today. Deny a throwaway email address, a stored password you can read, or anyone who threatens the service. Everything else is an admit.",
+    "summary": "Dossier only today. Deny a throwaway email address or anyone who threatens the service. Flag a stored password you can read — note it, but it isn't a deny on its own yet. Everything else is an admit.",
     "approved": {
       "domains": [],
       "affiliations": [
@@ -247,7 +256,7 @@
     "notes": [
       "A blank affiliation is an omission, not a lie — flag it, don't deny on it.",
       "MD5 on the strength chip is poor hygiene, not proof of anything. Flag.",
-      "UNSALTED is different: the password is printed in the clear. That is a deny."
+      "UNSALTED is different: the password is printed in the clear. Flag it for now — once Hashcrack is live, it is a deny."
     ]
   }
 }

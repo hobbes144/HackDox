@@ -25,9 +25,10 @@
     "3": "sneaky_bugger",
     "7": "white_hat"
   },
+  "_comment_carrier": "2026-09-19: slot 7 (the White Hat) also forces signal_comms_payload — the CROSS glyph, riding on its forced encrypted_payload carrier (a crimson cross): the one message it can send past the rulebook, a lone crusader reaching out. This is the White Hat's only appearance, so it is the only way the shape axis is ever visible on it. rule_signal_relay_payload is a deny on day 12, which only adds to a rules DENY the White Hat already had from low_and_slow + burner_identity — the verdict and its divergence are unchanged (test_day_12_white_hat_diverges_with_opposite_polarity_from_day_11). Slot 3's decoy is unpinned and rolls a shape like any other carrier.",
   "forced_violations": {
     "3": ["low_and_slow"],
-    "7": ["low_and_slow", "encrypted_payload", "burner_identity"]
+    "7": ["low_and_slow", "encrypted_payload", "burner_identity", "signal_comms_payload"]
   },
 
   "added_rules": [

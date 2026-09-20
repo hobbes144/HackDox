@@ -61,23 +61,63 @@ _BOARD_HOME_GROUP: dict[str, str] = {
     "evidence-st": "STEGO",
 }
 
-# Reference data shown on the candidate page and tool sidebars
-_REF_CANDIDATE = """[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
+# ─── Reference panels (2026-09-19: derived, not typed) ─────────────────────
+#
+# Every number, key, colour and signature name on these panels is read from
+# its single source at render time: costs from tools_bridge.tool_cost() /
+# config (upgrade- and inflation-aware when a GameState is passed), keys from
+# config.KEY_BINDINGS, forum tiers from tools_bridge, cipher tiers from
+# tools_bridge._CIPHER_TIER_META, stamp signatures from _STAMP_KIND_META and
+# carrier glyphs from _STAMP_SHAPE_META. The panels used to be string literals
+# and had drifted: the Stegotool one advertised a 1 ⏱ stamp and a 2 ⏱ filter
+# (real: 5 and 10) and had its AMBER/VIOLET texture lines swapped.
+#
+# `state` is optional so the module-level _REF_* defaults (day 1, no
+# upgrades) still exist for anything that imports them; IntakeScreen rebuilds
+# each panel with the live GameState on every candidate load.
 
-[#00ff9f]admit[/]  [dim]or[/] [#00ff9f]a[/]
+
+def _key(name: str) -> str:
+    return config.KEY_BINDINGS[name]
+
+
+def _base_cost(tool: str, state=None) -> int:
+    if state is None:
+        return config.DAY_TOOL_COST(tool, 1)
+    return tools_bridge.tool_cost(state, tool)
+
+
+def _stego_filter_cost(state=None) -> int:
+    """Mirrors IntakeScreen._activate_stego_filter's own arithmetic."""
+    cost = config.STEGO_FILTER_COST
+    if state is not None and \
+            config.UPGRADE_TOOLCOST_STEGOTOOL in getattr(state, "upgrades", ()):
+        cost = max(1, cost - config.TOOLCOST_REDUCTION)
+    return cost
+
+
+def _verdict_footer() -> str:
+    return ("[dim]── verdict ─────────────────────────[/]\n"
+            f"[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]")
+
+
+def build_ref_candidate(state=None) -> str:
+    return f"""[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
+
+[#00ff9f]admit[/]  [dim]or[/] [#00ff9f]{_key('admit')}[/]
   approve this candidate's access
 
-[#ff5470]deny[/]  [dim]or[/] [#ff5470]d[/]
+[#ff5470]deny[/]  [dim]or[/] [#ff5470]{_key('deny')}[/]
   reject this candidate's access
 
-[#7dd3c0]next[/]  [dim]or[/] [#7dd3c0]n[/]
+[#7dd3c0]next[/]  [dim]or[/] [#7dd3c0]{_key('next_candidate')}[/]
   move to next candidate
 
 [dim]── tools ───────────────────────────[/]
-[#00ff9f]recon[/]   run ghostscan  [dim](page 2)[/]
-[#00ff9f]crack[/]   run hashcrack  [dim](page 3)[/]
-[#00ff9f]analyze[/] run logwatch   [dim](page 4)[/]
-[#00ff9f]extract[/] stego stamp mode [dim](page 5)[/]
+[#00ff9f]recon[/]   run ghostscan  [dim](page {_key('page_ghostscan')} · {_base_cost('ghostscan', state)} ⏱)[/]
+[#00ff9f]crack[/]   run hashcrack  [dim](page {_key('page_hashcrack')} · {_base_cost('hashcrack', state)} ⏱)[/]
+[#00ff9f]analyze[/] run logwatch   [dim](page {_key('page_logwatch')} · {_base_cost('logwatch', state)} ⏱)[/]
+[#00ff9f]extract[/] stego stamp mode [dim](page {_key('page_stegotool')} · {config.STEGO_STAMP_COST} ⏱/stamp)[/]
 
 [dim]── other ──────────────────────────[/]
 [#c084fc]reveal[/] spend a HackDox Credit —
@@ -86,41 +126,54 @@ _REF_CANDIDATE = """[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
 [#6b7785]help[/]   show command list
 [#6b7785]quit[/]   exit game"""
 
-_REF_GHOSTSCAN = """[#7dd3c0][b]COMMANDS — GHOSTSCAN[/][/]
 
-[#00ff9f]recon[/]  [dim]or[/] [#00ff9f]g[/]
+def build_ref_ghostscan(state=None) -> str:
+    crit = tools_bridge._GS_CRITICAL_FORUMS
+    adv = tools_bridge._GS_ADVISORY_FORUMS
+    half = lambda xs: (" · ".join(xs[:2]), " · ".join(xs[2:]))  # noqa: E731
+    c1, c2 = half(crit)
+    a1, a2 = half(adv)
+    return f"""[#7dd3c0][b]COMMANDS — GHOSTSCAN[/][/]
+
+[#00ff9f]recon[/]  [dim]or[/] [#00ff9f]{_key('tool_ghostscan')}[/]
   fixed platform sweep — same list
   every day · verify claimed org
-  [dim]cost: 5 ⏱[/]
+  [dim]cost: {_base_cost('ghostscan', state)} ⏱[/]
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
+[#c084fc]filter[/]  [dim]or[/] [#c084fc]{_key('filter_current')}[/]
   reveals threat forum entries +
   highlights commit email mismatch +
   explicit ▲ VIOLATION_TYPE labels
-  [dim]cost: +3 ⏱[/]
+  [dim]cost: +{config.FILTER_COSTS['ghostscan']} ⏱[/]
 
 [dim]── forum tiers ──────────────────────[/]
 [#ff5470]CRITICAL — immediate deny:[/]
-[dim]BreachForums · RaidForums[/]
-[dim]HackForums · XSS.is[/]
+[dim]{c1}[/]
+[dim]{c2}[/]
 [#ff8c42]ADVISORY — investigate further:[/]
-[dim]nulled.to · CrackingKing[/]
-[dim]Dread · CrackingPro[/]
+[dim]{a1}[/]
+[dim]{a2}[/]
 
-[dim]── verdict ─────────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+{_verdict_footer()}"""
 
-_REF_HASHCRACK = f"""[#7dd3c0][b]THE CIPHER BLOCK[/][/]
 
-[#c084fc]X[/]  [dim]or[/] [#c084fc]crack[/] [dim]/[/] [#c084fc]h[/]
+def build_ref_hashcrack(state=None) -> str:
+    tm = tools_bridge._CIPHER_TIER_META
+    weak_c, med_c, strong_c = tm["weak"][1], tm["medium"][1], tm["strong"][1]
+    sev = lambda k: _SEV_COLOR[candidate_gen.severity_for(k, None)]  # noqa: E731
+    wc, lp, cb = (DiscrepancyKind.WEAK_CREDENTIAL, DiscrepancyKind.LEAKED_PASSWORD,
+                  DiscrepancyKind.CROSS_BREACH_REUSE)
+    return f"""[#7dd3c0][b]THE CIPHER BLOCK[/][/]
+
+[#c084fc]{_key('decrypt_mode').upper()}[/]  [dim]or[/] [#c084fc]crack[/] [dim]/[/] [#c084fc]{_key('tool_hashcrack')}[/]
   open the window selector
 
 [dim]── 1. read the digest (free) ─────[/]
 [dim]The header states the digest
 shape before you spend anything.[/]
-[#ff5470]32 hex[/]   [dim]MD5     small pad[/]
-[#ffd93d]64 hex[/]   [dim]SHA-256 wide pad[/]
-[#00ff9f]$2b$[/]     [dim]bcrypt  DEAD END[/]
+[{weak_c}]32 hex[/]   [dim]{tm['weak'][2]:<7} small pad[/]
+[{med_c}]64 hex[/]   [dim]{tm['medium'][2]:<7} wide pad[/]
+[{strong_c}]$2b$[/]     [dim]{tm['strong'][2]:<7} DEAD END[/]
 
 [dim]bcrypt's window fits, engages,
 then stalls — key-stretched, no
@@ -128,7 +181,7 @@ alignment exists. Walking away
 costs nothing. Opening it to find
 out costs a full window.[/]
 
-[dim]── 2. pick the window (costs ⏱) ──[/]
+[dim]── 2. pick the window ({_base_cost('hashcrack', state)} ⏱) ─────[/]
 [#c084fc]←→[/] [dim]choose[/]  [#c084fc]Enter[/] [dim]apply[/]
 [dim]wrong window = no structure, and
 the ⏱ is gone. Read first.[/]
@@ -137,7 +190,7 @@ the ⏱ is gone. Read first.[/]
 [#c084fc]←→[/] [dim]X axis[/]   [#c084fc]↑↓[/] [dim]Y axis[/]
 [dim]far   [/] [#6b7785]b99a8deb7c008949[/]
 [dim]close [/] [#c084fc]qN7!fWc$4kZt2[/][#6b7785]9q97![/]
-[dim]exact [/] [#c084fc]qN7!fWc$4kZt2·qN7![/]
+[dim]exact [/] [#c084fc]qN7!fWc$4kZt2{config.CIPHER_TILE_SEPARATOR}qN7![/]
 [dim]the password tiles across every
 row, so you can read it by
 consensus before you're exact.
@@ -151,64 +204,115 @@ always free, a random sweep isn't.[/]
 [dim]── then judge it ─────────────────[/]
 [#ff5470]weak[/]    [dim]password01 · dates · walks[/]
 [#00ff9f]strong[/]  [dim]long, mixed, symbol-laden[/]
-[dim]weak pw + weak algo[/] [#ffd93d]WEAK_CREDENTIAL[/]
-[dim]in a corpus[/]        [#ff8c42]LEAKED_PASSWORD[/]
-[dim]in TWO corpora[/]     [#ff5470]CROSS_BREACH_REUSE[/]
+[dim]weak pw + weak algo[/] [{sev(wc)}]{wc.name}[/]
+[dim]in a corpus[/]        [{sev(lp)}]{lp.name}[/]
+[dim]in TWO corpora[/]     [{sev(cb)}]{cb.name}[/]
 
-[dim]── verdict ─────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+{_verdict_footer()}"""
 
-_REF_LOGWATCH = """[#7dd3c0][b]COMMANDS — LOGWATCH[/][/]
 
-[#00ff9f]analyze[/]  [dim]or[/] [#00ff9f]logwatch[/]  [dim]or[/] [#00ff9f]l[/]
+def build_ref_logwatch(state=None) -> str:
+    return f"""[#7dd3c0][b]COMMANDS — LOGWATCH[/][/]
+
+[#00ff9f]analyze[/]  [dim]or[/] [#00ff9f]logwatch[/]  [dim]or[/] [#00ff9f]{_key('tool_logwatch')}[/]
   pattern detection — brute force,
   geo anomalies, after-hours events
-  [dim]cost: 4 ⏱[/]
+  [dim]cost: {_base_cost('logwatch', state)} ⏱[/]
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
+[#c084fc]filter[/]  [dim]or[/] [#c084fc]{_key('filter_current')}[/]
   geographic timeline overlay —
   explicit BRUTE_FORCE /
   IMPOSSIBLE_TRAVEL / INSIDER flag
-  [dim]cost: +3 ⏱[/]
+  [dim]cost: +{config.FILTER_COSTS['logwatch']} ⏱[/]
 
-[dim]── verdict ─────────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+{_verdict_footer()}"""
 
-_REF_STEGOTOOL = """[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]
 
-[#00ff9f]X[/]  [dim]or[/] [#00ff9f]extract[/] [dim]/[/] [#00ff9f]s[/]
-  enter stamp mode on the
-  image viewer (right panel)
+# The stego legend's "texture" column is the second half of each
+# _STAMP_KIND_META description ("<type> — <texture>"), and the payload name is
+# derived from the kind itself, so the legend can never list a signature the
+# engine does not render — or pair a colour with another colour's texture.
+_STEGO_PAYLOAD_NAMES = {
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT: "plaintext LSB payload",
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:     "encrypted payload",
+    DiscrepancyKind.COVERT_C2_CHANNEL:     "covert C2 channel",
+}
+_SHAPE_GLYPH_WORD = {
+    tools_bridge.StegoShape.CONVENTIONAL: "blocks",
+    tools_bridge.StegoShape.CROSS:        "cross",
+    tools_bridge.StegoShape.ENCLOSED:     "loop",
+    tools_bridge.StegoShape.SLASH:        "slashes",
+}
 
-[#00ff9f]arrows[/]  move the stamp
-[#00ff9f]Space[/]   stamp the region
-  [dim]cost: 1 ⏱ per stamp[/]
-[#00ff9f]Esc[/]     exit stamp mode
 
-[#00ff9f]F[/]  [dim]or[/] [#00ff9f]filter[/]  classify payload
-  [dim]cost: 2 ⏱ — names the payload
-  type in the stamp log. Without it,
-  read the stamp COLOUR yourself.[/]
+def build_ref_stegotool(state=None) -> str:
+    stamp = _key("stamp_mode").upper()
+    lines = [
+        "[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]",
+        "",
+        f"[#00ff9f]{stamp}[/]  [dim]or[/] [#00ff9f]extract[/] [dim]/[/] [#00ff9f]{_key('tool_stegotool')}[/]",
+        "  enter stamp mode on the",
+        "  image viewer (right panel)",
+        "",
+        "[#00ff9f]arrows[/]  move the stamp",
+        f"  [dim]{config.STEGO_STAMP_W}×{config.STEGO_STAMP_H} cells[/]",
+        "[#00ff9f]Space[/]   stamp the region",
+        f"  [dim]cost: {config.STEGO_STAMP_COST} ⏱ per stamp[/]",
+        "[#00ff9f]Esc[/]     exit stamp mode",
+        "",
+        f"[#00ff9f]{_key('filter_current').upper()}[/]  [dim]or[/] [#00ff9f]filter[/]  classify payload",
+        f"  [dim]cost: {_stego_filter_cost(state)} ⏱ — names the payload",
+        "  type and its glyph. Without it,",
+        "  read the COLOUR and SHAPE yourself.[/]",
+        "",
+        "[dim]── signature colours ───────────────[/]",
+    ]
+    for kind, (sig, col, desc) in tools_bridge._STAMP_KIND_META.items():
+        texture = desc.split(" — ", 1)[-1]
+        lines.append(f"[{col}]{sig:<8}[/] {_STEGO_PAYLOAD_NAMES[kind]}")
+        lines.append(f"  [dim]{texture}[/]")
+    lines += [
+        "[#00ff9f]GREEN[/]    region clean",
+        "",
+        "[dim]── carrier glyphs (operation) ──────[/]",
+        "[dim]the SHAPE the carrier cells trace is",
+        "a second finding, any colour:[/]",
+    ]
+    for shape, (geometry, _purpose, kind) in tools_bridge._STAMP_SHAPE_META.items():
+        verdict = ("nothing extra" if kind is None
+                   else f"→ {rules_content.label_for(kind)}")
+        lines.append(f"{_SHAPE_GLYPH_WORD[shape]:<8} [dim]{verdict}[/]")
+        lines.append(f"  [dim]{geometry.split(' — ')[0]}[/]")
+    cov = int(config.STEGO_STAMP_RESOLVE_COVERAGE * 100)
+    lines += [
+        "",
+        "[dim]── reading the image ───────────────[/]",
+        "[dim]nothing is marked for you — sweep",
+        "the grid and stamp where the noise",
+        f"looks wrong. reveal ~{cov}% of a zone",
+        "to resolve its ▲ signature.",
+        "the Spectral Lens upgrade tints a",
+        "rough area blue — close, not exact[/]",
+        "",
+        _verdict_footer(),
+    ]
+    return "\n".join(lines)
 
-[dim]── signature colors ────────────────[/]
-[#ff8c42]AMBER[/]    plaintext LSB payload
-[#c084fc]VIOLET[/]   covert C2 channel
-  [dim]sparse scatter, wide zone[/]
-  [dim]dense solid block[/]
-[#ff5470]CRIMSON[/]  encrypted payload
-  [dim]mid-density, structured[/]
-[#00ff9f]GREEN[/]    region clean
 
-[dim]── reading the image ───────────────[/]
-[dim]nothing is marked for you — sweep
-the grid and stamp where the noise
-looks wrong. reveal ~60% of a zone
-to resolve its ▲ signature.
-the Spectral Lens upgrade tints a
-rough area blue — close, not exact[/]
+REFERENCE_BUILDERS = {
+    "candidate": build_ref_candidate,
+    "ghostscan": build_ref_ghostscan,
+    "hashcrack": build_ref_hashcrack,
+    "logwatch":  build_ref_logwatch,
+    "stegotool": build_ref_stegotool,
+}
 
-[dim]── verdict ─────────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+# Day-1, no-upgrade renders — kept for importers of the old constants.
+_REF_CANDIDATE = build_ref_candidate()
+_REF_GHOSTSCAN = build_ref_ghostscan()
+_REF_HASHCRACK = build_ref_hashcrack()
+_REF_LOGWATCH  = build_ref_logwatch()
+_REF_STEGOTOOL = build_ref_stegotool()
 
 
 # ─── Command vocabulary ───────────────────────────────────────────────────────

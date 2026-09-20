@@ -19,8 +19,10 @@ Live-data implementations will land in v1.1 once the loop is proven.
 
 from __future__ import annotations
 
+import math as _math
 import random as _random
 from dataclasses import dataclass
+from enum import Enum
 
 from .. import config
 from .candidate_gen import _ELITE_ORG_HANDLE as _ORG_HANDLE
@@ -215,7 +217,7 @@ _GS_ADVISORY_FORUMS  = ["nulled.to", "CrackingKing", "Dread", "CrackingPro"]
 
 # ── Unified breach database table ─────────────────────────────────────────────
 # Single source of truth used by BOTH the GhostScan breach list panel AND the
-# Hashcrack shared log BREACH_MATCH entries.  canonical_name is what appears in
+# Hashcrack cipher block's corpus readout.  canonical_name is what appears in
 # both UIs so the player can cross-reference them visually.
 #
 #   (canonical_name,          year,   record_count_label)
@@ -985,7 +987,8 @@ def get_breach_lists_for_day(
 # minigame now (see "HASHCRACK — the cipher block" at the end of this module).
 # The two row types that carried real evidence and had nowhere else to live,
 # HASH_SUBMIT and BREACH_MATCH, were relocated into the Logwatch day log, which
-# is already an audit log; see the credential-rows block at the end of
+# is already an audit log (BREACH_MATCH was removed again 2026-09-19 — breach
+# hits belong to Ghostscan/Hashcrack only); see the credential-rows block at the end of
 # _lw_candidate_entries below. The AUTH_OK/AUTH_FAIL bursts did NOT move —
 # Logwatch has always generated its own for the kinds it owns, and merging
 # would have printed every burst twice.
@@ -1134,8 +1137,8 @@ class _LogEntry:
 
 def _lw_candidate_entries(candidate, rng: _random.Random,
                           day_number: int = 1) -> list[_LogEntry]:
-    # `day_number` is needed by breach_dbs_for_candidate() for the relocated
-    # BREACH_MATCH rows at the end of this function. Defaulted so the many
+    # `day_number` is kept for API stability (it used to seed the BREACH_MATCH
+    # rows, removed 2026-09-19). Defaulted so the many
     # existing two-argument callers (tests, mostly) keep working; the real day
     # is threaded through from generate_day_log().
     from .. import config as _cfg
@@ -1153,6 +1156,7 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
     account    = candidate.email
     entries: list[_LogEntry] = []
     t = rng.randint(*_cfg.LW_WORKDAY_WINDOW)
+    t_first_login = t
 
     # The candidate's real login origin. v2: when the claimed IP doesn't match,
     # their logins come from an external address (≠ the dossier claim), which
@@ -1174,7 +1178,9 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
 
     if has_brute:
         # Brute force: rapid AUTH_FAIL on the SAME account, then AUTH_OK.
-        ext_ip, ext_city = _lw_ext_ip(rng, "185.220.")
+        # 2026-09-19: random attack city (was always 185.220./Frankfurt, which
+        # made "Frankfurt origin" itself a brute-force tell on the report).
+        ext_ip, ext_city = _lw_ext_ip(rng)
         burst = rng.randint(*_cfg.LW_BRUTE_BURST_SIZE)
         for i in range(burst):
             entries.append(_LogEntry(
@@ -1195,7 +1201,9 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
     if has_stuffing:
         # v2 Credential stuffing: one external IP sprays AUTH_FAIL across many
         # *other* accounts (few tries each), then lands AUTH_OK on the candidate.
-        ext_ip, ext_city = _lw_ext_ip(rng, "45.131.")
+        # 2026-09-19: random attack city (was always the unmapped 45.131.
+        # prefix, i.e. an "unresolved" origin = stuffing tell on the report).
+        ext_ip, ext_city = _lw_ext_ip(rng)
         sprayed = rng.sample(_LW_NOISE_USERS,
                               min(_cfg.LW_STUFFING_SPRAY_SIZE, len(_LW_NOISE_USERS)))
         for i, fake_user in enumerate(sprayed):
@@ -1307,25 +1315,55 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
             ))
             t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
 
-    # ── Credential rows, relocated from the Hashcrack audit log ───────────
+    # ── Keep the working day inside the shift (2026-09-19) ────────────────
+    # The Activity Report counts off-hours activity against the standard
+    # shift, so everything on the daytime `t` chain (logins, attack bursts,
+    # travel, routine activity, the credential submission) must end before
+    # LW_SHIFT_END — otherwise an honest candidate reads as an after-hours
+    # worker. Long chains are compressed linearly toward the first login:
+    # order is preserved and gaps shrink proportionally (a 35-90 min travel
+    # gap stays impossible; second-scale bursts stay bursts). The deliberate
+    # off-hours blocks (insider / after-hours) and the scattered low-and-slow
+    # failures keep their own clocks.
+    _off_clock = {"insider", "after_hours", "low_and_slow"}
+    _day_rows = [e for e in entries if e.violation_kind not in _off_clock]
+    _latest = _cfg.LW_SHIFT_END - _cfg.LW_SHIFT_END_MARGIN
+    # The chain ends at the running clock `t` (>= the last daytime row); the
+    # HASH_SUBMIT row below lands one more gap after it, so reserve that gap.
+    _chain_end = max([t] + [e.ts_secs for e in _day_rows])
+    _gap_max = _cfg.LW_CLEAN_ACTIVITY_GAP[1]
+    if _chain_end + _gap_max > _latest and _chain_end > t_first_login:
+        _k = (_latest - _gap_max - t_first_login) / (_chain_end - t_first_login)
+        for e in _day_rows:
+            e.ts_secs = t_first_login + int((e.ts_secs - t_first_login) * _k)
+            e.ts_str = _lw_ts(e.ts_secs)
+        t = t_first_login + int((t - t_first_login) * _k)
+
+    # ── Honest noise: one fumbled password (2026-09-19) ───────────────────
+    # A single AUTH_FAIL from the user's own origin just before their first
+    # login, for any candidate at LW_BENIGN_TYPO_CHANCE. Without it, "has a
+    # failed login at all" was itself a tell on the Activity Report. Own RNG
+    # stream so no other row in this candidate's block moves.
+    _typo_rng = _random.Random(_stable_hash(candidate.id, "lw_benign_typo") & 0xFFFFFFFF)
+    if _typo_rng.random() < _cfg.LW_BENIGN_TYPO_CHANCE:
+        tt = max(0, t_first_login - _typo_rng.randint(8, 90))
+        entries.append(_LogEntry(
+            ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_FAIL",
+            ip=login_ip, account=account, extra="",
+            owner_id=candidate.id, is_suspicious=False,
+            violation_kind="benign_typo", city=None,
+        ))
+
+    # ── Credential submission row (HASH_SUBMIT) ───────────────────────────
     #
-    # 2026-09-14. The Hashcrack page used to carry its own shared credential
-    # log; the cipher-block rework took that page over, so the rows that had
-    # nowhere else to live moved to the tool that is already an audit log.
-    #
-    # ONLY these two row types moved, and the distinction matters. The old
-    # credential log also carried AUTH_FAIL/AUTH_OK bursts for brute-force and
-    # credential-stuffing candidates — but those kinds are LOGWATCH-owned, and
-    # `_lw_candidate_entries` has always generated its own bursts for them
-    # above. Merging the old log wholesale would have printed every burst
-    # twice. What genuinely had no home here is the credential ARTIFACT: the
-    # submission itself, and the corpora the account's email appears in.
-    #
-    # Both are deliberately is_suspicious=False. They are context the player
-    # reads, not findings Logwatch asserts — Logwatch does not own a single
-    # credential violation, and a flagged row here would be the #62 bug
-    # rebuilt: an artifact claiming a violation whose evidence board is on
-    # another page entirely.
+    # 2026-09-14 the cipher-block rework relocated two credential rows here
+    # from the old Hashcrack audit log. 2026-09-19 (Logwatch report overhaul,
+    # Nick): the BREACH_MATCH corpus rows were REMOVED again — breach hits are
+    # Ghostscan's (breach panel) and Hashcrack's (cipher readout) business,
+    # never Logwatch's. HASH_SUBMIT stays as neutral context: which credential
+    # was submitted and from which IP. Deliberately is_suspicious=False —
+    # Logwatch owns no credential violation (see
+    # test_no_tool_claims_a_violation_another_tool_owns).
     h_val = candidate.dossier.submitted_hash or ""
     if h_val:
         t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
@@ -1336,21 +1374,6 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
             owner_id=candidate.id, is_suspicious=False,
             violation_kind="credential_artifact", city=None,
         ))
-
-    if kinds & {DiscrepancyKind.LEAKED_PASSWORD,
-                DiscrepancyKind.CROSS_BREACH_REUSE}:
-        # Seeded from breach_dbs_for_candidate() — the same function the
-        # Ghostscan breach panel and the cipher block's resolve readout use, so
-        # all three surfaces name the same corpora. #61 fixed this once for the
-        # old log; keeping the single source is what stops it drifting again.
-        for i, corpus in enumerate(breach_dbs_for_candidate(candidate, day_number)):
-            t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
-            entries.append(_LogEntry(
-                ts_secs=t, ts_str=_lw_ts(t), event="BREACH_MATCH",
-                ip="--", account=account, extra=corpus,
-                owner_id=candidate.id, is_suspicious=False,
-                violation_kind="breach_corpus", city=None,
-            ))
 
     return entries
 
@@ -1444,16 +1467,10 @@ def _lw_render(
         "FILE_READ":    "#7dd3c0",
         "SUDO_EXEC":    "#ff8c42",
         "SESSION_END":  "#6b7785",
-        # 2026-09-14: relocated here from the Hashcrack page's own credential
-        # audit log, which the cipher-block rework removed. These two rows are
-        # CORROBORATION, never a verdict: HASH_SUBMIT says a credential was
-        # submitted and from where, BREACH_MATCH says this account's email
-        # turns up in a named corpus. Naming the violation behind either is
-        # Hashcrack's job, and the cipher block's resolve readout does it.
-        # Wording here must stay observational for exactly that reason — see
-        # test_no_tool_claims_a_violation_another_tool_owns.
+        # HASH_SUBMIT: neutral credential context (which credential was
+        # submitted, from where). Never a verdict — naming a credential
+        # violation is Hashcrack's job. (BREACH_MATCH removed 2026-09-19.)
         "HASH_SUBMIT":  "#c084fc",
-        "BREACH_MATCH": "#ff8c42",
     }
     # Batch-3 task #4e: `annotate` alone used to be enough to trigger
     # highlighting — meaning log_highlight ("Log Analyzer HUD") never
@@ -1933,6 +1950,18 @@ def _stego_filter_lines(candidate: Candidate) -> list[str]:
     else:
         lines.append("  [#00ff9f]v all channels clean -- no LSB anomaly detected[/]")
 
+    # 2026-09-19: the carrier-shape axis rides on the colour kind above. Kept
+    # in step here only so this legacy path never disagrees with the stamp
+    # minigame about what the image carries (unreachable from the UI).
+    shape_kind = next((d.kind for d in candidate.truth.discrepancies
+                       if d.kind in _SHAPE_BY_KIND), None)
+    if suspicious and shape_kind is not None:
+        geometry, purpose = _STAMP_SHAPE_META[_SHAPE_BY_KIND[shape_kind]][:2]
+        lines += [
+            f"  [#ff5470][b]^ {shape_kind.value.upper()}[/][/]",
+            f"  [#6b7785]glyph:[/]   {geometry} -- {purpose}",
+        ]
+
     return lines
 
 
@@ -1998,10 +2027,25 @@ def run_stegotool_filtered(candidate: Candidate, state) -> ToolResult:
 #                            purple= covert C2 channel (multi-channel)
 #   density → carrier fill   dense block vs sparse scatter inside the zone
 #   size    → zone area      how much of the image the payload occupies
+#   shape   → payload PURPOSE (2026-09-19) — the glyph the carrier cells form,
+#             independent of colour (any colour can carry any shape):
+#                            conventional = clumped blocks / sequential runs
+#                                           (no extra violation)
+#                            cross    = + or X, strokes intersect
+#                                           → SIGNAL_COMMS_PAYLOAD
+#                            enclosed = hollow ring / diamond
+#                                           → RECURSIVE_PAYLOAD
+#                            slash    = 2-4 parallel strokes, never touching
+#                                           → HOSTILE_PAYLOAD
+#             Shape needs no colour of its own: it emerges from WHICH cells
+#             are carrier, so the widget paints carriers exactly as before.
 #
 # Once cumulative revealed coverage of the zone crosses
 # config.STEGO_STAMP_RESOLVE_COVERAGE the signature "resolves" and the
 # explicit ▲ violation label prints — the stamp equivalent of the old filter.
+# Without the filter the resolve block describes the glyph's GEOMETRY only
+# ("strokes cross at a single point"); naming its purpose (▲ HOSTILE_PAYLOAD
+# etc.) is filter-tier, exactly like naming the colour.
 
 _STAMP_KIND_META: dict[DiscrepancyKind, tuple[str, str, str]] = {
     # kind → (signature name, hex color, carrier description)
@@ -2010,7 +2054,216 @@ _STAMP_KIND_META: dict[DiscrepancyKind, tuple[str, str, str]] = {
     DiscrepancyKind.ENCRYPTED_PAYLOAD: (
         "CRIMSON", "#ff5470", "high-entropy carrier — XOR/encrypted payload"),
     DiscrepancyKind.COVERT_C2_CHANNEL: (
-        "VIOLET", "#c084fc", "sparse multi-channel scatter — covert C2 beacon pattern"),
+        "VIOLET", "#c084fc", "covert C2 beacon carrier — sparse multi-channel scatter"),
+}
+# Every description above reads "<payload type> — <texture>". The texture half
+# describes the CONVENTIONAL block layout; when a carrier takes a special shape
+# (below) its cells trace a glyph instead, so stamp_signature_lines prints only
+# the type half rather than contradict the glyph line under it. (2026-09-19:
+# the C2 entry was reordered type-first to fit that convention.)
+
+
+class StegoShape(str, Enum):
+    """The glyph a stego carrier's cells form — the payload-PURPOSE axis."""
+    CONVENTIONAL = "conventional"   # clumped blocks — no extra violation
+    CROSS        = "cross"          # + or X          → SIGNAL_COMMS_PAYLOAD
+    ENCLOSED     = "enclosed"       # hollow loop     → RECURSIVE_PAYLOAD
+    SLASH        = "slash"          # parallel strokes → HOSTILE_PAYLOAD
+
+
+# Ground truth → glyph. candidate_gen owns WHETHER a carrier has a special
+# shape (it plants the kind); this table only says which glyph renders it, so
+# the image can never disagree with ground truth — build_stego_image derives
+# the shape from the planted kind and never rolls one of its own.
+_SHAPE_BY_KIND: dict[DiscrepancyKind, StegoShape] = {
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD: StegoShape.CROSS,
+    DiscrepancyKind.RECURSIVE_PAYLOAD:    StegoShape.ENCLOSED,
+    DiscrepancyKind.HOSTILE_PAYLOAD:      StegoShape.SLASH,
+}
+
+# shape → (neutral GEOMETRY description, PURPOSE — filter tier only, ▲ kind).
+# The geometry string is what the player is told without the filter: an
+# observation of what the revealed cells already show on the grid, never the
+# purpose. Conventional has no ▲ kind and must never print a ▲ shape label.
+_STAMP_SHAPE_META: dict[StegoShape, tuple[str, str, DiscrepancyKind | None]] = {
+    StegoShape.CONVENTIONAL: (
+        "irregular blocks / sequential runs — no single figure",
+        "conventional carrier, no operation signature", None),
+    StegoShape.CROSS: (
+        "strokes cross at a single point",
+        "signal communications — relays traffic through the image",
+        DiscrepancyKind.SIGNAL_COMMS_PAYLOAD),
+    StegoShape.ENCLOSED: (
+        "closed loop, hollow interior",
+        "recursive payload — unpacks and re-embeds itself",
+        DiscrepancyKind.RECURSIVE_PAYLOAD),
+    StegoShape.SLASH: (
+        "parallel strokes, no intersections",
+        "hostile payload — built to corrupt or lock what it lands on",
+        DiscrepancyKind.HOSTILE_PAYLOAD),
+}
+
+
+def _touches(a, b) -> bool:
+    """True if any cell of `a` equals, or is 8-adjacent to, a cell of `b`."""
+    for (x, y) in a:
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if (x + dx, y + dy) in b:
+                    return True
+    return False
+
+
+# ── Special-shape glyph generators (2026-09-19) ─────────────────────────────
+# Each takes the carrier rng and the zone's (W, H) and returns the glyph's
+# STROKES in zone-local coordinates. They share the constraints the block
+# generator's comments below record from real bugs:
+#   • the glyph spans the zone (top row to bottom row), so a systematic sweep
+#     meets carrier cells well before coverage resolves;
+#   • strokes are legible: vertical-ish strokes are 2 columns wide wherever the
+#     zone allows, because a terminal cell is ~twice as tall as it is wide —
+#     one row of horizontal stroke already reads as thick;
+#   • the glyph only ever occupies ZONE cells, and coverage is computed from
+#     zone cells, so the stamp economy is identical to a conventional carrier.
+
+
+def _glyph_cross(rng, W: int, H: int) -> tuple[frozenset, ...]:
+    """A '+' (vertical bar across a horizontal bar) or an 'X' of diagonals.
+    Either way the two strokes genuinely share cells — they cross."""
+    if rng.random() < 0.5:
+        tv = 2 if W >= 8 else 1
+        th = 2 if H >= 12 else 1
+        jx, jy = max(0, W // 6), max(0, H // 6)
+        # Crossing point jitters inside the middle third, never onto an edge,
+        # so the bars always extend on both sides of it.
+        cx = W // 2 - tv // 2 + rng.randint(-jx, jx)
+        cy = H // 2 - th // 2 + rng.randint(-jy, jy)
+        cx = max(1, min(W - tv - 1, cx))
+        cy = max(1, min(H - th - 1, cy))
+        vert = frozenset((x, y) for x in range(cx, cx + tv) for y in range(H))
+        horiz = frozenset((x, y) for x in range(W) for y in range(cy, cy + th))
+        return (vert, horiz)
+    # 'X' — corner-to-corner diagonals drawn as 4-connected staircases: each
+    # row's span reaches the next row's first column, so the stroke never
+    # breaks into diagonal-only dots.
+    main: set = set()
+    for y in range(H):
+        lo = (y * W) // H
+        hi = max(lo + 1, ((y + 1) * W) // H)
+        main.update((x, y) for x in range(lo, min(W, hi + 1)))
+    anti = frozenset((W - 1 - x, y) for (x, y) in main)
+    return (frozenset(main), anti)
+
+
+def _glyph_enclosed(rng, W: int, H: int) -> tuple[frozenset, ...]:
+    """A closed, HOLLOW outline — an ellipse ring or a diamond.
+
+    Built row by row from a half-width profile. Each row's wall runs from its
+    own boundary inward to at least its neighbours' boundaries, which makes the
+    outline 4-connected and puts every interior cell's four neighbours either
+    on the outline or inside it — so the interior is sealed by construction (a
+    4-way flood fill from outside the glyph cannot reach it) and genuinely
+    empty: no carrier cell is ever placed inside.
+    """
+    diamond = rng.random() >= 0.5
+    t = 2 if W >= 10 else 1
+    cx = rx = (W - 1) / 2.0
+    cy = (H - 1) / 2.0
+    ry = cy + 0.5
+
+    def half_width(y: int) -> float:
+        u = min(1.0, abs(y - cy) / ry)
+        return rx * (1.0 - u) if diamond else rx * _math.sqrt(max(0.0, 1.0 - u * u))
+
+    for _attempt in range(2):
+        xl = [int(round(cx - half_width(y))) for y in range(H)]
+        xr = [int(round(cx + half_width(y))) for y in range(H)]
+        cells: set = set()
+        interior = 0
+        for y in range(H):
+            if y in (0, H - 1):
+                cells.update((x, y) for x in range(xl[y], xr[y] + 1))
+                continue
+            e = max(xl[y] + t - 1, xl[y - 1], xl[y + 1])
+            s = min(xr[y] - t + 1, xr[y - 1], xr[y + 1])
+            cells.update((x, y) for x in range(xl[y], min(e, xr[y]) + 1))
+            cells.update((x, y) for x in range(max(s, xl[y]), xr[y] + 1))
+            interior += max(0, s - e - 1)
+        if interior:
+            return (frozenset(cells),)
+        t = 1   # too tight for a 2-wide wall — thin it and retry
+    # Last resort, tiny zones only: a hollow rectangle encloses something
+    # whenever W, H >= 3, which every stego zone is (see the zone sizing).
+    rect = {(x, y) for x in range(W) for y in (0, H - 1)}
+    rect |= {(x, y) for y in range(H) for x in (0, W - 1)}
+    return (frozenset(rect),)
+
+
+def _glyph_slash(rng, W: int, H: int) -> tuple[frozenset, ...]:
+    """2-4 PARALLEL strokes — horizontal, vertical or diagonal — that never
+    touch: every stroke is a translate of the first, and no two are even
+    diagonally adjacent (≥1 clear cell between them everywhere)."""
+    want = rng.randint(2, 4)
+    orient = rng.choice(("horizontal", "vertical", "diagonal"))
+
+    def spread(n: int, span: int, size: int, gap: int) -> list[int] | None:
+        last = span - size
+        if n < 2 or last < (n - 1) * (size + gap):
+            return None
+        return [round(i * last / (n - 1)) for i in range(n)]
+
+    def straight(kind: str) -> tuple[frozenset, ...] | None:
+        if kind == "horizontal":
+            for n in range(want, 1, -1):
+                pos = spread(n, H, 1, 1)
+                if pos:
+                    return tuple(frozenset((x, y) for x in range(W)) for y in pos)
+            return None
+        tv = 2 if W >= 8 else 1
+        for n in range(want, 1, -1):
+            pos = spread(n, W, tv, 2)
+            if pos:
+                return tuple(frozenset((x, y) for x in range(p, p + tv)
+                                       for y in range(H)) for p in pos)
+        return None
+
+    if orient == "diagonal":
+        lean = rng.choice((1, -1))                 # '\' or '/'
+        # Shallowest lean first (reads most clearly as a slash), steepening
+        # until at least two strokes fit side by side in the zone.
+        for travel in (2 * (H - 1), (3 * (H - 1)) // 2, H - 1):
+            if travel < 1:
+                continue
+            base: set = set()
+            for y in range(H):
+                lo = (y * travel) // H
+                hi = max(lo + 1, ((y + 1) * travel) // H)
+                for x in range(lo, hi + 1):
+                    base.add((x if lean > 0 else travel + 1 - x, y))
+            base_w = max(x for x, _ in base) + 1
+            off = 2
+            while _touches(base, {(x + off, y) for x, y in base}):
+                off += 1
+            for n in range(want, 1, -1):
+                total = base_w + (n - 1) * off
+                if total <= W:
+                    x0 = (W - total) // 2
+                    return tuple(
+                        frozenset((x + x0 + i * off, y) for x, y in base)
+                        for i in range(n))
+        orient = rng.choice(("horizontal", "vertical"))
+    other = "vertical" if orient == "horizontal" else "horizontal"
+    strokes = straight(orient) or straight(other)
+    if strokes is None:     # unreachable for real zones (H >= 3); belt and braces
+        strokes = (frozenset((x, 0) for x in range(W)),
+                   frozenset((x, H - 1) for x in range(W)))
+    return strokes
+
+
+_GLYPH_BUILDERS = {
+    StegoShape.CROSS:    _glyph_cross,
+    StegoShape.ENCLOSED: _glyph_enclosed,
+    StegoShape.SLASH:    _glyph_slash,
 }
 
 
@@ -2037,6 +2290,15 @@ class StegoImageData:
     # and the tint can never be a false positive. Declared last because it has a
     # default and every field above it does not.
     hint_region: tuple[int, int, int, int] | None = None
+    # 2026-09-19: the payload-PURPOSE axis. `shape` is None for a clean image
+    # (no carrier to have a shape); otherwise CONVENTIONAL unless ground truth
+    # carries one of the shape kinds, in which case `shape_kind` names it.
+    # `strokes` is the glyph's decomposition in grid coordinates (empty for
+    # conventional blocks) — it unions to exactly `carrier`, and exists so the
+    # geometry guards can check "strokes cross / never touch" directly.
+    shape: StegoShape | None = None
+    shape_kind: DiscrepancyKind | None = None
+    strokes: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -2060,6 +2322,15 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
     (per the Notion design note: 'higher resolution → more pixels'). All the
     size knobs live in config.STEGO_GRID_* so this can be rebalanced without
     touching code.
+
+    Carrier SHAPE (2026-09-19) is derived, never rolled here: a planted
+    SIGNAL_COMMS / RECURSIVE / HOSTILE_PAYLOAD kind selects a cross / enclosed
+    / slash glyph inside the SAME zone, and anything else keeps the
+    conventional clumped-block layout — generated by the unchanged block code
+    below, so a conventional carrier is cell-for-cell what it always was. The
+    zone, grid size, hint region and base image are identical whatever the
+    shape, so the stamp economy (coverage is counted over zone cells) cannot
+    move with it.
     """
     rng = _random.Random(int(candidate.id, 16) ^ 0xB10CA0DE)
 
@@ -2108,6 +2379,10 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         hz_h = rng.randint(max(3, rows // 4), rows // 2)
         zone = (hz_x, hz_y, hz_w, hz_h)
         carrier_rng = _random.Random(int(candidate.id, 16) ^ 0x57A3B007)
+        shape_kind = next((d.kind for d in candidate.truth.discrepancies
+                           if d.kind in _SHAPE_BY_KIND), None)
+        shape = (_SHAPE_BY_KIND[shape_kind] if shape_kind is not None
+                 else StegoShape.CONVENTIONAL)
         # #54: carrier cells are CLUMPED into segmented rectangles rather than
         # scattered by an independent per-cell coin flip. The old uniform fill
         # produced static: revealing a cell told the player nothing about where
@@ -2127,47 +2402,60 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         # padding with random spare cells, which silently destroyed the very
         # clumping it was meant to preserve.
         zone_area = hz_w * hz_h
-        # More segments for the sparse types - "segmented rectangles grouped
-        # together in strange ways" needs enough pieces to read as segmented.
-        if has_c2:
-            n_blocks, fill = carrier_rng.randint(5, 8), 0.30
-        elif has_enc:
-            n_blocks, fill = carrier_rng.randint(3, 5), 0.45
+        strokes: tuple = ()
+        if shape is not StegoShape.CONVENTIONAL:
+            # A special glyph replaces the blocks outright, inside the same
+            # zone. Strokes come back zone-local; translate them onto the grid.
+            local = _GLYPH_BUILDERS[shape](carrier_rng, hz_w, hz_h)
+            strokes = tuple(frozenset((hz_x + x, hz_y + y) for x, y in st)
+                            for st in local)
+        if strokes:
+            # The glyph IS the carrier — the block layout below is skipped, and
+            # it is the CONVENTIONAL layout from here on, byte-for-byte the
+            # pre-shape generator (same rng, same draws, same cells).
+            cells = set().union(*strokes)
         else:
-            n_blocks, fill = carrier_rng.randint(2, 3), 0.55
+            # More segments for the sparse types - "segmented rectangles grouped
+            # together in strange ways" needs enough pieces to read as segmented.
+            if has_c2:
+                n_blocks, fill = carrier_rng.randint(5, 8), 0.30
+            elif has_enc:
+                n_blocks, fill = carrier_rng.randint(3, 5), 0.45
+            else:
+                n_blocks, fill = carrier_rng.randint(2, 3), 0.55
 
-        # Cap each block well short of the zone in BOTH axes. Without this, a
-        # large per-block area with a short height clamps bw to the full zone
-        # width and the payload renders as flat bands spanning the image - which
-        # reads as a scanline artifact, not an embedded object.
-        max_bw = max(2, int(hz_w * 0.55))
-        max_bh = max(1, int(hz_h * 0.55))
-        per_block = max(2, int(zone_area * fill / max(1, n_blocks)))
+            # Cap each block well short of the zone in BOTH axes. Without this, a
+            # large per-block area with a short height clamps bw to the full zone
+            # width and the payload renders as flat bands spanning the image - which
+            # reads as a scanline artifact, not an embedded object.
+            max_bw = max(2, int(hz_w * 0.55))
+            max_bh = max(1, int(hz_h * 0.55))
+            per_block = max(2, int(zone_area * fill / max(1, n_blocks)))
 
-        cells: set[tuple[int, int]] = set()
-        # Start at the zone CENTRE, not a random corner. A systematic sweep
-        # crosses the middle of the zone, so anchoring here means the player
-        # reliably lands on a carrier cell and sees the signature colour before
-        # coverage resolves. Starting from a random edge could put every block in
-        # one corner and let a sweep resolve the zone having touched nothing -
-        # observed for STEGO_PAYLOAD_PRESENT with the first version of this.
-        wx = hz_x + hz_w // 2
-        wy = hz_y + hz_h // 2
-        for _ in range(n_blocks):
-            bh = max(1, min(max_bh, carrier_rng.randint(1, max_bh)))
-            bw = max(2, min(max_bw, per_block // bh + carrier_rng.randint(0, 2)))
-            bx = max(hz_x, min(hz_x + hz_w - bw, wx - bw // 2))
-            by = max(hz_y, min(hz_y + hz_h - bh, wy - bh // 2))
-            for yy in range(by, min(by + bh, hz_y + hz_h)):
-                for xx in range(bx, min(bx + bw, hz_x + hz_w)):
-                    cells.add((xx, yy))
-            # Walk to a random edge of the block just placed, so the next block
-            # abuts or overlaps it from an unpredictable side. Always advancing
-            # to the same corner marched the whole group into one edge.
-            wx = bx + carrier_rng.choice([-1, 0, bw // 2, bw, bw + 1])
-            wy = by + carrier_rng.choice([-1, 0, bh // 2, bh, bh + 1])
-            wx = max(hz_x, min(hz_x + hz_w - 1, wx))
-            wy = max(hz_y, min(hz_y + hz_h - 1, wy))
+            cells: set[tuple[int, int]] = set()
+            # Start at the zone CENTRE, not a random corner. A systematic sweep
+            # crosses the middle of the zone, so anchoring here means the player
+            # reliably lands on a carrier cell and sees the signature colour before
+            # coverage resolves. Starting from a random edge could put every block in
+            # one corner and let a sweep resolve the zone having touched nothing -
+            # observed for STEGO_PAYLOAD_PRESENT with the first version of this.
+            wx = hz_x + hz_w // 2
+            wy = hz_y + hz_h // 2
+            for _ in range(n_blocks):
+                bh = max(1, min(max_bh, carrier_rng.randint(1, max_bh)))
+                bw = max(2, min(max_bw, per_block // bh + carrier_rng.randint(0, 2)))
+                bx = max(hz_x, min(hz_x + hz_w - bw, wx - bw // 2))
+                by = max(hz_y, min(hz_y + hz_h - bh, wy - bh // 2))
+                for yy in range(by, min(by + bh, hz_y + hz_h)):
+                    for xx in range(bx, min(bx + bw, hz_x + hz_w)):
+                        cells.add((xx, yy))
+                # Walk to a random edge of the block just placed, so the next block
+                # abuts or overlaps it from an unpredictable side. Always advancing
+                # to the same corner marched the whole group into one edge.
+                wx = bx + carrier_rng.choice([-1, 0, bw // 2, bw, bw + 1])
+                wy = by + carrier_rng.choice([-1, 0, bh // 2, bh, bh + 1])
+                wx = max(hz_x, min(hz_x + hz_w - 1, wx))
+                wy = max(hz_y, min(hz_y + hz_h - 1, wy))
 
         carrier = frozenset(sorted(cells))
         # Report the density we actually produced, not the one we hoped for.
@@ -2182,6 +2470,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
                        min(rows - hy, hz_h + 2 * buf))
     else:
         zone, carrier, hint_region = None, frozenset(), None
+        shape, shape_kind, strokes = None, None, ()
 
     def _base_rgb(x: int, y: int) -> tuple[int, int, int]:
         fx = x / max(1, cols - 1)
@@ -2220,6 +2509,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         hint_region=hint_region,
         filename=img_file, width=width, height=height,
         file_kb=file_kb, img_type=img_type,
+        shape=shape, shape_kind=shape_kind, strokes=strokes,
     )
 
 
@@ -2283,6 +2573,12 @@ def stamp_log_lines(img: StegoImageData, res: StampResult,
     player sees that a carrier is present and its density, but must read the
     stamp's COLOUR on the image to judge the payload type themselves. With the
     filter active, the named signature (AMBER/CRIMSON/VIOLET) is printed.
+
+    Carrier SHAPE is deliberately absent from the per-stamp block, filter or
+    not: one 8×4 window cannot show a glyph, so any per-stamp shape claim
+    would be the tool reading ground truth rather than reporting what this
+    stamp uncovered. The glyph is read on the grid as reveals accumulate and
+    is described (or, with the filter, named) once, in stamp_signature_lines.
     """
     head = (f"[#7dd3c0][b]STAMP {stamp_no:02d}[/][/] "
             f"[dim]@ ({x:>2},{y:>2})  −{config.STEGO_STAMP_COST} ⏱[/]")
@@ -2327,7 +2623,14 @@ def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> lis
     Without the filter (`reveal_type=False`) the zone is confirmed as carrying
     a payload, but it is NOT named — the player must classify by the stamp
     colour. With the filter active, the explicit ▲ violation label prints
-    (the stamp-mechanic equivalent of the old filter tier)."""
+    (the stamp-mechanic equivalent of the old filter tier).
+
+    Carrier SHAPE (2026-09-19) follows the same two tiers. Unfiltered, a
+    `glyph:` line describes the figure's GEOMETRY neutrally — an observation
+    of what the revealed cells already show on the grid ("strokes cross at a
+    single point"), never its purpose. Filtered, a special shape also prints
+    its own ▲ label (▲ SIGNAL_COMMS_PAYLOAD etc.) beside the colour one. A
+    conventional carrier never prints a ▲ shape label at either tier."""
     if img.kind is None or img.zone is None:
         return []
     _sig, col, desc = _STAMP_KIND_META[img.kind]
@@ -2336,22 +2639,37 @@ def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> lis
     size_word = ("sprawling" if zw * zh >= img.cols * img.rows // 4
                  else "moderate" if zw * zh >= img.cols * img.rows // 8
                  else "compact")
+    shape = img.shape or StegoShape.CONVENTIONAL
+    geometry, purpose, shape_kind = _STAMP_SHAPE_META[shape]
+    if shape is not StegoShape.CONVENTIONAL:
+        desc = desc.split(" — ", 1)[0]   # type only; the glyph line has the layout
     if not reveal_type:
         return [
             "",
             "[#c8d4e1][b]▲ PAYLOAD ZONE MAPPED — carrier confirmed[/][/]",
             f"  [#6b7785]density:[/]  {dens}% fill",
             f"  [#6b7785]extent:[/]   {zw}×{zh} px zone ({size_word})",
+            f"  [#6b7785]glyph:[/]    {geometry}",
             "  [#6b7785]type:[/]     [dim]unclassified — inspect the stamp colour, or run filter (F) to classify[/]",
+            "  [#6b7785]purpose:[/]  [dim]unclassified — read the glyph's shape, or run filter (F) to name it[/]",
         ]
-    return [
+    lines = [
         "",
         f"[{col}][b]▲ {img.kind.value.upper()} — SIGNATURE RESOLVED[/][/]",
         f"  [#6b7785]carrier:[/]  {desc}",
         f"  [#6b7785]density:[/]  {dens}% fill",
         f"  [#6b7785]extent:[/]   {zw}×{zh} px zone ({size_word})",
-        "  [dim]flag it on the Evidence Board (Tab)[/]",
+        f"  [#6b7785]glyph:[/]    {geometry}",
     ]
+    if shape_kind is not None and img.shape_kind is shape_kind:
+        lines += [
+            f"[{col}][b]▲ {shape_kind.value.upper()} — GLYPH RESOLVED[/][/]",
+            f"  [#6b7785]purpose:[/]  {purpose}",
+        ]
+    else:
+        lines.append(f"  [#6b7785]purpose:[/]  [dim]{purpose}[/]")
+    lines.append("  [dim]flag it on the Evidence Board (Tab)[/]")
+    return lines
 
 
 def get_stego_stats(candidate: Candidate,
@@ -2926,8 +3244,8 @@ def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
     This is what makes Hashcrack self-sufficient for LEAKED_PASSWORD and
     CROSS_BREACH_REUSE: the corpus is named HERE, by the tool that owns those
     kinds, so neither depends on a Logwatch page that does not exist until a
-    day later. Logwatch's relocated BREACH_MATCH rows corroborate this readout;
-    they are not a substitute for it.
+    day later. (Logwatch no longer carries corpus rows at all since
+    2026-09-19; the Ghostscan breach panel is the only corroborating view.)
 
     Which violations get NAMED here, and which the player calls themselves, is
     the line this whole rework turns on:

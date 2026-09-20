@@ -209,6 +209,14 @@ def _lab_day(day_number: int, archetypes: list[str], violations: list[str],
     for arch in forced.values():
         mix[arch] = mix.get(arch, 0) + 1
     allowed = tuple(DiscrepancyKind(v) for v in violations)
+    # A carrier-shape kind only ever rides on a stego COLOUR kind (see
+    # candidate_gen._STEGO_SHAPE_KINDS), so `-v hostile_payload` alone would
+    # whitelist away the very carrier it needs and never match a seed. Let the
+    # colour kinds through too; the seed search still insists on the shape.
+    if (set(allowed) & candidate_gen._STEGO_SHAPE_KINDS
+            and not set(allowed) & candidate_gen._STEGO_ARTIFACT_KINDS):
+        allowed += tuple(sorted(candidate_gen._STEGO_ARTIFACT_KINDS,
+                                key=lambda k: k.value))
     return replace(day, number=day_number, candidate_count=count,
                    forced_includes=forced, archetype_mix=mix,
                    allowed_violations=allowed)

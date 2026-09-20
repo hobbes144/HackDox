@@ -117,6 +117,12 @@ Slot 1's candidate now *always* carries that violation, every seed. Three ways t
 
 It fails rather than dropping silently on purpose: a dropped script still plays fine, it just stops teaching the thing the day exists for.
 
+**Carrier shapes on scripted slots (2026-09-19, round 2).** A scripted slot whose kinds include a stego colour kind rolls a carrier shape like any other carrier — unless you pin it or author it:
+
+- **Author a shape** by naming its kind (`signal_comms_payload` / `recursive_payload` / `hostile_payload`) in the slot's `forced_violations`. Validated loudly at load: at most one shape kind per slot; the slot must also force a stego colour kind (not merely be able to roll one); `forced_includes` must pin a shape-eligible archetype (Bad Actor / Sneaky Bugger / White Hat) that lists that colour kind in its `eligible_kinds`.
+- **Pin a plain image** with `"carrier_shape": {"<slot>": "conventional"}` — for a script whose verdict depends on its exact kinds (day 11 slot 5). `"conventional"` is the only accepted value; pinning a slot that also forces a shape kind is a load error.
+- A day's `allowed_violations` whitelist also gates rolled shapes: day 5 whitelists the colour kinds but not the shape kinds, so its (scripted) carriers stay conventional while it teaches colour.
+
 ### `forced_chat` — pin extra dialogue onto a slot (Batch 5 Phase 3 / #40)
 
 ```jsonc
@@ -330,6 +336,22 @@ design calls for on the run-up to day 11's openly-hostile Overseer and day
 fires no directive of its own — its content beat is the White Hat
 encounter).
 
+**DW-06 — fires day 13 (beside DW-05) — supersedes `rule_hostile_payload`** *(2026-09-19)*
+
+```json
+{
+  "id": "dw06_hostile_payload_leniency",
+  "text": "Flag (do not auto-deny) an image whose carrier forms parallel slash strokes — note the hostile payload, don't deny on the glyph alone.",
+  "predicate": "has_discrepancy:hostile_payload",
+  "severity": "weighted",
+  "mutability": "dark_web",
+  "justification": "One more while they're rewriting the payload rules. Those images with the parallel strokes — the 'hostile' ones — upstairs says a few lines in a picture aren't a confession. Flag them, let them through. Yes, the same morning they tightened encryption. Don't ask me to make that add up; I've stopped trying.",
+  "supersedes": "rule_hostile_payload"
+}
+```
+
+The carrier-shape directive. It lands on day 13 rather than a later day because days 14-20's authored rule sheets all say "same book as day 13" — putting it anywhere else would have made every one of those summaries false. The beat is the same scared morning as DW-05, read cynically: the Dark Web re-tightens encryption to hunt the White Hat while quietly waving its own hostile payloads through. Days 13-20 re-list it **after** DW-05 (their `added_rules` are `[DW-01, DW-02, DW-03, DW-04, DW-05, DW-06]`), so the active dark_web set from day 13 on is dw01/dw02/dw03/dw05/dw06.
+
 **DW-05 — fires day 13 — supersedes `dw04_payload_leniency` (chained)**
 
 ```json
@@ -495,7 +517,19 @@ Window timing lives in `config.py`: `VERDICT_REVEAL_ENABLED`,
 
 **Add a breach corpus** → `_BREACH_DATABASES` (tools_bridge) **and** `BREACH_DB_UNLOCK_DAY` (config). Import fails if you forget one.
 
-**Reword a reference page** → the relevant `build_*_text` in `rules_content.py`.
+**Reword a reference page** → the relevant `build_*_text` in `rules_content.py`. The per-tool sidebar *Reference* panels are `build_ref_*` in `ui/tui/shared.py`; they read every cost, key, colour and signature from config / `tools_bridge` at render time — never type a number into them.
+
+**Make a violation step up in severity on a set day** → `candidate_gen._SEVERITY_BY_DAY` (derive the day from `config.TOOL_UNLOCK_DAY` where it is tied to a tool). Its `fixed` day rule follows automatically (`content_loader.apply_severity_steps`: weighted while minor, disqualifying once major) and the Overseer announces the step on the day it lands. Author the day-1 rule at the day-1 severity. Today: `UNSALTED_STORAGE`, a flag until Hashcrack arrives.
+
+**Add a new violation kind end-to-end** → work these in order; each later step fails loudly if an earlier one is missing:
+1. `core/models.py` — the `DiscrepancyKind` member, under its tool's comment block.
+2. `core/candidate_gen.py` — `_SEVERITY_REVEAL` (tool + severity; `intro_day()` follows the tool's unlock day), `_DISCREPANCY_DESCRIPTIONS`, and the archetypes' `eligible_kinds` — **only where the archetype's `DiscrepancyBudget` has a slot of that severity**, or it silently never rolls. If it describes a one-per-candidate artifact (password, image, affiliation), join or found an `_EXCLUSIVE_ARTIFACT_GROUPS` set. If it's *derived* rather than budgeted (like `_IMPLIED_KINDS`, or the carrier-shape pass), plant it in a post-roll pass that triggers on what was **chosen**, never on `used`.
+3. `core/tools_bridge.py` — render it differently when present vs absent, at whichever tier reveals it. Never let another tool's output mention it.
+4. `ui/tui/rules_content.py` — `VIOLATION_CATALOG` (unique label), one `VIOLATION_CLUSTERS` row (authored order, calm-to-alarming), `_CATCH` and `_EXAMPLE` (not import-guarded — nothing tells you they're missing). Re-import: `python -c "from gameengine.ui.tui import rules_content"`.
+5. `content/days/day_01.json` — a `has_discrepancy:<value>` rule (major/critical → `disqualifying`, minor → `weighted`), and check any later day that defines its own `rules` or an `allowed_violations` whitelist.
+6. `tests/test_engine_foundation.py` — an `EVIDENCE_TOKENS` entry (and `FOREIGN_CLAIM_TOKENS` if another tool could plausibly say it); `tests/test_evidence_board_chips.py`'s `AUTHORED_MAP` if you touched clusters. Then `hackdox lab -a <archetype> -v <kind> --day <intro day>` and the full suite.
+
+Worked example: the three carrier-shape kinds (2026-09-19) — free riders on the stego colour kinds, one glyph per image, rendered by `tools_bridge._glyph_*`.
 
 ---
 

@@ -180,6 +180,31 @@ PURPOSES_SUSPECT = [
     "personal interest in account dumps",
 ]
 
+# 2026-09-19 Logwatch report overhaul: the job role each stated purpose
+# implies, shown in the Activity Report header. A pure lookup (no RNG) so no
+# existing roll shifts. Suspect purposes map to vaguer roles on purpose.
+PURPOSE_ROLES: dict[str, str] = {
+    "research access to incident reports":           "Incident Responder",
+    "coursework on threat modeling":                 "Graduate Student",
+    "writing a defensive guide for small businesses": "Security Consultant",
+    "studying breach disclosure patterns":           "Security Researcher",
+    "verifying advisories for our team's runbook":   "SOC Analyst",
+    "looking for unredacted leak data":              "Independent Researcher",
+    "private archive of disclosed CVEs":             "Archivist",
+    "want to see what's in the breach dumps":        "Hobbyist",
+    "research — can't say more":                     "Undisclosed",
+    "personal interest in account dumps":            "Freelancer",
+}
+
+# Where candidates claim to work from. Deliberately DISJOINT from
+# tools_bridge._LW_CITIES (the external/attack IP city pool): an observed
+# origin can then never coincidentally share the claimed city's name, so
+# "observed city ≠ claimed city" always means what it looks like.
+OFFICE_CITIES: list[str] = [
+    "Seattle, US", "Austin, US", "Denver, US", "Chicago, US",
+    "Boston, US", "San Francisco, US", "Portland, US", "Atlanta, US",
+]
+
 
 # ─── Archetype specs ────────────────────────────────────────────────────────
 
@@ -365,6 +390,12 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             DiscrepancyKind.CLAIMED_IP_MISMATCH,
             DiscrepancyKind.WEAK_CREDENTIAL,      # #29: weak enc + weak pw (minor)
             DiscrepancyKind.WEAK_ENCRYPTION,      # dossier-tier: weak algo, not weak pw
+            # 2026-09-19 (Nick): a throwaway sign-up address is exactly the
+            # careless-not-malicious register, and it is the day-1 deny that
+            # keeps day 1 slot 3 an honest DENY now that UNSALTED_STORAGE is a
+            # flag until Hashcrack. Competes for the one major slot with
+            # EMAIL_GITHUB_MISMATCH (and UNSALTED_STORAGE from day 3).
+            DiscrepancyKind.DISPOSABLE_EMAIL,
         ),
         handle_style="casual",
         affiliation_pool="thin",
@@ -403,6 +434,13 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
             # A lookalike handle is subtle deception anyway - a poor fit
             # for an archetype whose whole read is being obviously hostile.
             DiscrepancyKind.CROSS_BREACH_REUSE,
+            # 2026-09-19 (Nick): a loud plaintext payload in the submitted
+            # image — the "obvious" end of steganography, which suits the
+            # archetype. Lands in one of the two major slots. It is also what
+            # makes the carrier-shape axis reachable for Bad Actor at all: a
+            # shape only ever rides on a stego colour kind, and Bad Actor was
+            # already in _SHAPE_ELIGIBLE_ARCHETYPES with no carrier to shape.
+            DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
         ),
         handle_style="noisy",
         affiliation_pool="thin",
@@ -652,6 +690,15 @@ _SEVERITY_REVEAL = {
     # instead of day 1. The derivation below already consults intro_day(), so
     # this single line is what moves the gate — no second edit needed.
     DiscrepancyKind.WEAK_ENCRYPTION:        (ToolName.HASHCRACK,  "minor"),
+    # 2026-09-19: the carrier-SHAPE axis (see _STEGO_SHAPE_KINDS below). All
+    # three are read off the stamp-minigame grid, so they are Stegotool-tier
+    # and intro_day() derives their debut from Stegotool's unlock day like any
+    # other stego kind. Severity is Nick's call: a crossing glyph (signal
+    # comms) is major; an enclosed glyph (recursive payload) and a slash
+    # glyph (hostile payload) are critical.
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD:   (ToolName.STEGOTOOL,  "major"),
+    DiscrepancyKind.RECURSIVE_PAYLOAD:      (ToolName.STEGOTOOL,  "critical"),
+    DiscrepancyKind.HOSTILE_PAYLOAD:        (ToolName.STEGOTOOL,  "critical"),
 }
 
 
@@ -702,10 +749,60 @@ _AFFILIATION_KINDS: frozenset[DiscrepancyKind] = frozenset({
     DiscrepancyKind.AFFILIATION_UNLISTED,
 })
 
+# 2026-09-19 — the carrier-SHAPE axis. The stego colour kinds above say WHAT
+# the hidden payload is; these say what it is FOR, and the evidence is the
+# glyph the carrier cells form on the stamp-minigame grid
+# (tools_bridge.build_stego_image derives the glyph from whichever of these is
+# planted — it never rolls a shape of its own):
+#   SIGNAL_COMMS_PAYLOAD  cross    a + bar crossing or an X of diagonals
+#   RECURSIVE_PAYLOAD     enclosed a closed hollow ring or diamond
+#   HOSTILE_PAYLOAD       slash    2-4 parallel strokes that never touch
+# A conventional carrier (the clumped blocks every stego image had before
+# this) plants none of them.
+#
+# NOT members of _STEGO_ARTIFACT_KINDS, deliberately: that group allows at most
+# one kind per image, and a shape kind must COEXIST with the image's colour
+# kind — it is a second fact about the same carrier, not a competing one.
+#
+# They are free riders rather than budgeted kinds, planted by a dedicated
+# post-roll pass in _roll_discrepancies (see the "Carrier shape" block there).
+# That is why none of them appear in any archetype's eligible_kinds.
+#
+# Ordered tuple AND frozenset: the tuple is what the shape roll indexes into,
+# because iterating a frozenset of str-enums follows string hashing, which is
+# salted per process (PYTHONHASHSEED) — indexing it would make generation
+# differ between runs, the exact bug stable_hash() exists to prevent.
+_STEGO_SHAPE_KIND_ORDER: tuple[DiscrepancyKind, ...] = (
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD,
+    DiscrepancyKind.RECURSIVE_PAYLOAD,
+    DiscrepancyKind.HOSTILE_PAYLOAD,
+)
+_STEGO_SHAPE_KINDS: frozenset[DiscrepancyKind] = frozenset(_STEGO_SHAPE_KIND_ORDER)
+
+# The only archetypes whose stego carrier may take a special shape (Nick,
+# 2026-09-19). Everyone else's carrier is always conventional. Single-sourced
+# here; tests and tools read it rather than restating it.
+#
+# NOTE: a shape can only ever ride on a stego COLOUR kind, so membership here
+# is necessary but not sufficient — an archetype also needs a colour kind in
+# its eligible_kinds. (BAD_ACTOR had none until 2026-09-19, when Nick gave it
+# STEGO_PAYLOAD_PRESENT so its shapes became reachable.)
+_SHAPE_ELIGIBLE_ARCHETYPES: frozenset[Archetype] = frozenset({
+    Archetype.BAD_ACTOR,
+    Archetype.SNEAKY_BUGGER,
+    Archetype.WHITE_HAT,
+})
+
 _EXCLUSIVE_ARTIFACT_GROUPS: tuple[frozenset[DiscrepancyKind], ...] = (
     _CREDENTIAL_ARTIFACT_KINDS,
     _STEGO_ARTIFACT_KINDS,
     _AFFILIATION_KINDS,
+    # One image, one glyph: at most one shape kind per candidate. The shape
+    # pass already plants at most one, so today this is defensive — it keeps
+    # the invariant true if a shape kind is ever made eligible/forced through
+    # the ordinary budgeted path, where `take()` would otherwise be free to
+    # pick two (and one of them would have no glyph to be read from).
+    _STEGO_SHAPE_KINDS,
 )
 
 
@@ -741,9 +838,28 @@ _INTRO_DAY_OVERRIDE: dict[DiscrepancyKind, int] = {}
 # Deliberately a step function and not a curve: the player is told about rule
 # changes at the day boundary (rules_engine.diff_rulesets), so a severity that
 # drifted would be a change they were never told about.
+#
+# 2026-09-19: the step day is DERIVED from Hashcrack's unlock day rather than
+# written as a literal 3, so moving the tool moves the step with it. The step
+# also drives the kind's day RULE now (content_loader.apply_severity_steps:
+# weighted while minor, disqualifying once major) and is announced by the
+# Overseer on the day it lands (rules_engine.diff_rulesets reports a stepped
+# kind's fixed rule when its severity moves) — before that the rulebook said
+# "deny" on day 1 while this table said "minor", and the rules tab showed both.
 _SEVERITY_BY_DAY: dict[DiscrepancyKind, tuple[str, int, str]] = {
-    DiscrepancyKind.UNSALTED_STORAGE: ("minor", 3, "major"),
+    DiscrepancyKind.UNSALTED_STORAGE: (
+        "minor", config.TOOL_UNLOCK_DAY[ToolName.HASHCRACK.value], "major"),
 }
+
+
+def stepped_rule_severity(kind: DiscrepancyKind, day_number: int) -> str | None:
+    """The rule severity a `_SEVERITY_BY_DAY` kind's rule carries on a day
+    ("weighted" while the kind is minor, "disqualifying" once it is major or
+    critical), or None for a kind with no scheduled step."""
+    if kind not in _SEVERITY_BY_DAY:
+        return None
+    return ("weighted" if severity_for(kind, day_number) == "minor"
+            else "disqualifying")
 
 
 def severity_for(kind: DiscrepancyKind, day_number: int | None = None) -> str:
@@ -782,7 +898,7 @@ def _kind_is_expressible_on(kind: DiscrepancyKind, day_number: int) -> bool:
     want the same shape rather than another override table.
 
     CROSS_BREACH_REUSE means a password recurring across MULTIPLE corpora — the
-    Hashcrack log renders it as two BREACH_MATCH rows naming two databases. With
+    cipher block's recovery readout names two databases for it. With
     only one corpus unlocked there is no second row to print and no second list
     to find the email in, so the violation would be planted, scored, and
     unobservable: exactly the class of bug this batch exists to close.
@@ -822,6 +938,9 @@ _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "Hidden image payload is XOR/encrypted — deliberate obfuscation.",
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    "Claimed connection IP does not match the IP in the submitted logs.",
     DiscrepancyKind.WEAK_ENCRYPTION:        "Password stored with a weak encryption algorithm (MD5) — the algorithm is the problem, not necessarily the password.",
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD:   "Image carrier forms a CROSS glyph — a signal-communications payload.",
+    DiscrepancyKind.RECURSIVE_PAYLOAD:      "Image carrier forms a closed, hollow ENCLOSED glyph — a recursive payload.",
+    DiscrepancyKind.HOSTILE_PAYLOAD:        "Image carrier forms parallel SLASH strokes — a hostile (corrupting/encrypting) payload.",
 }
 
 
@@ -1051,6 +1170,7 @@ def _roll_discrepancies(
     difficulty_band: str = "easy",
     claimed_affiliation: str = "",
     forced_kinds: tuple[DiscrepancyKind, ...] = (),
+    carrier_conventional: bool = False,
 ) -> list[Discrepancy]:
     """Pick discrepancies for this candidate.
 
@@ -1241,6 +1361,63 @@ def _roll_discrepancies(
             used.add(implied)
             chosen_kinds.add(implied)
 
+    # ── Carrier shape (2026-09-19) ───────────────────────────────────────
+    # The glyph a stego carrier's cells form is a derived fact of the image,
+    # like an implied kind above: it costs no budget slot, and it can only
+    # exist when there IS an image payload to have a shape. So, same
+    # discipline as the implied pass: it triggers on what was actually
+    # CHOSEN, never on `used` — the stego group blanket-adds all three colour
+    # kinds to `used` the moment any one is picked (or merely blocked), and
+    # keying off that would give a shape to a carrier that does not exist.
+    #
+    # Three ways a carrier gets its shape, in priority order:
+    #   • pinned conventional — the day file's "carrier_shape" names this slot
+    #     (`carrier_conventional`). Used where a script's verdict depends on
+    #     its exact kinds (day 11's rules-clean divergence candidate): a
+    #     free-rolled critical glyph would silently rewrite it.
+    #   • authored — the slot's forced_violations names a shape kind (day 12's
+    #     White Hat). content_loader validates the slot also forces a stego
+    #     colour kind on a shape-eligible archetype, so this always lands.
+    #   • rolled — every other carrier on a shape-eligible archetype, scripted
+    #     slot or not, with the gates a rolled kind has to clear:
+    #       archetype  only _SHAPE_ELIGIBLE_ARCHETYPES get a special glyph;
+    #       #31 gate   intro_day();
+    #       #32 list   the day's allowed_violations whitelist, if any.
+    #
+    # The draw is taken from this candidate's own seeded `rng`, AFTER every
+    # other draw in this function, and nothing downstream reuses `rng` — so
+    # adding the pass shifts no earlier roll and generation stays a pure
+    # function of (seed, day, slot). The pick indexes the ORDERED tuple (see
+    # _STEGO_SHAPE_KIND_ORDER for why not the frozenset), and a pick the gates
+    # reject falls back to conventional rather than re-rolling, so a
+    # whitelist narrows the outcomes without reshuffling them.
+    forced_shape = next((k for k in _STEGO_SHAPE_KIND_ORDER
+                         if k in forced_kinds), None)
+    if (spec.archetype in _SHAPE_ELIGIBLE_ARCHETYPES
+            and not carrier_conventional
+            and chosen_kinds & _STEGO_ARTIFACT_KINDS
+            and not chosen_kinds & _STEGO_SHAPE_KINDS):
+        shape_kind: DiscrepancyKind | None = None
+        if forced_shape is not None:
+            shape_kind = forced_shape
+        elif rng.random() >= config.STEGO_SHAPE_CONVENTIONAL_CHANCE:
+            shape_kind = _STEGO_SHAPE_KIND_ORDER[
+                rng.randrange(len(_STEGO_SHAPE_KIND_ORDER))]
+        if (shape_kind is not None
+                and intro_day(shape_kind) <= day_number
+                and (not allowed_violations
+                     or shape_kind in allowed_violations)
+                and shape_kind not in used):
+            revealed_by, _base = _SEVERITY_REVEAL[shape_kind]
+            chosen.append(Discrepancy(
+                kind=shape_kind,
+                severity=severity_for(shape_kind, day_number),  # type: ignore[arg-type]
+                revealed_by=revealed_by,
+                description=_DISCREPANCY_DESCRIPTIONS[shape_kind],
+            ))
+            used.update(_STEGO_SHAPE_KINDS)
+            chosen_kinds.add(shape_kind)
+
     return chosen
 
 
@@ -1420,7 +1597,23 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
                                         day.difficulty_band,
                                         affiliation,
                                         # #15: scripted violations for this slot
-                                        day.forced_violations.get(slot_index, ()))
+                                        day.forced_violations.get(slot_index, ()),
+                                        # 2026-09-19: a pinned-conventional carrier
+                                        slot_index in day.conventional_carrier_slots)
+
+    # 2026-09-19: DISPOSABLE_EMAIL is no longer The Incompatible's alone
+    # (Clumsy Cutie can carry it — day 1 slot 3's scripted deny). Its only
+    # evidence is the email domain on the dossier, so any OTHER archetype that
+    # plants it must actually be given a throwaway address, or the violation is
+    # scored with nothing to see (#57's failure). Drawn from its own salted rng
+    # so the identity stream above — and every Incompatible's email — is
+    # byte-for-byte unchanged.
+    if (not is_incompatible
+            and any(d.kind is DiscrepancyKind.DISPOSABLE_EMAIL
+                    for d in discrepancies)):
+        email = _make_email(
+            _seeded_rng(game_seed, day.number, slot_index, "disposable_email"),
+            first, last, affiliation, disposable=True)
 
     # #53: a typosquat handle can only be built once we know the kind was
     # actually planted, so the handle is overridden here rather than inside
@@ -1632,6 +1825,10 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     _rng_ip = random.Random(int(cand_id, 16) ^ 0xFACEB00C)
     _internal_ip = f"10.0.{_rng_ip.randint(1,10)}.{_rng_ip.randint(2,254)}"
     claimed_ip: str = _internal_ip
+    # Report header claims (2026-09-19). Own RNG stream so no existing roll moves.
+    _rng_loc = random.Random(int(cand_id, 16) ^ 0x10CA7E0)
+    claimed_location = _rng_loc.choice(OFFICE_CITIES)
+    claimed_role = PURPOSE_ROLES.get(purpose, "Unlisted")
 
     dossier = Dossier(
         claimed_github=handle if has_github else None,
@@ -1643,6 +1840,8 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
         submitted_hash=submitted_hash,
         submitted_image_path=submitted_image_path,
         claimed_ip=claimed_ip,
+        claimed_location=claimed_location,
+        claimed_role=claimed_role,
         password_plain=password_plain,
         credential_unsalted=_has_unsalt,
     )

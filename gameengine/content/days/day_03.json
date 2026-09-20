@@ -80,6 +80,7 @@
       "A cracked password found in a breach corpus is a deny.",
       "The same password turning up in two corpora is a deny — that is reuse, and it is why there are two lists now.",
       "A weak password behind weak encryption is a flag. Poor hygiene is not malice.",
+      "A password printed in the clear (UNSALTED) is a deny from today, not a flag.",
       "The claimed connection IP is on the dossier. It is worth comparing, but on its own it is a flag."
     ]
   }

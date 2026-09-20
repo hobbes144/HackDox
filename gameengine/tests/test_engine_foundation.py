@@ -345,14 +345,23 @@ def test_mutability_defaults_to_fixed_and_only_advisories_are_variable(day1):
     plausibly move. Every disqualifying rule stays fixed: the Overseer must not
     be able to quietly relax the rules that actually keep threats out. That is
     #37's Dark Web directives, not a casual process note.
+
+    2026-09-19 — ONE deliberate exception, at Nick's request: the carrier-
+    shape rule `rule_signal_relay_payload` (SIGNAL_COMMS_PAYLOAD, major) is
+    overseer_variable and starts disqualifying, so the shape axis has a rule
+    that visibly swings in the briefing. It is the only disqualifying-by-
+    default variable rule, and it is named here explicitly so a second one
+    cannot slip in unnoticed.
     """
     assert day1.rules, "Day 1 should have rules"
     variable = {r.id for r in day1.rules if r.mutability == "overseer_variable"}
     assert variable == {"rule_claimed_ip", "rule_weak_credential",
-                        "rule_weak_encryption"}
+                        "rule_weak_encryption", "rule_signal_relay_payload"}
     for rule in day1.rules:
         if rule.id not in variable:
             assert rule.mutability == "fixed", rule.id
+        elif rule.id == "rule_signal_relay_payload":
+            assert rule.severity == "disqualifying", rule.id
         else:
             assert rule.severity == "weighted", rule.id
 
@@ -756,6 +765,17 @@ def test_variable_rules_actually_flip_across_the_campaign(day1):
         if rule.mutability == "overseer_variable":
             assert len(seen[rule.id]) == 2, (
                 f"{rule.id} never flipped across the campaign")
+        elif rule.predicate.split(":", 1)[-1] in {
+                k.value for k in candidate_gen._SEVERITY_BY_DAY}:
+            # 2026-09-19: a fixed rule on a kind with a scheduled severity
+            # step follows the step (content_loader.apply_severity_steps) —
+            # both values, and on exactly the days severity_for says.
+            kind = DiscrepancyKind(rule.predicate.split(":", 1)[1])
+            for d in range(1, config.CAMPAIGN_LAST_DAY + 1):
+                got = {r.severity for r in mutate_variable_rules(day1.rules, d)
+                       if r.id == rule.id}
+                assert got == {candidate_gen.stepped_rule_severity(kind, d)}, (
+                    rule.id, d)
         else:
             # Fixed rules must be left strictly alone.
             assert seen[rule.id] == {rule.severity}, rule.id
@@ -1117,6 +1137,12 @@ EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT: "STEGO_PAYLOAD_PRESENT",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:     "ENCRYPTED_PAYLOAD",
     DiscrepancyKind.COVERT_C2_CHANNEL:     "COVERT_C2_CHANNEL",
+    # 2026-09-19 — the carrier-shape axis. The filtered resolve block prints
+    # its own ▲ label for a special glyph; the unfiltered one only describes
+    # the geometry (see test_shape_is_named_only_by_the_filter).
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD:  "SIGNAL_COMMS_PAYLOAD",
+    DiscrepancyKind.RECURSIVE_PAYLOAD:     "RECURSIVE_PAYLOAD",
+    DiscrepancyKind.HOSTILE_PAYLOAD:       "HOSTILE_PAYLOAD",
 }
 
 
@@ -1184,13 +1210,30 @@ def _filtered_output(candidate, kind, day, seed) -> str:
     raise AssertionError(f"no output path for {tool}")
 
 
+def _archetype_can_carry(spec, kind) -> bool:
+    """Whether `spec`'s archetype can ever end up carrying `kind`.
+
+    For a budgeted kind that is eligible_kinds membership. The carrier-shape
+    kinds are free riders that are never listed there (2026-09-19): they ride
+    on a stego colour kind, only for the shape-eligible archetypes. Filtering
+    them by eligible_kinds alone made every shape kind's present-when-planted
+    guard pytest.skip — silently inert, which is exactly how a guard stops
+    guarding without anyone noticing.
+    """
+    if kind in candidate_gen._STEGO_SHAPE_KINDS:
+        return (spec.archetype in candidate_gen._SHAPE_ELIGIBLE_ARCHETYPES
+                and any(k in candidate_gen._STEGO_ARTIFACT_KINDS
+                        for k in spec.eligible_kinds))
+    return kind in spec.eligible_kinds
+
+
 def _candidates_by_kind(kind, want: bool, limit: int = 3):
     """Up to `limit` (candidate, day, seed) triples that do / don't carry `kind`."""
     from dataclasses import replace
     base = unconstrained_day()
     found = []
     for archetype, spec in candidate_gen.ARCHETYPE_SPECS.items():
-        if want and kind not in spec.eligible_kinds:
+        if want and not _archetype_can_carry(spec, kind):
             continue
         for day_n in range(1, 8):
             day = replace(base, number=day_n,
@@ -1312,6 +1355,22 @@ FOREIGN_CLAIM_TOKENS: dict[DiscrepancyKind, tuple[str, ...]] = {
         "CROSS_BREACH_REUSE",
         "reused across breaches",
         "appears in more than one corpus",
+    ),
+    # 2026-09-19 — the carrier-shape kinds. Their purpose phrases are
+    # filter-tier and must only ever print for a carrier that has the glyph:
+    # a conventional carrier (the majority) naming an operation, or a non-stego
+    # tool mentioning one, would be a claim with no glyph behind it.
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD: (
+        "SIGNAL_COMMS_PAYLOAD",
+        "signal communications",
+    ),
+    DiscrepancyKind.RECURSIVE_PAYLOAD: (
+        "RECURSIVE_PAYLOAD",
+        "recursive payload",
+    ),
+    DiscrepancyKind.HOSTILE_PAYLOAD: (
+        "HOSTILE_PAYLOAD",
+        "hostile payload",
     ),
 }
 
@@ -1733,9 +1792,17 @@ def test_stego_carrier_is_clumped_not_uniform_noise():
     independent per-cell fill at probability p the expectation is ~4p — about
     1.6 at the densities used here. Contiguous blocks sit far above that, so
     this fails loudly if the uniform fill ever comes back.
+
+    Scoped to CONVENTIONAL carriers (2026-09-19). A special-shape glyph is
+    made of deliberately thin strokes — a one-row bar has ~2 neighbours per
+    cell by construction, and parallel stripes are dense without being blocky
+    — so this block-shaped discriminator says nothing about them. Their
+    structure is guarded, more strictly, by
+    test_carrier_glyph_geometry_matches_the_planted_shape.
     """
-    imgs = _stego_images()
-    assert imgs, "no stego images generated — test is inert"
+    imgs = [img for img in _stego_images(limit=60)
+            if img.shape is tools_bridge.StegoShape.CONVENTIONAL]
+    assert len(imgs) >= 15, "too few conventional stego images — test is inert"
     for img in imgs:
         cells = img.carrier
         assert cells, f"{img.kind} produced no carrier cells"
@@ -1839,6 +1906,763 @@ def test_stego_image_is_deterministic():
         assert a.carrier == b.carrier
         assert a.zone == b.zone and a.hint_region == b.hint_region
         assert a.density == b.density
+
+
+# ─── 2026-09-19 — carrier SHAPE, the second stego evidence axis ─────────────
+#
+# The glyph a stego carrier's cells form encodes the payload's purpose:
+# conventional blocks (nothing extra), cross → SIGNAL_COMMS_PAYLOAD, enclosed
+# → RECURSIVE_PAYLOAD, slash → HOSTILE_PAYLOAD. The guards below are written
+# against the failure modes this project has actually shipped before:
+#   • a kind planted with nothing to observe (a shape with no carrier);
+#   • a free rider that quietly eats a budget slot and displaces a real kind;
+#   • a tool whose rendering disagrees with ground truth;
+#   • a guard parameterised on the constant it guards (so each test below
+#     restates its expectations explicitly rather than reading them back out
+#     of candidate_gen).
+
+# Named explicitly — NOT read from candidate_gen — so a regression in the
+# constants themselves fails here instead of redefining "correct".
+_SHAPE_KIND_TO_NAME = {
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD: "cross",
+    DiscrepancyKind.RECURSIVE_PAYLOAD:    "enclosed",
+    DiscrepancyKind.HOSTILE_PAYLOAD:      "slash",
+}
+_STEGO_COLOUR_KINDS = {
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
+    DiscrepancyKind.ENCRYPTED_PAYLOAD,
+    DiscrepancyKind.COVERT_C2_CHANNEL,
+}
+_SHAPE_ARCHETYPES = {Archetype.BAD_ACTOR, Archetype.SNEAKY_BUGGER,
+                     Archetype.WHITE_HAT}
+
+
+def _shape_sweep(days=range(1, 21), seeds=range(40), archetypes=None):
+    """(archetype, day, seed, candidate) over an unconstrained campaign."""
+    from dataclasses import replace
+    base = unconstrained_day()
+    for archetype in archetypes or candidate_gen.ARCHETYPE_SPECS:
+        for day_n in days:
+            day = replace(base, number=day_n,
+                          forced_includes={0: archetype},
+                          archetype_mix={**base.archetype_mix, archetype: 1})
+            for seed in seeds:
+                yield archetype, day_n, seed, candidate_gen.generate(seed, day, 0)
+
+
+def test_shape_kinds_only_ride_on_a_stego_carrier_of_an_eligible_archetype():
+    """A shape kind with no colour kind has no carrier, so no glyph: planted,
+    scored, and impossible to see. Also: at most one per candidate, never
+    before Stegotool is taught, never on an archetype outside Nick's three."""
+    seen: dict = {k: 0 for k in _SHAPE_KIND_TO_NAME}
+    for archetype, day_n, seed, c in _shape_sweep():
+        kinds = {d.kind for d in c.truth.discrepancies}
+        shapes = kinds & set(_SHAPE_KIND_TO_NAME)
+        where = f"{archetype.value} day {day_n} seed {seed}"
+        assert len(shapes) <= 1, f"{where}: two glyphs on one image {shapes}"
+        if not shapes:
+            continue
+        (shape,) = shapes
+        seen[shape] += 1
+        assert kinds & _STEGO_COLOUR_KINDS, (
+            f"{where}: carries {shape.name} with no stego colour kind — there "
+            f"is no carrier for the glyph to be drawn in")
+        assert archetype in _SHAPE_ARCHETYPES, (
+            f"{where}: {archetype.value} may never draw a special shape")
+        assert day_n >= config.TOOL_UNLOCK_DAY["stegotool"], (
+            f"{where}: {shape.name} planted before Stegotool is taught")
+        d = next(d for d in c.truth.discrepancies if d.kind is shape)
+        assert d.revealed_by.value == "stegotool"
+    for kind, n in seen.items():
+        assert n >= 10, (
+            f"sweep planted {kind.name} only {n} times — guard is inert")
+
+
+def test_shape_kinds_never_consume_a_budget_slot():
+    """The shape is a free rider: forcing every carrier conventional must
+    leave every OTHER planted kind exactly as it was. If the shape pass ever
+    moves into the budgeted path it displaces a real kind and this diverges."""
+    shaped = 0
+    for archetype, day_n, seed, c in _shape_sweep(
+            days=range(5, 21), seeds=range(30),
+            archetypes=(Archetype.SNEAKY_BUGGER, Archetype.WHITE_HAT)):
+        spec = candidate_gen.ARCHETYPE_SPECS[archetype]
+        rng_a = candidate_gen._seeded_rng(seed, day_n, 0, "discrepancies")
+        rng_b = candidate_gen._seeded_rng(seed, day_n, 0, "discrepancies")
+        args = (spec, day_n, (), unconstrained_day().difficulty_band,
+                c.claimed_affiliation)
+        with_shape = candidate_gen._roll_discrepancies(rng_a, *args)
+        saved = config.STEGO_SHAPE_CONVENTIONAL_CHANCE
+        config.STEGO_SHAPE_CONVENTIONAL_CHANCE = 1.0
+        try:
+            without = candidate_gen._roll_discrepancies(rng_b, *args)
+        finally:
+            config.STEGO_SHAPE_CONVENTIONAL_CHANCE = saved
+        rest = [d for d in with_shape if d.kind not in _SHAPE_KIND_TO_NAME]
+        shaped += len(rest) != len(with_shape)
+        assert rest == without, (
+            f"{archetype.value} day {day_n} seed {seed}: planting a shape "
+            f"changed the budgeted kinds {[d.kind.name for d in without]} -> "
+            f"{[d.kind.name for d in rest]}")
+    assert shaped, "no shaped carrier in the sweep — guard is inert"
+
+
+def test_non_shape_archetype_with_a_stego_carrier_stays_conventional():
+    """Today only Sneaky Bugger and White Hat can carry a stego colour kind at
+    all, so the archetype gate has nothing to refuse in an ordinary sweep —
+    the guard would be inert. Give a non-shape archetype a stego-only spec and
+    roll it directly: it must get its colour kind and never a shape."""
+    import random
+    from dataclasses import replace
+
+    carried = 0
+    for archetype in (Archetype.CLUMSY_CUTIE, Archetype.DAY_TO_DAY,
+                      Archetype.THE_INCOMPATIBLE):
+        spec = replace(candidate_gen.ARCHETYPE_SPECS[archetype],
+                       eligible_kinds=(DiscrepancyKind.STEGO_PAYLOAD_PRESENT,),
+                       budget=candidate_gen.DiscrepancyBudget(major=1))
+        for seed in range(300):
+            kinds = {d.kind for d in candidate_gen._roll_discrepancies(
+                random.Random(seed), spec, 8)}
+            assert DiscrepancyKind.STEGO_PAYLOAD_PRESENT in kinds
+            carried += 1
+            assert not kinds & set(_SHAPE_KIND_TO_NAME), (
+                f"{archetype.value} seed {seed} drew a special shape {kinds}")
+    assert carried
+
+
+def test_conventional_share_tracks_the_config_knob():
+    """Conventional is the majority outcome, at the configured rate, with the
+    remainder split evenly. A large sample, not one candidate."""
+    counts = {"conventional": 0, "cross": 0, "enclosed": 0, "slash": 0}
+    for _a, _d, _s, c in _shape_sweep(
+            days=range(5, 21), seeds=range(100),
+            archetypes=(Archetype.SNEAKY_BUGGER, Archetype.WHITE_HAT)):
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if not kinds & _STEGO_COLOUR_KINDS:
+            continue
+        shape = next((_SHAPE_KIND_TO_NAME[k] for k in kinds
+                      if k in _SHAPE_KIND_TO_NAME), "conventional")
+        counts[shape] += 1
+    n = sum(counts.values())
+    assert n >= 1500, f"only {n} stego carriers sampled"
+    conv = counts["conventional"] / n
+    knob = config.STEGO_SHAPE_CONVENTIONAL_CHANCE
+    assert abs(conv - knob) < 0.04, f"conventional share {conv:.3f} vs knob {knob}"
+    assert conv > 0.5, "conventional must stay the majority outcome"
+    each = (1 - knob) / 3
+    for name in ("cross", "enclosed", "slash"):
+        share = counts[name] / n
+        assert abs(share - each) < 0.04, f"{name} share {share:.3f} vs {each:.3f}"
+
+
+def _flood_exterior(img):
+    """Non-carrier cells reachable 4-way from outside the zone."""
+    zx, zy, zw, zh = img.zone
+    inside = {(x, y) for x in range(zx, zx + zw) for y in range(zy, zy + zh)}
+    free = inside - img.carrier
+    frontier = [c for c in free
+                if c[0] in (zx, zx + zw - 1) or c[1] in (zy, zy + zh - 1)]
+    seen = set(frontier)
+    while frontier:
+        x, y = frontier.pop()
+        for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if n in free and n not in seen:
+                seen.add(n)
+                frontier.append(n)
+    return free, seen
+
+
+def _components(cells, diagonal: bool):
+    steps = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+    if diagonal:
+        steps += [(1, 1), (1, -1), (-1, 1), (-1, -1)]
+    left, comps = set(cells), 0
+    while left:
+        comps += 1
+        stack = [left.pop()]
+        while stack:
+            x, y = stack.pop()
+            for dx, dy in steps:
+                n = (x + dx, y + dy)
+                if n in left:
+                    left.remove(n)
+                    stack.append(n)
+    return comps
+
+
+def _touch(a, b) -> bool:
+    return any((x + dx, y + dy) in b for (x, y) in a
+               for dx in (-1, 0, 1) for dy in (-1, 0, 1))
+
+
+def _shaped_images(per_shape=40):
+    """(expected shape name, image) until every shape has `per_shape`
+    examples, across the whole campaign's grid sizes (days 5-20, so the
+    STEGO_GRID_MAX cap is exercised too)."""
+    got = {"conventional": [], "cross": [], "enclosed": [], "slash": []}
+    for _a, day_n, _s, c in _shape_sweep(
+            days=range(5, 21), seeds=range(60),
+            archetypes=(Archetype.WHITE_HAT, Archetype.SNEAKY_BUGGER)):
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if not kinds & _STEGO_COLOUR_KINDS:
+            continue
+        name = next((_SHAPE_KIND_TO_NAME[k] for k in kinds
+                     if k in _SHAPE_KIND_TO_NAME), "conventional")
+        if len(got[name]) < per_shape:
+            got[name].append((c, tools_bridge.build_stego_image(c, day_n)))
+        if all(len(v) >= per_shape for v in got.values()):
+            break
+    return got
+
+
+def test_carrier_glyph_geometry_matches_the_planted_shape():
+    """The image must show the glyph ground truth says it carries — cross
+    strokes really cross, an enclosure really is hollow and sealed, slashes
+    really are parallel and apart — and tools_bridge must never disagree with
+    candidate_gen about which shape it is."""
+    got = _shaped_images()
+    for name, pairs in got.items():
+        assert len(pairs) >= 40, f"only {len(pairs)} {name} images — inert"
+        for c, img in pairs:
+            where = f"{name} {c.id}"
+            kinds = {d.kind for d in c.truth.discrepancies}
+            planted = next((k for k in kinds if k in _SHAPE_KIND_TO_NAME), None)
+            assert img.shape.value == name, (
+                f"{where}: ground truth says {name}, image renders {img.shape}")
+            assert img.shape_kind is planted
+            zx, zy, zw, zh = img.zone
+            assert all(zx <= x < zx + zw and zy <= y < zy + zh
+                       for x, y in img.carrier), f"{where}: carrier leaves zone"
+            if name == "conventional":
+                assert img.strokes == ()
+                continue
+            assert frozenset().union(*img.strokes) == img.carrier
+            ys = {y for _x, y in img.carrier}
+            xs = {x for x, _y in img.carrier}
+            # Spans the zone top to bottom and a good part of its width, so a
+            # sweep meets it before coverage resolves.
+            assert min(ys) == zy and max(ys) == zy + zh - 1, where
+            assert (max(xs) - min(xs) + 1) >= 0.4 * zw, (
+                f"{where}: glyph spans only {max(xs) - min(xs) + 1} of {zw}")
+            if name == "cross":
+                assert len(img.strokes) == 2, where
+                a, b = img.strokes
+                assert a & b, f"{where}: the two strokes never intersect"
+                assert _components(img.carrier, diagonal=False) == 1, where
+            elif name == "enclosed":
+                free, outside = _flood_exterior(img)
+                interior = free - outside
+                assert interior, f"{where}: outline is not closed / not hollow"
+                assert not interior & img.carrier
+                assert _components(img.carrier, diagonal=False) == 1, where
+            else:  # slash
+                n = len(img.strokes)
+                assert 2 <= n <= 4, f"{where}: {n} strokes"
+                first = img.strokes[0]
+                ox, oy = min(first)
+                shape0 = {(x - ox, y - oy) for x, y in first}
+                for st in img.strokes[1:]:
+                    sx, sy = min(st)
+                    assert {(x - sx, y - sy) for x, y in st} == shape0, (
+                        f"{where}: strokes are not parallel copies")
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        assert not _touch(img.strokes[i], img.strokes[j]), (
+                            f"{where}: strokes {i} and {j} touch")
+                assert _components(img.carrier, diagonal=True) == n, where
+
+
+def test_glyph_builders_hold_their_geometry_at_every_zone_size():
+    """The candidate sweep above only reaches the zone sizes its seeds happen
+    to land on, and a glyph's edge cases live at the small sizes (two slashes
+    that round onto adjacent rows, a ring with no room for a hole). So drive
+    the builders directly over every zone size build_stego_image can produce
+    (width 4-36, height 3-16 — w_lo is max(4, cols//5), h_lo max(3, rows//4),
+    both halves capped by STEGO_GRID_MAX), several rng draws each."""
+    import random
+
+    zone_sizes = [(w, h) for w in range(4, 37) for h in range(3, 17)]
+    assert max(config.STEGO_GRID_MAX) // 2 <= 36
+    for (w, h) in zone_sizes:
+        for seed in range(12):
+            # Mix the size into the seed. Each builder's variant draws (stroke
+            # count, orientation, ring vs diamond) come first and depend only
+            # on the rng, so a bare seed would pin the SAME few variants to
+            # every size — the first draft of this test did, and missed two
+            # slashes rounding onto adjacent rows at 6 rows high.
+            rs = seed * 10_007 + w * 101 + h
+            where = f"{w}x{h} seed {rs}"
+            cross = tools_bridge._glyph_cross(random.Random(rs), w, h)
+            assert len(cross) == 2 and cross[0] & cross[1], f"cross {where}"
+            ring = tools_bridge._glyph_enclosed(random.Random(rs), w, h)
+            assert len(ring) == 1, where
+            cells = ring[0]
+            box = {(x, y) for x in range(w) for y in range(h)}
+            assert cells <= box and (cross[0] | cross[1]) <= box, where
+            free = box - cells
+            edge = [c for c in free if c[0] in (0, w - 1) or c[1] in (0, h - 1)]
+            seen, stack = set(edge), list(edge)
+            while stack:
+                x, y = stack.pop()
+                for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if n in free and n not in seen:
+                        seen.add(n)
+                        stack.append(n)
+            assert free - seen, f"enclosed {where}: no sealed, empty interior"
+            slash = tools_bridge._glyph_slash(random.Random(rs), w, h)
+            assert 2 <= len(slash) <= 4, f"slash {where}"
+            ox, oy = min(slash[0])
+            base = {(x - ox, y - oy) for x, y in slash[0]}
+            for i, st in enumerate(slash):
+                sx, sy = min(st)
+                assert {(x - sx, y - sy) for x, y in st} == base, (
+                    f"slash {where}: stroke {i} is not a parallel copy")
+                assert all(0 <= x < w and 0 <= y < h for x, y in st), where
+                for other in slash[i + 1:]:
+                    assert not _touch(st, other), f"slash {where}: strokes touch"
+
+
+def test_every_shaped_payload_is_hit_before_it_resolves():
+    """Same regression as test_every_stego_payload_can_be_found_before_it_
+    resolves, but across every special glyph and the whole grid-size range:
+    a thin outline or a pair of edge strokes must still be crossed by a
+    systematic sweep before coverage resolves."""
+    got = _shaped_images(per_shape=25)
+    for name in ("cross", "enclosed", "slash"):
+        for _c, img in got[name]:
+            revealed: set = set()
+            zx, zy, zw, zh = img.zone
+            saw = False
+            for yy in range(zy, zy + zh, config.STEGO_STAMP_H):
+                for xx in range(zx, zx + zw, config.STEGO_STAMP_W):
+                    res = tools_bridge.evaluate_stamp(
+                        img, xx, yy, config.STEGO_STAMP_W,
+                        config.STEGO_STAMP_H, revealed)
+                    saw = saw or bool(res.signature)
+                    if res.resolved:
+                        break
+                else:
+                    continue
+                break
+            assert saw, f"{name} glyph resolved without a carrier ever hit"
+
+
+def test_shape_is_named_only_by_the_filter():
+    """Unfiltered: the resolve block describes the glyph's GEOMETRY, never its
+    purpose and never a ▲ shape label. Filtered: a special glyph gets its own
+    ▲ label. Conventional never gets one at either tier."""
+    geometry = {
+        "conventional": "irregular blocks",
+        "cross":        "strokes cross",
+        "enclosed":     "hollow interior",
+        "slash":        "parallel strokes",
+    }
+    purpose_words = ("signal comm", "recursive", "hostile")
+    got = _shaped_images(per_shape=15)
+    for name, pairs in got.items():
+        for c, img in pairs:
+            plain = "\n".join(tools_bridge.stamp_signature_lines(img, reveal_type=False))
+            named = "\n".join(tools_bridge.stamp_signature_lines(img, reveal_type=True))
+            assert geometry[name] in plain, f"{name}: geometry not described"
+            for k in _SHAPE_KIND_TO_NAME:
+                assert k.value.upper() not in plain, (
+                    f"{name}: unfiltered block names {k.name}")
+            assert not any(w in plain.lower() for w in purpose_words), (
+                f"{name}: unfiltered block leaks the purpose:\n{plain}")
+            assert "GLYPH RESOLVED" not in plain
+            planted = next((k for k in _SHAPE_KIND_TO_NAME
+                            if any(d.kind is k for d in c.truth.discrepancies)),
+                           None)
+            if planted is None:
+                assert "GLYPH RESOLVED" not in named
+                for k in _SHAPE_KIND_TO_NAME:
+                    assert f"▲ {k.value.upper()}" not in named, (
+                        f"conventional carrier printed ▲ {k.name}")
+            else:
+                assert f"▲ {planted.value.upper()}" in named
+                others = set(_SHAPE_KIND_TO_NAME) - {planted}
+                assert not any(k.value.upper() in named for k in others)
+
+
+# ─── 2026-09-19 (round 2) — shapes on scripted slots, in the rulebook, ─────
+# ─── Bad Actor carriers, derived reference panels, UNSALTED step ───────────
+
+
+def _write_scripted_shape_day(tmp_path, monkeypatch, *, forced_includes=None,
+                              forced_violations=None, carrier_shape=None,
+                              number=12):
+    """Day 1's rules restated as day `number`, with only the scripting given.
+    Day 1's own tutorial script and whitelist are stripped: they would reject
+    any stego kind before the shape validation ever ran."""
+    import json
+
+    source = json.loads((_REAL_DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source["number"] = number
+    for key in ("allowed_violations", "forced_includes", "forced_violations"):
+        source.pop(key, None)
+    if forced_includes is not None:
+        source["forced_includes"] = forced_includes
+    if forced_violations is not None:
+        source["forced_violations"] = forced_violations
+    if carrier_shape is not None:
+        source["carrier_shape"] = carrier_shape
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / f"day_{number:02d}.json").write_text(json.dumps(source),
+                                                    encoding="utf-8")
+
+
+@pytest.mark.parametrize("includes,violations,shape,match", [
+    ({"0": "sneaky_bugger"}, {"0": ["hostile_payload"]}, None,
+     "needs a carrier"),
+    ({}, {"0": ["encrypted_payload", "hostile_payload"]}, None,
+     "shape-eligible archetype"),
+    ({"0": "clumsy_cutie"}, {"0": ["stego_payload_present", "hostile_payload"]},
+     None, "shape-eligible archetype"),
+    ({"0": "white_hat"}, {"0": ["covert_c2_channel", "hostile_payload"]}, None,
+     "cannot carry"),
+    ({"0": "sneaky_bugger"},
+     {"0": ["encrypted_payload", "hostile_payload", "recursive_payload"]},
+     None, "at most one"),
+    ({"0": "sneaky_bugger"}, {"0": ["encrypted_payload", "hostile_payload"]},
+     {"0": "conventional"}, "contradict"),
+    ({"0": "sneaky_bugger"}, {"0": ["encrypted_payload"]}, {"0": "cross"},
+     "only pin"),
+])
+def test_scripted_carrier_shapes_are_validated_when_the_day_loads(
+        tmp_path, monkeypatch, includes, violations, shape, match):
+    """A scripted shape that cannot land must fail at load, naming the file —
+    the generator would otherwise drop it silently (the #15 stance)."""
+    _write_scripted_shape_day(tmp_path, monkeypatch, forced_includes=includes,
+                              forced_violations=violations, carrier_shape=shape)
+    with pytest.raises(ValueError, match=match):
+        load_day(12)
+
+
+def test_authored_carrier_shapes_plant_exactly_as_authored(tmp_path, monkeypatch):
+    """A forced shape lands on every seed with its colour kind, the image
+    renders that glyph, and a pinned-conventional slot never has one."""
+    _write_scripted_shape_day(
+        tmp_path, monkeypatch,
+        forced_includes={"0": "sneaky_bugger", "1": "sneaky_bugger"},
+        forced_violations={"0": ["encrypted_payload", "recursive_payload"],
+                           "1": ["encrypted_payload"]},
+        carrier_shape={"1": "conventional"})
+    day = load_day(12)
+    assert day.conventional_carrier_slots == frozenset({1})
+    for seed in range(40):
+        c0 = candidate_gen.generate(seed, day, 0)
+        k0 = {d.kind for d in c0.truth.discrepancies}
+        assert {DiscrepancyKind.ENCRYPTED_PAYLOAD,
+                DiscrepancyKind.RECURSIVE_PAYLOAD} <= k0, (seed, k0)
+        assert not (k0 & set(_SHAPE_KIND_TO_NAME)) - {
+            DiscrepancyKind.RECURSIVE_PAYLOAD}
+        assert tools_bridge.build_stego_image(c0, 12).shape.value == "enclosed"
+        c1 = candidate_gen.generate(seed, day, 1)
+        k1 = {d.kind for d in c1.truth.discrepancies}
+        assert DiscrepancyKind.ENCRYPTED_PAYLOAD in k1
+        assert not k1 & set(_SHAPE_KIND_TO_NAME), (seed, k1)
+        assert tools_bridge.build_stego_image(c1, 12).shape.value == "conventional"
+
+
+def test_real_scripted_slots_carry_their_authored_shape():
+    """The two slots that pin a shape story in the shipped content: day 12's
+    White Hat always shows the cross; day 11's rules-clean Sneaky Bugger is
+    always a plain image (any glyph would disqualify it on day 11)."""
+    day12, day11 = load_day(12), load_day(11)
+    assert 5 in day11.conventional_carrier_slots
+    for seed in range(40):
+        wh = candidate_gen.generate(seed, day12, 7)
+        assert wh.archetype is Archetype.WHITE_HAT
+        assert DiscrepancyKind.SIGNAL_COMMS_PAYLOAD in {
+            d.kind for d in wh.truth.discrepancies}
+        assert tools_bridge.build_stego_image(wh, 12).shape.value == "cross"
+        sb = candidate_gen.generate(seed, day11, 5)
+        assert not {d.kind for d in sb.truth.discrepancies} & set(_SHAPE_KIND_TO_NAME)
+        assert tools_bridge.build_stego_image(sb, 11).shape.value == "conventional"
+
+
+def test_unpinned_scripted_carriers_roll_shapes():
+    """Scripted slots are no longer blanket-conventional: an unpinned scripted
+    stego carrier rolls a shape like any other (the round-1 gate is gone)."""
+    shaped = carriers = 0
+    for n in range(6, 21):
+        day = load_day(n)
+        for slot in day.forced_violations:
+            if slot in day.conventional_carrier_slots:
+                continue
+            if any(k in _SHAPE_KIND_TO_NAME for k in day.forced_violations[slot]):
+                continue      # authored, not rolled
+            for seed in range(60):
+                c = candidate_gen.generate(seed, day, slot)
+                kinds = {d.kind for d in c.truth.discrepancies}
+                if not kinds & _STEGO_COLOUR_KINDS:
+                    continue
+                carriers += 1
+                shaped += bool(kinds & set(_SHAPE_KIND_TO_NAME))
+    assert carriers >= 100, f"only {carriers} scripted stego carriers sampled"
+    assert 0.3 < shaped / carriers < 0.6, (
+        f"{shaped}/{carriers} unpinned scripted carriers took a shape")
+
+
+def test_bad_actor_can_carry_a_stego_payload_and_a_shape():
+    """Nick, 2026-09-19: Bad Actor gets STEGO_PAYLOAD_PRESENT, which is what
+    makes its membership in the shape-eligible set reachable at all."""
+    seen = {k: 0 for k in _SHAPE_KIND_TO_NAME}
+    stego = 0
+    for _a, _d, _s, c in _shape_sweep(days=range(5, 21), seeds=range(40),
+                                      archetypes=(Archetype.BAD_ACTOR,)):
+        kinds = {d.kind for d in c.truth.discrepancies}
+        assert not kinds & {DiscrepancyKind.ENCRYPTED_PAYLOAD,
+                            DiscrepancyKind.COVERT_C2_CHANNEL}
+        stego += DiscrepancyKind.STEGO_PAYLOAD_PRESENT in kinds
+        for k in kinds & set(seen):
+            seen[k] += 1
+    assert stego >= 100
+    assert all(n >= 10 for n in seen.values()), seen
+
+
+# ── Shapes in the rulebook ──────────────────────────────────────────────────
+
+
+def _shape_rule(day, kind):
+    rules = [r for r in day.rules if r.predicate == f"has_discrepancy:{kind.value}"]
+    assert len(rules) == 1, (day.number, kind.name, [r.id for r in rules])
+    return rules[0]
+
+
+def test_every_shape_rule_resolves_on_every_day_and_agrees_everywhere():
+    """For every shape kind on every day 1-20: exactly one live rule, its
+    predicate resolves, the rules tab's TODAY column reports the same
+    severity, and scoring (rules_engine.evaluate) files a carrier the same way.
+    """
+    from gameengine.ui.tui import rules_content
+
+    expected = {   # authored intent, restated rather than read back
+        DiscrepancyKind.SIGNAL_COMMS_PAYLOAD: "DDDDDDDwwwDDDDDDDDDw",
+        DiscrepancyKind.RECURSIVE_PAYLOAD:    "D" * 20,
+        DiscrepancyKind.HOSTILE_PAYLOAD:      "D" * 12 + "w" * 8,
+    }
+    for n in range(1, 21):
+        day = load_day(n)
+        for kind, sched in expected.items():
+            rule = _shape_rule(day, kind)
+            rules_engine.resolve(rule.predicate)
+            want = "disqualifying" if sched[n - 1] == "D" else "weighted"
+            assert rule.severity == want, (n, kind.name, rule.id)
+            status, _col = rules_content._rule_status(day, kind)
+            assert status == ("DENY" if want == "disqualifying" else "FLAG")
+            fake = _candidate_carrying_only(kind)
+            ev = rules_engine.evaluate(fake, day)
+            bucket = (ev.triggered_disqualifying if want == "disqualifying"
+                      else ev.triggered_weighted)
+            assert rule in bucket, (n, kind.name)
+
+
+def _candidate_carrying_only(kind):
+    """A generated candidate with its ground truth replaced by one kind."""
+    from dataclasses import replace
+
+    from gameengine.core.models import Discrepancy
+    c = candidate_gen.generate(SEED, unconstrained_day(), 0)
+    d = Discrepancy(kind=kind, severity=candidate_gen.severity_for(kind),
+                    revealed_by=candidate_gen._SEVERITY_REVEAL[kind][0],
+                    description="")
+    return replace(c, truth=replace(c.truth, discrepancies=(d,)))
+
+
+def test_shape_rule_mutations_flip_the_verdict_and_are_announced():
+    """Every day a shape rule's severity moves, a candidate carrying only that
+    shape changes rules verdict, and the Overseer's briefing says something
+    about it (a generic flip line, or the directive's own justification)."""
+    from gameengine.ui.tui.app import rule_change_lines
+
+    flips = 0
+    for n in range(2, 21):
+        prev, cur = load_day(n - 1), load_day(n)
+        changes = rules_engine.diff_rulesets(prev, cur)
+        lines = rule_change_lines(changes, n)
+        for kind in _SHAPE_KIND_TO_NAME:
+            before = rules_engine.evaluate(_candidate_carrying_only(kind), prev)
+            after = rules_engine.evaluate(_candidate_carrying_only(kind), cur)
+            if bool(before.triggered_disqualifying) == bool(after.triggered_disqualifying):
+                continue
+            flips += 1
+            touched = [c for c in changes
+                       if c.rule.predicate == f"has_discrepancy:{kind.value}"]
+            assert touched, f"day {n}: {kind.name}'s verdict moved silently"
+            if touched[0].kind == "added" and touched[0].rule.justification:
+                assert touched[0].rule.justification in lines
+            else:
+                assert lines, f"day {n}: {kind.name} changed, no briefing line"
+    # signal comms: days 8, 11, 20; hostile: DW-06 on day 13.
+    assert flips == 4, flips
+
+
+def test_no_variable_rule_moves_before_its_kind_can_be_planted():
+    """An overseer_variable flip announced before the revealing tool exists
+    would brief the player on a rule they cannot yet apply."""
+    for n in range(2, 21):
+        prev, cur = load_day(n - 1), load_day(n)
+        for change in rules_engine.diff_rulesets(prev, cur):
+            if change.kind != "severity" or change.rule.mutability != "overseer_variable":
+                continue
+            kind = DiscrepancyKind(change.rule.predicate.split(":", 1)[1])
+            assert candidate_gen.intro_day(kind) <= n, (
+                f"day {n}: {change.rule.id} flips before {kind.name} is "
+                f"plantable (day {candidate_gen.intro_day(kind)})")
+
+
+# ── UNSALTED_STORAGE's scheduled step, and rule-id hygiene ──────────────────
+
+
+def test_unsalted_rule_follows_the_hashcrack_step_and_is_announced():
+    """Minor (a flag) before Hashcrack's unlock day, major (a deny) from it —
+    the rule, the rules tab and the briefing all agree, and the step day is
+    derived from config rather than written down."""
+    from gameengine.ui.tui import rules_content
+    from gameengine.ui.tui.app import rule_change_lines
+
+    us = DiscrepancyKind.UNSALTED_STORAGE
+    step = config.TOOL_UNLOCK_DAY["hashcrack"]
+    assert candidate_gen._SEVERITY_BY_DAY[us][1] == step
+    assert candidate_gen._SEVERITY_REVEAL[us][0].value == "dossier"
+    for n in range(1, 21):
+        day = load_day(n)
+        rule = [r for r in day.rules if r.id == "rule_unsalted_storage"]
+        assert len(rule) == 1, n
+        want = "weighted" if n < step else "disqualifying"
+        assert rule[0].severity == want, (n, rule[0].severity)
+        assert rules_content._rule_status(day, us)[0] == (
+            "FLAG" if n < step else "DENY")
+    changes = rules_engine.diff_rulesets(load_day(step - 1), load_day(step))
+    moved = [c for c in changes if c.rule.id == "rule_unsalted_storage"]
+    assert len(moved) == 1 and moved[0].kind == "severity"
+    lines = rule_change_lines(moved, step)
+    assert lines and "unsalted" in lines[0].lower()
+    # ...and never announced on any other morning.
+    for n in range(2, 21):
+        if n == step:
+            continue
+        assert not [c for c in rules_engine.diff_rulesets(load_day(n - 1), load_day(n))
+                    if c.rule.id == "rule_unsalted_storage"], n
+
+
+def test_rule_ids_are_unique_in_every_day_file(tmp_path, monkeypatch):
+    """day_01.json shipped two rule_unsalted_storage and two
+    rule_cross_breach_reuse entries (2026-09-19 cleanup). Checked on the raw
+    JSON — the resolved book would hide a duplicate — and the loader now
+    refuses one."""
+    import json
+
+    for path in sorted(config.DAYS_DIR.glob("day_*.json")):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("rules", "added_rules"):
+            ids = [r["id"] for r in raw.get(key, [])]
+            dupes = {i for i in ids if ids.count(i) > 1}
+            assert not dupes, f"{path.name} {key}: duplicate ids {dupes}"
+
+    source = json.loads((_REAL_DAYS_DIR / "day_01.json").read_text(encoding="utf-8"))
+    source["rules"].append(dict(source["rules"][0]))
+    monkeypatch.setattr(config, "DAYS_DIR", tmp_path)
+    (tmp_path / "day_01.json").write_text(json.dumps(source), encoding="utf-8")
+    with pytest.raises(ValueError, match="more than once"):
+        load_day(1)
+
+
+# ── Reference panels are derived from their sources ─────────────────────────
+
+
+def test_reference_panels_follow_config(monkeypatch):
+    """Change a cost or a key in config and every reference panel that shows
+    it changes with it — no literal left behind."""
+    from gameengine.ui.tui import shared
+
+    monkeypatch.setattr(config, "STEGO_STAMP_COST", 7)
+    monkeypatch.setattr(config, "STEGO_FILTER_COST", 13)
+    monkeypatch.setitem(config.TOOL_COSTS, "ghostscan", 9)
+    monkeypatch.setitem(config.TOOL_COSTS, "hashcrack", 11)
+    monkeypatch.setitem(config.TOOL_COSTS, "logwatch", 12)
+    monkeypatch.setitem(config.FILTER_COSTS, "ghostscan", 17)
+    monkeypatch.setitem(config.FILTER_COSTS, "logwatch", 19)
+    monkeypatch.setitem(config.KEY_BINDINGS, "stamp_mode", "z")
+    monkeypatch.setitem(config.KEY_BINDINGS, "tool_logwatch", "k")
+
+    st = shared.build_ref_stegotool()
+    assert "7 ⏱ per stamp" in st and "cost: 13 ⏱" in st
+    assert "[#00ff9f]Z[/]" in st
+    assert "cost: 9 ⏱" in shared.build_ref_ghostscan()
+    assert "cost: +17 ⏱" in shared.build_ref_ghostscan()
+    assert "(11 ⏱)" in shared.build_ref_hashcrack()
+    lw = shared.build_ref_logwatch()
+    assert "cost: 12 ⏱" in lw and "cost: +19 ⏱" in lw and "[#00ff9f]k[/]" in lw
+    cand = shared.build_ref_candidate()
+    assert "9 ⏱" in cand and "7 ⏱/stamp" in cand
+
+    # Live state: an owned optimizer and a late day both move the price.
+    state = GameState(seed=SEED, current_day=12, compute_hours=100)
+    state.upgrades = {config.UPGRADE_TOOLCOST_GHOSTSCAN,
+                      config.UPGRADE_TOOLCOST_STEGOTOOL}
+    gs = shared.build_ref_ghostscan(state)
+    assert f"cost: {tools_bridge.tool_cost(state, 'ghostscan')} ⏱" in gs
+    assert f"cost: {13 - config.TOOLCOST_REDUCTION} ⏱" in shared.build_ref_stegotool(state)
+
+
+def test_stego_reference_lists_every_signature_and_glyph():
+    """Every colour signature and every carrier glyph the engine renders is
+    in the Stegotool reference, colour-true, and nothing is paired with the
+    wrong texture (the old panel had AMBER and VIOLET's swapped)."""
+    from gameengine.ui.tui import rules_content, shared
+
+    text = shared.build_ref_stegotool()
+    lines = text.split("\n")
+    for _kind, (sig, col, desc) in tools_bridge._STAMP_KIND_META.items():
+        i = next(i for i, ln in enumerate(lines) if ln.startswith(f"[{col}]{sig}"))
+        assert desc.split(" — ", 1)[-1] in lines[i + 1], sig
+    for _shape, (geometry, _p, kind) in tools_bridge._STAMP_SHAPE_META.items():
+        assert geometry.split(" — ")[0] in text
+        if kind is not None:
+            assert rules_content.label_for(kind) in text
+
+
+def test_day_1_slot_3_is_an_honest_deny_that_teaches_the_unsalted_flag():
+    """Day 1 slot 3 (2026-09-19 re-script). UNSALTED_STORAGE is a flag until
+    Hashcrack, so the slot's Clumsy Cutie also carries a throwaway email — the
+    day-1 deny — and the rulebook agrees with ground truth on every seed,
+    denying on the email while only flagging the password."""
+    day = load_day(1)
+    assert set(day.forced_violations[3]) == {DiscrepancyKind.UNSALTED_STORAGE,
+                                            DiscrepancyKind.DISPOSABLE_EMAIL}
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 3)
+        assert c.archetype is Archetype.CLUMSY_CUTIE
+        kinds = {d.kind for d in c.truth.discrepancies}
+        assert {DiscrepancyKind.UNSALTED_STORAGE,
+                DiscrepancyKind.DISPOSABLE_EMAIL} <= kinds, (seed, kinds)
+        # The evidence exists: a real throwaway domain on the dossier.
+        assert tools_bridge.classify_email_domain(c.email) == "prohibited", c.email
+        ev = rules_engine.evaluate(c, day)
+        denied_on = {r.predicate for r in ev.triggered_disqualifying}
+        assert denied_on == {"has_discrepancy:disposable_email"}, (seed, denied_on)
+        assert "has_discrepancy:unsalted_storage" in {
+            r.predicate for r in ev.triggered_weighted}
+        assert c.truth.correct_verdict is Verdict.DENY
+
+
+def test_disposable_email_carriers_of_any_archetype_show_a_throwaway_domain():
+    """DISPOSABLE_EMAIL left The Incompatible's exclusive list (Clumsy Cutie,
+    2026-09-19); its only evidence is the email, so every carrier of it, of
+    every archetype, must have a disposable domain — and nobody else must."""
+    seen_clumsy = 0
+    for archetype, _d, _s, c in _shape_sweep(days=range(1, 13), seeds=range(40)):
+        has = any(d.kind is DiscrepancyKind.DISPOSABLE_EMAIL
+                  for d in c.truth.discrepancies)
+        cls = tools_bridge.classify_email_domain(c.email)
+        if archetype is Archetype.THE_INCOMPATIBLE:
+            continue    # its email predates the kind's roll; covered by #57
+        assert (cls == "prohibited") == has, (archetype.value, c.email, has)
+        seen_clumsy += has and archetype is Archetype.CLUMSY_CUTIE
+    assert seen_clumsy >= 20, f"only {seen_clumsy} Clumsy carriers — inert"
 
 
 # ─── Issues #57 / #58 — domain-class integrity ──────────────────────────────
@@ -2731,7 +3555,10 @@ def test_rule_severity_matches_violation_tier(day1):
         if not rule.predicate.startswith("has_discrepancy:"):
             continue
         kind = DiscrepancyKind(rule.predicate.split(":", 1)[1])
-        _tool, sev = candidate_gen._SEVERITY_REVEAL[kind]
+        # 2026-09-19: the kind's severity ON DAY 1, not its settled weight —
+        # UNSALTED_STORAGE is minor until Hashcrack arrives, so its day-1 rule
+        # is a flag (candidate_gen._SEVERITY_BY_DAY).
+        sev = candidate_gen.severity_for(kind, day1.number)
         expected = "disqualifying" if sev in ("major", "critical") else "weighted"
         assert rule.severity == expected, (
             f"{rule.id}: {kind.name} is {sev} so the rule should be "
@@ -2761,7 +3588,15 @@ def test_the_ruleset_now_agrees_with_ground_truth_on_the_verdict():
     """
     from dataclasses import replace
 
+    from gameengine.core.content_loader import apply_severity_steps
+
     base = unconstrained_day()
+    # 2026-09-19: day 1's book with day 5's SCHEDULED steps applied (the
+    # UNSALTED_STORAGE rule is a flag on days 1-2 and a deny from Hashcrack's
+    # unlock day). Re-numbering day 1 to day 5 without them compared day-5
+    # candidates against a day-1-only rule. Overseer flips are deliberately
+    # left out, as before — they are content, not rulebook completeness.
+    base = replace(base, rules=apply_severity_steps(base.rules, 5))
     divergent = []
     for archetype in candidate_gen.ARCHETYPE_SPECS:
         if archetype is Archetype.WHITE_HAT:
@@ -2949,17 +3784,14 @@ def test_cross_breach_reuse_candidates_appear_in_the_breach_lists():
 def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
     """The two pages must agree about where the candidate is leaked (#61).
 
-    This is the actual mechanism the issue is about: _breach_db_for_candidate
-    is shared precisely so the surfaces cannot diverge, and the second corpus
-    for reuse used to bypass it entirely with its own
-    `(int(id,16) >> 8) % len(...)` pick.
+    _breach_db_for_candidate is shared precisely so the surfaces cannot
+    diverge, and the second corpus for reuse used to bypass it entirely with
+    its own `(int(id,16) >> 8) % len(...)` pick.
 
-    2026-09-14: now checks THREE surfaces, not two. The cipher-block rework
-    split the old Hashcrack log in half — the BREACH_MATCH rows went to
-    Logwatch, and the cipher block grew its own corpus readout so Hashcrack
-    stays self-sufficient for these kinds (it unlocks a day before Logwatch
-    does). Three renderers of one fact is three chances to drift, so all three
-    are pinned here.
+    2026-09-14 this pinned THREE surfaces (panel, Logwatch BREACH_MATCH rows,
+    cipher readout). 2026-09-19 (Logwatch report overhaul, Nick): breach hits
+    were removed from Logwatch entirely, so it is two surfaces again — and the
+    Logwatch log is now pinned to carry NO corpus rows at all.
     """
     import random as _r
 
@@ -2974,11 +3806,12 @@ def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
                     n for n, _y, _cl, entries in
                     tools_bridge.get_breach_lists(c, _BREACH_TEST_SEED, day.number)
                     if any(m for _e, m in entries))
-                log = sorted({e.extra for e in tools_bridge._lw_candidate_entries(
-                    c, _r.Random(1), day.number) if e.event == "BREACH_MATCH"})
-                assert panel == log, (
-                    f"day {day_n} {c.archetype.value}: Ghostscan panel seeds "
-                    f"{panel}, Logwatch log names {log}")
+                log_rows = [e for e in tools_bridge._lw_candidate_entries(
+                    c, _r.Random(1), day.number) if e.event == "BREACH_MATCH"]
+                assert not log_rows, (
+                    f"day {day_n} {c.archetype.value}: Logwatch emitted "
+                    f"{len(log_rows)} BREACH_MATCH rows — breach hits belong to "
+                    f"Ghostscan and Hashcrack only")
 
                 # The cipher block names the same corpora in its own prose.
                 block = tools_bridge.build_cipher_block(c, day.number)
@@ -2987,7 +3820,7 @@ def test_ghostscan_and_hashcrack_name_the_same_breach_corpora():
                 for corpus in panel:
                     assert corpus in readout, (
                         f"day {day_n} {c.archetype.value}: cipher block omits "
-                        f"{corpus!r}, which the other two surfaces both name")
+                        f"{corpus!r}, which the breach panel names")
     assert checked, "guard is inert"
 
 
@@ -3652,11 +4485,6 @@ def test_log_generation_timing_knobs_are_all_present_and_well_formed():
         "LW_INSIDER_STEP2_GAP", "LW_AFTERHOURS_GAP",
         "LW_SLOW_FIRST_TS", "LW_SLOW_BURST_SIZE", "LW_SLOW_GAP",
         "LW_NOISE_TIME_WINDOW",
-        # The only HC_* knob left: the cipher-block rework deleted the
-        # Hashcrack credential log and every knob that paced it. This one
-        # survives because the BREACH_MATCH rows it paces were relocated into
-        # the Logwatch log rather than deleted.
-        "HC_BREACH_ROW_GAP",
     ]
     for name in range_knobs:
         val = getattr(config, name)
@@ -3890,6 +4718,28 @@ def test_removed_rules_wrong_type_raises(tmp_path, monkeypatch):
         load_day(89)
 
 
+def _same_day_without_directives(day1, number):
+    """Day `number`'s book with no directive — the baseline a directive diff
+    should be measured against (2026-09-19).
+
+    These tests used to diff against raw day 1. That only isolated the
+    directive while day 1 and day 92 happened to agree on every other rule;
+    since UNSALTED_STORAGE's rule follows its scheduled step (weighted on day
+    1, disqualifying from Hashcrack's unlock day) they no longer do, and the
+    step is a real, announced change between those two days — not something
+    the directive did.
+    """
+    from dataclasses import replace
+
+    from gameengine.core.content_loader import apply_severity_steps
+
+    # _write_directive_day restates day 1's rules verbatim (no overseer
+    # flips), so the matching baseline is day 1's book with only the
+    # scheduled steps applied — which is exactly what load_day adds to it.
+    return replace(day1, number=number,
+                   rules=apply_severity_steps(day1.rules, number))
+
+
 @pytest.mark.parametrize("directive,superseded_id", _ALL_DIRECTIVES,
                          ids=["dw01", "dw02", "dw03", "dw04"])
 def test_each_directive_loads_and_diffs_as_added_and_removed(
@@ -3905,7 +4755,8 @@ def test_each_directive_loads_and_diffs_as_added_and_removed(
     assert superseded_id not in {r.id for r in loaded.rules}
     assert directive["id"] in {r.id for r in loaded.rules}
 
-    changes = rules_engine.diff_rulesets(day1, loaded)
+    changes = rules_engine.diff_rulesets(_same_day_without_directives(day1, 92),
+                                         loaded)
     by_kind = {c.kind: c for c in changes}
     assert set(by_kind) == {"added", "removed"}, changes
     assert by_kind["added"].rule.id == directive["id"]
@@ -4110,7 +4961,8 @@ def test_a_real_directive_day_produces_a_coherent_briefing(
 
     _write_directive_day(tmp_path, monkeypatch, 92, added_rules=[directive])
     loaded = load_day(92)
-    changes = rules_engine.diff_rulesets(day1, loaded)
+    changes = rules_engine.diff_rulesets(_same_day_without_directives(day1, 92),
+                                         loaded)
     lines = rule_change_lines(changes, 92)
 
     # Exactly one authored beat per directive, not two (a bespoke line for
@@ -4871,10 +5723,14 @@ def test_day_12_white_hat_carries_all_three_signals_readable_by_day_12():
     from gameengine.core.models import ToolName
 
     day = load_day(12)
+    # 2026-09-19: plus a fourth, the carrier glyph — SIGNAL_COMMS_PAYLOAD, the
+    # cross, riding on the forced ENCRYPTED_PAYLOAD carrier. Also a Stegotool
+    # read, so the "readable by a tool the player owns" claim still covers it.
     expected = {
         DiscrepancyKind.LOW_AND_SLOW,
         DiscrepancyKind.ENCRYPTED_PAYLOAD,
         DiscrepancyKind.BURNER_IDENTITY,
+        DiscrepancyKind.SIGNAL_COMMS_PAYLOAD,
     }
     assert set(day.forced_violations.get(7, ())) == expected
 
@@ -5313,14 +6169,36 @@ _DW05_PAYLOAD_CRACKDOWN = {
     "supersedes": "dw04_payload_leniency",
 }
 
+# 2026-09-19 — DW-06 (the carrier-shape directive) fires on day 13 beside
+# DW-05 and is re-listed through day 20, so both sets below grew by one:
+# dw06 joins the active set, and the rule it supersedes, rule_hostile_payload,
+# joins the retired set. Copy is canonical in CONTENT_AUTHORING.md.
+_DW06_HOSTILE_PAYLOAD_LENIENCY = {
+    "id": "dw06_hostile_payload_leniency",
+    "text": ("Flag (do not auto-deny) an image whose carrier forms parallel "
+             "slash strokes — note the hostile payload, don't deny on the "
+             "glyph alone."),
+    "predicate": "has_discrepancy:hostile_payload",
+    "severity": "weighted",
+    "mutability": "dark_web",
+    "justification": (
+        "One more while they're rewriting the payload rules. Those images "
+        "with the parallel strokes — the 'hostile' ones — upstairs says a few "
+        "lines in a picture aren't a confession. Flag them, let them through. "
+        "Yes, the same morning they tightened encryption. Don't ask me to "
+        "make that add up; I've stopped trying."),
+    "supersedes": "rule_hostile_payload",
+}
+
 _PHASE5B1_ACTIVE_DW_IDS = {
     "dw01_identity_leniency", "dw02_forum_leniency",
     "dw03_stuffing_leniency", "dw05_payload_crackdown",
+    "dw06_hostile_payload_leniency",
 }
 _PHASE5B1_SUPERSEDED = {
     "rule_sock_puppet_accounts", "rule_threat_forum",
     "rule_credential_stuffing", "rule_encrypted_payload",
-    "dw04_payload_leniency",
+    "dw04_payload_leniency", "rule_hostile_payload",
 }
 
 
@@ -5381,7 +6259,10 @@ def test_day_13_introduces_dw05_against_day_12():
     assert added_removed == {
         ("added", "dw05_payload_crackdown"),
         ("removed", "dw04_payload_leniency"),
-    }, f"day 13: expected exactly dw05 in / dw04 out, got {added_removed}"
+        # 2026-09-19: DW-06 lands the same morning (see _DW06_... above).
+        ("added", "dw06_hostile_payload_leniency"),
+        ("removed", "rule_hostile_payload"),
+    }, f"day 13: expected exactly dw05+dw06 in / dw04+hostile out, got {added_removed}"
 
 
 def test_day_13_rule_change_lines_speak_dw05_justification():
@@ -5394,9 +6275,13 @@ def test_day_13_rule_change_lines_speak_dw05_justification():
     day13 = load_day(13)
     changes = rules_engine.diff_rulesets(day12, day13)
     lines = rule_change_lines(changes, 13)
-    assert lines == [_DW05_PAYLOAD_CRACKDOWN["justification"]], (
-        "expected exactly one line — dw04's removal must fold into dw05's "
-        "own justification, not get a second generic line")
+    # 2026-09-19: DW-06's justification follows DW-05's, in rulebook order —
+    # still one line per directive, and both removals folded in.
+    assert lines == [_DW05_PAYLOAD_CRACKDOWN["justification"],
+                     _DW06_HOSTILE_PAYLOAD_LENIENCY["justification"]], (
+        "expected exactly two lines — dw04's and rule_hostile_payload's "
+        "removals must fold into dw05's / dw06's own justifications, not get "
+        "generic lines of their own")
 
 
 def test_day_17_introduces_no_new_directive():
@@ -6006,7 +6891,7 @@ _ALL_KNOWN_DIRECTIVES_BY_ID = {
     d["id"]: d for d in (
         _DW01_IDENTITY_LENIENCY, _DW02_FORUM_LENIENCY,
         _DW03_STUFFING_LENIENCY, _DW04_PAYLOAD_LENIENCY,
-        _DW05_PAYLOAD_CRACKDOWN,
+        _DW05_PAYLOAD_CRACKDOWN, _DW06_HOSTILE_PAYLOAD_LENIENCY,
     )
 }
 

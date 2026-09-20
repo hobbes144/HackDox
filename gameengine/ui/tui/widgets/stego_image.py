@@ -30,6 +30,11 @@ class StegoImagePanel(VerticalScroll):
     Revealed cells re-render by what they carry:
       carrier cells → payload-type color (amber/crimson/violet)
       clean cells   → faint green wash
+    The payload's second axis, its OPERATION, needs no colour of its own: it
+    is the glyph the carrier cells trace (tools_bridge.StegoShape — blocks,
+    cross, hollow loop, parallel slashes), so it emerges on its own as the
+    player reveals more of the zone. Nothing here reads `img.shape`; painting
+    shape specially would hand over what the player is meant to see.
     The subtle free-tier tint over the hot zone is preserved, so a sharp
     eye can still pre-read the image before spending a single ⏱.
 

@@ -11,7 +11,7 @@ import json
 from dataclasses import replace
 
 from .. import config
-from .candidate_gen import stable_hash
+from .candidate_gen import stable_hash, stepped_rule_severity
 from .models import (
     RULE_MUTABILITIES,
     Archetype,
@@ -188,6 +188,89 @@ def _parse_forced_violations(
     return out
 
 
+def _parse_carrier_shapes(
+    raw: dict, day_number: int, candidate_count: int,
+) -> frozenset[int]:
+    """Parse the day's pinned carrier shapes (2026-09-19).
+
+    JSON shape: {"<slot index>": "conventional"}. The only pin is
+    "conventional": a SPECIAL shape is authored the way any other scripted
+    violation is, by naming its kind in forced_violations — two spellings for
+    one fact would be two places to drift.
+    """
+    out: set[int] = set()
+    for slot_raw, value in (raw or {}).items():
+        slot = int(slot_raw)
+        _validate_slot(slot, day_number, candidate_count, "carrier_shape")
+        if value != "conventional":
+            raise ValueError(
+                f"day {day_number}: carrier_shape slot {slot} is {value!r} — "
+                f"the only pin is \"conventional\"; author a special shape "
+                f"by naming its kind (signal_comms_payload / "
+                f"recursive_payload / hostile_payload) in forced_violations")
+        out.add(slot)
+    return frozenset(out)
+
+
+def _validate_forced_shapes(
+    forced_violations: dict[int, tuple[DiscrepancyKind, ...]],
+    forced_includes: dict[int, Archetype],
+    conventional_slots: frozenset[int],
+    day_number: int,
+) -> None:
+    """A scripted carrier shape must be able to land — fail loudly if not.
+
+    A shape kind is a free rider on a stego COLOUR kind (see
+    candidate_gen._STEGO_SHAPE_KINDS): with no carrier there is no glyph, and
+    the generator would drop the shape without a word — the silent-drop this
+    module's validators exist to prevent. So a slot that forces a shape must:
+      • force exactly one shape kind;
+      • also force a stego colour kind — not merely be able to roll one, which
+        would make the scripted shape land on some seeds and not others;
+      • pin (forced_includes) a shape-eligible archetype that lists that
+        colour kind in its eligible_kinds;
+      • not also be pinned conventional.
+    """
+    from .candidate_gen import (
+        _SHAPE_ELIGIBLE_ARCHETYPES,
+        _STEGO_ARTIFACT_KINDS,
+        _STEGO_SHAPE_KINDS,
+        ARCHETYPE_SPECS,
+    )
+
+    for slot, kinds in forced_violations.items():
+        shapes = [k for k in kinds if k in _STEGO_SHAPE_KINDS]
+        if not shapes:
+            continue
+        where = f"day {day_number}: forced_violations slot {slot}"
+        if len(shapes) > 1:
+            raise ValueError(
+                f"{where} forces {[k.name for k in shapes]} — one image, one "
+                f"glyph: at most one carrier-shape kind per slot")
+        colours = [k for k in kinds if k in _STEGO_ARTIFACT_KINDS]
+        if not colours:
+            raise ValueError(
+                f"{where} forces {shapes[0].name} but no stego colour kind "
+                f"(stego_payload_present / encrypted_payload / "
+                f"covert_c2_channel) — a carrier shape needs a carrier")
+        archetype = forced_includes.get(slot)
+        if archetype is None or archetype not in _SHAPE_ELIGIBLE_ARCHETYPES:
+            raise ValueError(
+                f"{where} forces {shapes[0].name}, but the slot is not pinned "
+                f"(forced_includes) to a shape-eligible archetype "
+                f"({sorted(a.value for a in _SHAPE_ELIGIBLE_ARCHETYPES)})")
+        if not any(c in ARCHETYPE_SPECS[archetype].eligible_kinds
+                   for c in colours):
+            raise ValueError(
+                f"{where}: {archetype.value} cannot carry "
+                f"{[c.name for c in colours]}, so {shapes[0].name} would have "
+                f"no carrier")
+        if slot in conventional_slots:
+            raise ValueError(
+                f"{where} forces {shapes[0].name} but carrier_shape pins the "
+                f"same slot conventional — the two contradict each other")
+
+
 def _parse_forced_chat(
     raw: dict, day_number: int, candidate_count: int,
     forced_includes: dict[int, Archetype],
@@ -324,7 +407,65 @@ def mutate_variable_rules(
         strict = stable_hash(rule.id, epoch) % 2 == 0
         out.append(replace(
             rule, severity="disqualifying" if strict else "weighted"))
+    # 2026-09-19: the day's scheduled severity steps are part of "day N's book
+    # from the day-1 template" too, so every caller that derives a day's rules
+    # this way (load_day's inherit branch, synthesize_day, the tests) gets them.
+    return apply_severity_steps(tuple(out), day_number)
+
+
+def _rule_kind(rule: Rule) -> DiscrepancyKind | None:
+    if not rule.predicate.startswith("has_discrepancy:"):
+        return None
+    try:
+        return DiscrepancyKind(rule.predicate.split(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def apply_severity_steps(
+    rules: tuple[Rule, ...],
+    day_number: int,
+) -> tuple[Rule, ...]:
+    """Make a `fixed` rule follow its kind's scheduled severity step.
+
+    candidate_gen._SEVERITY_BY_DAY steps a few kinds up on a set day (today:
+    UNSALTED_STORAGE, minor until Hashcrack arrives, major from then). The
+    violation's rule has to move with it or the book and the evidence board
+    disagree — which is exactly what day_01.json did before 2026-09-19: the
+    kind filed as a minor note on days 1-2 while its rule said "deny".
+
+    Derived, not authored per day, for the same reason the step itself is
+    derived from config.TOOL_UNLOCK_DAY: move the tool and the rule follows.
+    Only `fixed` rules are stepped — an overseer_variable or dark_web rule on
+    such a kind already has its own authored way of moving, and letting two
+    mechanisms fight over one rule's severity would make it unpredictable.
+    """
+    out: list[Rule] = []
+    for rule in rules:
+        kind = _rule_kind(rule)
+        stepped = (stepped_rule_severity(kind, day_number)
+                   if kind is not None and rule.mutability == "fixed" else None)
+        out.append(rule if stepped is None or stepped == rule.severity
+                   else replace(rule, severity=stepped))
     return tuple(out)
+
+
+def _reject_duplicate_rule_ids(rules: tuple[Rule, ...], day_number: int) -> None:
+    """Two rules with one id is always a content bug (2026-09-19).
+
+    day_01.json shipped two `rule_unsalted_storage` and two
+    `rule_cross_breach_reuse` entries — older and newer wordings of the same
+    rule, both live. Every consumer keys rules by id (diff_rulesets, the
+    supersedes/removed_rules machinery), so one copy silently shadowed the
+    other there, while the rules tab printed both.
+    """
+    seen: set[str] = set()
+    for rule in rules:
+        if rule.id in seen:
+            raise ValueError(
+                f"day {day_number}: rule id {rule.id!r} appears more than "
+                f"once in the rulebook")
+        seen.add(rule.id)
 
 
 def synthesize_day(day_number: int) -> Day:
@@ -561,6 +702,12 @@ def load_day(day_number: int) -> Day:
                          "inherits from it")
     else:
         rules = mutate_variable_rules(load_day(1).rules, raw["number"])
+    _reject_duplicate_rule_ids(rules, raw["number"])
+    # 2026-09-19: kinds with a scheduled severity step carry the step into
+    # their fixed rule (weighted while minor, disqualifying once major). The
+    # inherit branch already got it from mutate_variable_rules; a day that
+    # restates its whole `rules` array (day 1) gets it here. Idempotent.
+    rules = apply_severity_steps(rules, raw["number"])
     # Issue #37 — Dark Web directives (and any other future content that needs
     # to add/retire one rule without restating the whole book) layer on top of
     # whichever base the two branches above produced. NOTE: this does NOT make
@@ -608,6 +755,11 @@ def load_day(day_number: int) -> Day:
     forced_chat = _parse_forced_chat(
         raw.get("forced_chat", {}), raw["number"], candidate_count,
         forced_includes)
+    # 2026-09-19 — carrier-shape scripting (see _validate_forced_shapes).
+    conventional_carrier_slots = _parse_carrier_shapes(
+        raw.get("carrier_shape", {}), raw["number"], candidate_count)
+    _validate_forced_shapes(forced_violations, forced_includes,
+                            conventional_carrier_slots, raw["number"])
     rule_sheet = _parse_rule_sheet(raw.get("rule_sheet"))
     return Day(
         number=raw["number"],
@@ -625,6 +777,7 @@ def load_day(day_number: int) -> Day:
         forced_chat=forced_chat,
         rule_sheet=rule_sheet,
         directive_removed_rule_ids=directive_removed_rule_ids,
+        conventional_carrier_slots=conventional_carrier_slots,
     )
 
 

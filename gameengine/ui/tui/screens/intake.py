@@ -28,11 +28,11 @@ from gameengine.ui.tui.shared import (
     _PAGE_NAMES,
     _PAGE_TAB,
     _PAGE_TOOL,
-    _REF_CANDIDATE,
-    _REF_GHOSTSCAN,
-    _REF_HASHCRACK,
-    _REF_LOGWATCH,
-    _REF_STEGOTOOL,
+    build_ref_candidate,
+    build_ref_ghostscan,
+    build_ref_hashcrack,
+    build_ref_logwatch,
+    build_ref_stegotool,
 )
 from gameengine.ui.tui.widgets import (
     BreachListPanel,
@@ -96,7 +96,8 @@ class IntakeScreen(Screen):
         self._rules_scroll: dict[str, float] = {}
         # ── Hashcrack cipher-block minigame state ─────────────────────
         # (the shared credential audit log this page used to own is gone —
-        # its HASH_SUBMIT/BREACH_MATCH rows now live in the Logwatch day log)
+        # its HASH_SUBMIT row now lives in the Logwatch day log; BREACH_MATCH
+        # was dropped 2026-09-19 — breach hits are Ghostscan/Hashcrack only)
         self._decrypt_mode     = False   # arrows/Enter captured while True
         self._cipher_resolved  = False   # recovery block printed once
 
@@ -508,10 +509,10 @@ class IntakeScreen(Screen):
             cd.set_candidate(c)
 
         # Candidate-page reference: today's rules + global accept/reject guide
-        self.ref_main.update_content(_REF_CANDIDATE)
+        self.ref_main.update_content(build_ref_candidate(self._state))
 
         # Reference panel: target email + claimed IP + today's rules + violation guide
-        self.ref_hc.update_content(_REF_HASHCRACK)
+        self.ref_hc.update_content(build_ref_hashcrack(self._state))
 
         # Clear the shared evidence record and repaint every board view.
         self.evidence_state.clear()
@@ -520,7 +521,7 @@ class IntakeScreen(Screen):
         # All tool terminals cleared via set_initial_content
         # Ghostscan: passive identity check (free) + breach list pre-population
         self.term_gs.set_initial_content(tools_bridge.get_ghostscan_identity(c))
-        self.ref_gs.update_content(_REF_GHOSTSCAN)
+        self.ref_gs.update_content(build_ref_ghostscan(self._state))
         self.breach_lists.load_candidate(c, self._state.seed, self._day)
         # Hashcrack: the cipher block is the page. The findings terminal gets
         # the free intro (block shape facts, and the tier LABEL only with
@@ -545,7 +546,7 @@ class IntakeScreen(Screen):
             self._day_log, c,
             upgrade_highlight=config.UPGRADE_LOG_HIGHLIGHT in ups))
         # Logwatch reference: target info + today's rules + attack pattern guide
-        self.ref_lw.update_content(_REF_LOGWATCH)
+        self.ref_lw.update_content(build_ref_logwatch(self._state))
         # Stegotool: findings terminal gets the free stats block; the pixel
         # grid lives in the image viewer where the stamp minigame runs.
         self._stamp_mode     = False
@@ -554,7 +555,7 @@ class IntakeScreen(Screen):
         self.term_st.set_initial_content(tools_bridge.get_stego_stats(c, upgrades=ups))
         self.image_st.load_candidate(c, self._day.number if self._day else 1)
         # Stegotool reference: stamp-mode controls + signature color legend
-        self.ref_st.update_content(_REF_STEGOTOOL)
+        self.ref_st.update_content(build_ref_stegotool(self._state))
 
         self.status.refresh_status(self._state, slot, self._page_index)
         self._refresh_footer()

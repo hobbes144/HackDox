@@ -243,8 +243,8 @@ BREACH_DB_UNLOCK_DAY: dict[str, int] = {
 }
 
 # CROSS_BREACH_REUSE means "this password recurs across MULTIPLE corpora", so
-# it is not expressible — in ground truth or in the Hashcrack log, which prints
-# two BREACH_MATCH rows for it — until at least two databases are unlocked.
+# it is not expressible — in ground truth or in the cipher block's readout, which
+# names two corpora for it — until at least two databases are unlocked.
 # The generator refuses to plant it below this threshold. Under the schedule
 # above that is day 3, which is also the kind's evidence-tier intro day
 # (Hashcrack), so today the constraint binds exactly where the tier gate
@@ -373,6 +373,17 @@ STEGO_GRID_BASE: dict[str, tuple[int, int]] = {
 STEGO_GRID_GROWTH_COLS_PER_DAY = 4   # extra columns per day beyond day 1
 STEGO_GRID_GROWTH_ROWS_PER_DAY = 2   # extra rows per day beyond day 1
 STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflows
+
+# ── Carrier SHAPE axis (2026-09-19) ───────────────────────────────────────
+# Independent of the payload COLOUR above: the glyph the carrier cells form
+# encodes the payload's purpose. Rolled in candidate_gen._roll_discrepancies
+# ONLY for a shape-eligible archetype (candidate_gen._SHAPE_ELIGIBLE_ARCHETYPES)
+# that actually carries a stego colour kind. This is the chance such a carrier
+# stays CONVENTIONAL (clumped blocks — no extra violation); the remainder is
+# split evenly across the three special shapes (cross / enclosed / slash).
+# Kept the majority outcome so a special glyph stays a notable find rather
+# than the default.
+STEGO_SHAPE_CONVENTIONAL_CHANCE = 0.55
 
 # ─── Hashcrack cipher block ──────────────────────────────────────────────────
 #
@@ -890,7 +901,9 @@ LW_NOISE_EXTERNAL_CITY_FRACTION = 0.3
 # All times are seconds-since-midnight on the shared log's single day.
 
 # Logwatch — normal/legit candidate activity window and pacing
-LW_WORKDAY_WINDOW        = (25200, 54000)   # 7am–3pm: when a candidate's day starts
+LW_WORKDAY_WINDOW        = (29100, 41400)   # 08:05–11:30: when a candidate's day starts
+                                            # (2026-09-19: was 7am–3pm; must start inside
+                                            # LW_SHIFT_START for the Activity Report)
 LW_NORMAL_LOGIN_COUNT    = (2, 3)           # # of plain AUTH_OK rows with no violation
 LW_NORMAL_LOGIN_GAP      = (1800, 7200)     # seconds between those logins
 LW_CLEAN_ACTIVITY_COUNT  = (3, 5)           # rows for a candidate with NO violations at all
@@ -913,6 +926,51 @@ LW_SLOW_FIRST_TS         = (3600, 10800)    # first low-and-slow AUTH_FAIL
 LW_SLOW_BURST_SIZE       = (3, 4)           # scattered AUTH_FAIL count
 LW_SLOW_GAP              = (9000, 16000)    # gap between each scattered attempt
 
+# ─── Logwatch Activity Report (2026-09-19 overhaul) ─────────────────────────
+#
+# The free tier of the Logwatch page is an aggregate Activity Report computed
+# FROM the day log (tools_bridge / core/logwatch_report.py) — never from
+# ground truth, so the report and the log can never disagree. These knobs
+# define what the report calls normal.
+
+# The one standard shift every candidate claims. Off-hours = candidate's own
+# successful activity outside [start, end). Seconds since midnight.
+LW_SHIFT_START           = 8 * 3600         # 08:00
+LW_SHIFT_END             = 18 * 3600        # 18:00
+LW_SHIFT_END_MARGIN      = 900              # daytime activity is compressed to end this early
+
+# Attack alert: this many LINKED auth failures (on the account, or from an
+# external IP that later logged in as it) inside one window trips the
+# report's unclassified "authentication anomaly" alert. Low-and-slow is built
+# to never reach it.
+LW_BURST_WINDOW          = 600              # seconds
+LW_BURST_ALERT           = 4
+
+# Two CLEAN login origins in different cities closer together than this are
+# listed as a travel pair on the report (with the minutes between them).
+LW_TRAVEL_REPORT_WINDOW  = 4 * 3600
+
+# An origin with at least this many linked failures FROM its IP is treated as
+# hostile (an attacker's foothold), not the user's own travel, and is left out
+# of travel pairs. 2, not 1, so a single benign typo never disqualifies the
+# user's real location.
+LW_HOSTILE_ORIGIN_FAILS  = 2
+
+# Honest noise: chance any candidate fumbles one password during the shift,
+# so "has a failed login" is never on its own a tell.
+LW_BENIGN_TYPO_CHANCE    = 0.3
+
+# Activity Profile bars: metric -> (label, normal ceiling, bar scale max).
+# The ceiling is drawn as a │ tick; a value past it is "out of range".
+LW_PROFILE_METRICS: dict[str, tuple[str, int, int]] = {
+    "logins":     ("Logins",        4, 8),
+    "failures":   ("Auth failures", 1, 8),
+    "origins":    ("Origins",       1, 4),
+    "files":      ("File access",   5, 10),
+    "privileged": ("Privileged",    0, 4),
+    "off_hours":  ("Off-hours",     0, 6),
+}
+
 # Logwatch — noise (unrelated background accounts)
 LW_NOISE_TIME_WINDOW     = (21600, 86399)
 # Weighted pool an unrelated noise row's event type is drawn from — repeat an
@@ -930,10 +988,8 @@ LW_NOISE_EVENT_WEIGHTS: list[str] = [
 # generating for itself via LW_BRUTE_BURST_SIZE / LW_STUFFING_SPRAY_SIZE
 # above), and HC_NOISE_* (noise rows that no longer exist).
 #
-# Only this one survives, because only the rows it paces survived: the
-# BREACH_MATCH corroboration now emitted at the end of
-# tools_bridge._lw_candidate_entries.
-HC_BREACH_ROW_GAP        = (5, 20)          # gap between a candidate's breach-match rows
+# The last survivor, HC_BREACH_ROW_GAP, went on 2026-09-19 with the
+# BREACH_MATCH rows it paced (breach hits are no longer Logwatch's business).
 
 # ─── Upgrades (issue #23) ────────────────────────────────────────────────────
 #

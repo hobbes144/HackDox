@@ -140,6 +140,21 @@ class RuleChange:
     previous_severity: str | None = None
 
 
+def _is_scheduled_step(rule: Rule) -> bool:
+    """A `fixed` rule whose kind has a scheduled severity step
+    (candidate_gen._SEVERITY_BY_DAY, applied by content_loader.
+    apply_severity_steps). Its severity moving on the step day is authored
+    policy, not a content accident, so the briefing announces it — the second
+    carve-out from "fixed rules never generate a line", alongside #37's
+    directive removals, and for the same reason: the change was intended."""
+    from .candidate_gen import _SEVERITY_BY_DAY
+
+    if not rule.predicate.startswith("has_discrepancy:"):
+        return False
+    value = rule.predicate.split(":", 1)[1]
+    return any(k.value == value for k in _SEVERITY_BY_DAY)
+
+
 def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
     """What changed between two days' rulebooks, restricted to mutable rules.
 
@@ -168,9 +183,11 @@ def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
     changes: list[RuleChange] = []
 
     for rule in current.rules:
-        if rule.mutability == "fixed":
+        if rule.mutability == "fixed" and not _is_scheduled_step(rule):
             continue
         was = prev_by_id.get(rule.id)
+        if rule.mutability == "fixed" and was is None:
+            continue   # a stepped rule only ever reports its severity move
         if was is None:
             changes.append(RuleChange("added", rule))
         elif was.severity != rule.severity:

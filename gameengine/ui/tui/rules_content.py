@@ -70,6 +70,10 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("FORENSICS",   DiscrepancyKind.CLAIMED_IP_MISMATCH,    "Claimed-IP mismatch"),
     # CREDENTIAL (Hashcrack)
     #
+    # (2026-09-19 note: the UNSALTED_STORAGE half of the history below is
+    # superseded — it moved on again to DOSSIER on 2026-09-15; see the DOSSIER
+    # entry above. Kept for the WEAK_ENCRYPTION reasoning.)
+    #
     # WEAK_ENCRYPTION and UNSALTED_STORAGE moved here from DOSSIER on
     # 2026-09-14, and they moved for two different reasons.
     #
@@ -97,6 +101,12 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     ("STEGO",       DiscrepancyKind.STEGO_PAYLOAD_PRESENT,  "Stego payload"),
     ("STEGO",       DiscrepancyKind.COVERT_C2_CHANNEL,      "Covert C2 channel"),
     ("STEGO",       DiscrepancyKind.ENCRYPTED_PAYLOAD,      "Encrypted covert payload"),
+    # 2026-09-19: the carrier-SHAPE axis — what the payload is FOR, read off
+    # the glyph its carrier cells form. Always rides on one of the three
+    # colour kinds above; a conventional (blocky) carrier plants none of these.
+    ("STEGO",       DiscrepancyKind.SIGNAL_COMMS_PAYLOAD,   "Signal comms payload"),
+    ("STEGO",       DiscrepancyKind.RECURSIVE_PAYLOAD,      "Recursive payload"),
+    ("STEGO",       DiscrepancyKind.HOSTILE_PAYLOAD,        "Hostile payload"),
 ]
 
 # Engine-derived lookups — the dynamic backbone.
@@ -304,6 +314,15 @@ VIOLATION_CLUSTERS: list[
         DiscrepancyKind.STEGO_PAYLOAD_PRESENT,
         DiscrepancyKind.COVERT_C2_CHANNEL,
         DiscrepancyKind.ENCRYPTED_PAYLOAD)),
+    # 2026-09-19: the second stego axis gets its own row rather than joining
+    # the colour row above. The two are read differently (a colour off any one
+    # revealed cell, a glyph off the whole revealed zone) and a carrier carries
+    # at most one of EACH, so one chip per row is the player's whole answer.
+    # Authored calm-to-alarming: SIGNAL_COMMS is major, the other two critical.
+    ("STEGO",      "stego-operation", "Payload Operation", (
+        DiscrepancyKind.SIGNAL_COMMS_PAYLOAD,
+        DiscrepancyKind.RECURSIVE_PAYLOAD,
+        DiscrepancyKind.HOSTILE_PAYLOAD)),
 ]
 
 # ── Cluster integrity guards ────────────────────────────────────────────────
@@ -490,14 +509,16 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.AFTER_HOURS_ACCESS:     "activity outside business hours — benign alone (minor)",
     DiscrepancyKind.LOW_AND_SLOW:           "sub-threshold on purpose — only the filter's correlation finds it",
     DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free tier highlights AUTH_OK rows that diverge from the dossier's claimed IP — corroborate before denying",
-    DiscrepancyKind.LEAKED_PASSWORD:        "align the cipher block and the recovery readout names the corpus the plaintext was dumped in; the Logwatch BREACH_MATCH rows corroborate it",
+    DiscrepancyKind.LEAKED_PASSWORD:        "align the cipher block and the recovery readout names the corpus the plaintext was dumped in; the Ghostscan breach panel corroborates it",
     DiscrepancyKind.WEAK_CREDENTIAL:        "the recovered plaintext is a dictionary word or keyboard walk — judge it yourself, or buy Crack Verdict Analyzer to have it called",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "the recovery readout names TWO corpora holding the same plaintext — the breach panel lists both",
-    DiscrepancyKind.UNSALTED_STORAGE:       "no salt at all — the stored value is the plaintext, exposed without any tool run",
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "stamp the tinted zone — AMBER cells; ≥60% coverage resolves ▲",
 
     DiscrepancyKind.COVERT_C2_CHANNEL:      "VIOLET sparse scatter over a wide zone — resolve by stamping",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:      "CRIMSON mid-density cells — filter (F) names the payload type",
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD:   "carrier cells form a CROSS (+ or X) — read the glyph, or filter (F) names it",
+    DiscrepancyKind.RECURSIVE_PAYLOAD:      "carrier cells form a closed, HOLLOW ring or diamond — filter (F) names it",
+    DiscrepancyKind.HOSTILE_PAYLOAD:        "carrier cells form 2-4 PARALLEL strokes that never touch — filter (F) names it",
 }
 
 # ─── Task #6: worked examples, one per violation ─────────────────────────────
@@ -621,7 +642,7 @@ _EXAMPLE: dict[DiscrepancyKind, tuple[str, str, str]] = {
     ),
     DiscrepancyKind.LEAKED_PASSWORD: (
         'CRACKED:  "dragon2019"',
-        'BREACH_MATCH — found verbatim in corpus "CollectionX_2019"',
+        'RECOVERED — found verbatim in corpus "CollectionX_2019"',
         "this exact password is already public knowledge",
     ),
     DiscrepancyKind.WEAK_CREDENTIAL: (
@@ -648,6 +669,21 @@ _EXAMPLE: dict[DiscrepancyKind, tuple[str, str, str]] = {
         "CRIMSON cells, mid-density — no single channel stands out on its own",
         "R 41/100  G 39/100  B 44/100",
         "resolves to ENCRYPTED_PAYLOAD once filtered (F) — the filter names the type",
+    ),
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD: (
+        "carrier cells run as two bars — one down, one across — or an X",
+        "glyph:  strokes cross at a single point",
+        "filtered: ▲ SIGNAL_COMMS_PAYLOAD beside the colour signature",
+    ),
+    DiscrepancyKind.RECURSIVE_PAYLOAD: (
+        "carrier cells trace a loop; stamping the middle turns up nothing",
+        "glyph:  closed loop, hollow interior",
+        "filtered: ▲ RECURSIVE_PAYLOAD beside the colour signature",
+    ),
+    DiscrepancyKind.HOSTILE_PAYLOAD: (
+        "three matching strokes, evenly spaced, a clear gap between each",
+        "glyph:  parallel strokes, no intersections",
+        "filtered: ▲ HOSTILE_PAYLOAD beside the colour signature",
     ),
 }
 
@@ -1126,12 +1162,12 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [#ff8c42]2. highlighted[/]  after base recon — candidate email marked ►",
         "  [#ff5470]3. confirmed[/]    after filter — red ▲ BREACH_HIT label",
         "",
-        "  [dim]The named databases always match the BREACH_MATCH rows in the[/]",
-        "  [dim]Logwatch day log and the corpus the cipher block names when a[/]",
-        "  [dim]credential resolves — all three surfaces agree. A single corpus[/]",
-        "  [dim]is a BREACH_HIT (minor — they were exposed). TWO corpora holding[/]",
-        "  [dim]the same recovered plaintext is CROSS_BREACH_REUSE (critical —[/]",
-        "  [dim]being dumped is misfortune, still reusing it is a choice).[/]",
+        "  [dim]The named databases always match the corpus the cipher block[/]",
+        "  [dim]names when a credential resolves — both surfaces agree. A[/]",
+        "  [dim]single corpus is a BREACH_HIT (minor — they were exposed). TWO[/]",
+        "  [dim]corpora holding the same recovered plaintext is[/]",
+        "  [dim]CROSS_BREACH_REUSE (critical — being dumped is misfortune,[/]",
+        "  [dim]still reusing it is a choice).[/]",
     ]
     return "\n".join(lines)
 
@@ -1269,10 +1305,9 @@ def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines += _sub("composing with other tools", "#c084fc")
     lines += [
         "  The Logwatch day log carries this candidate's HASH_SUBMIT row (which",
-        "  credential was submitted, and from which IP) and any BREACH_MATCH",
-        "  rows for their email. Those corroborate what the cipher block tells",
-        "  you — the corpora named in both places are always the same, and the",
-        "  Ghostscan breach panel shows the third view of it.",
+        "  credential was submitted, and from which IP). Breach corpora are",
+        "  named here, by the cipher block, and on the Ghostscan breach panel —",
+        "  the two always agree. Logwatch shows no breach data at all.",
         "",
         "  Logwatch never names a credential violation itself; it only shows",
         "  the events. Naming them is this page's job.",
@@ -1388,6 +1423,27 @@ def build_stego_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  noise looks wrong — carrier cells sit in clumped blocks, so a hit",
         "  tells you where to look next. The Spectral Lens upgrade tints a",
         "  rough area blue: close to the payload, never exactly on it.[/]",
+    ]
+    # 2026-09-19: the second axis. Colour says WHAT the payload is; the glyph
+    # the carrier cells trace says what it is FOR. Independent of each other —
+    # any colour can carry any glyph — and the conventional glyph is the
+    # common, innocent-of-anything-extra case, which the player must be told
+    # outright or they will read every blocky carrier as a missed shape.
+    lines += _sub("carrier glyphs — the payload's operation", "#ff8cc8")
+    lines += [
+        "[#6b7785]  GLYPH         WHAT THE CELLS DO               EXTRA VIOLATION[/]",
+        f"[#1c2733]{'─' * _W}[/]",
+        f"  {_fit('conventional', 14)}{_fit('irregular blocks / runs', 32)}[dim]none[/]",
+        f"  {_fit('cross', 14)}{_fit('+ or X — strokes intersect', 32)}Signal comms",
+        f"  {_fit('enclosed', 14)}{_fit('ring / diamond, hollow inside', 32)}Recursive",
+        f"  {_fit('slash', 14)}{_fit('2-4 parallel, never touching', 32)}Hostile",
+        f"[#1c2733]{'─' * _W}[/]",
+        "",
+        "  [dim]Shape and colour are separate findings: an AMBER cross is a",
+        "  stego payload AND signal comms. Reveal enough of the zone to see",
+        "  the figure — without the filter the log only describes its",
+        "  geometry; with it, the operation is named (▲). A blocky,",
+        "  conventional carrier adds nothing beyond its colour.[/]",
     ]
     lines.append("")
     lines += violation_table(day, "STEGO")

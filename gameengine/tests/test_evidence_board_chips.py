@@ -100,6 +100,10 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
     ("STEGO", [
         ("Payload Detection",
          ["Stego payload", "Covert C2 channel", "Encrypted covert payload"]),
+        # 2026-09-19: the carrier-shape axis — a second row, not a wider first
+        # one. A carrier carries at most one kind from EACH row.
+        ("Payload Operation",
+         ["Signal comms payload", "Recursive payload", "Hostile payload"]),
     ]),
 ]
 
