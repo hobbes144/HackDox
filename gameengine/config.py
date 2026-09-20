@@ -932,6 +932,16 @@ LW_SLOW_GAP              = (9000, 16000)    # gap between each scattered attempt
 # FROM the day log (tools_bridge / core/logwatch_report.py) — never from
 # ground truth, so the report and the log can never disagree. These knobs
 # define what the report calls normal.
+#
+# TUNING CHEAT-SHEET (Nick, 2026-09-19 — safe to play with; the tier tests in
+# tests/test_logwatch_report.py fail loudly if a retune breaks the design):
+#   "the attack alert fires too easily / not enough" -> LW_BURST_ALERT, LW_BURST_WINDOW
+#       (must stay <= the smallest burst: LW_BRUTE_BURST_SIZE[0] and
+#        LW_STUFFING_SPRAY_SIZE, and above what low-and-slow can reach)
+#   "what counts as off-hours"         -> LW_SHIFT_START / LW_SHIFT_END
+#   "which bars read as out of range"  -> the middle number in LW_PROFILE_METRICS
+#   "a failed login is too telling"    -> LW_BENIGN_TYPO_CHANCE
+#   "the report wraps on my terminal"  -> LW_REPORT_WIDTH / *_COMPACT layout knobs
 
 # The one standard shift every candidate claims. Off-hours = candidate's own
 # successful activity outside [start, end). Seconds since midnight.
@@ -959,9 +969,22 @@ LW_HOSTILE_ORIGIN_FAILS  = 2
 # Honest noise: chance any candidate fumbles one password during the shift,
 # so "has a failed login" is never on its own a tell.
 LW_BENIGN_TYPO_CHANCE    = 0.3
+LW_BENIGN_TYPO_LEAD      = (8, 90)          # seconds before the first login it lands
 
-# Activity Profile bars: metric -> (label, normal ceiling, bar scale max).
-# The ceiling is drawn as a │ tick; a value past it is "out of range".
+# Layout of the rendered report (characters). The centre column is ~40% of
+# the screen; 56 fits a 150-col terminal without wrapping.
+LW_REPORT_WIDTH          = 56
+LW_BAR_WIDTH             = 20
+LW_TIMELINE_BIN_MIN      = 30               # minutes per timeline cell (48 cells/day)
+# Compact layout, used automatically when the report column is narrower than
+# LW_REPORT_WIDTH (small terminals): shorter bars, hour-wide timeline cells.
+LW_BAR_WIDTH_COMPACT     = 12
+LW_TIMELINE_BIN_MIN_COMPACT = 60            # 24 cells/day
+
+# Activity Profile bars, top to bottom: metric -> (label, normal ceiling,
+# bar scale max). The ceiling is drawn as a │ tick; a value past it is "out
+# of range" (and turns amber with the Log Analyzer HUD). Reorder freely; the
+# metric keys are fixed (logwatch_report.LogwatchReport.metric).
 LW_PROFILE_METRICS: dict[str, tuple[str, int, int]] = {
     "logins":     ("Logins",        4, 8),
     "failures":   ("Auth failures", 1, 8),
@@ -1004,7 +1027,7 @@ LW_NOISE_EVENT_WEIGHTS: list[str] = [
 # renderer. See tools_bridge._lw_render, which no longer branches on it.)
 
 # Auto-highlight upgrades — surface signals the engine already computes.
-UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: colour suspicious log lines
+UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: ▸ marks + out-of-range bars (never names)
 UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: mark the region of the
                                                 # alignment pad holding the true key
 UPGRADE_EMAIL_APPROVED   = "email_approved_highlight"    # dossier: green trusted domains
@@ -1037,7 +1060,7 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
     (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
     (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
-    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "auto-highlight suspicious lines in the Logwatch day log"),
+    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸) and out-of-range report bars — points, never names"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 35, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
@@ -1138,6 +1161,12 @@ KEY_BINDINGS: dict[str, str] = {
     # arrow keys move the stamp, Space stamps (STEGO_STAMP_COST),  and
     # Escape (or this key again) exits.
     "stamp_mode":       "x",
+
+    # ── Logwatch auth log panel (page 4 only, 2026-09-19) ─────
+    # Jump between the target account's rows in the (unsealed) auth log.
+    # Textual key names; only read while the command buffer is empty.
+    "log_prev_row":     "left_square_bracket",
+    "log_next_row":     "right_square_bracket",
 
     # ── Hashcrack decrypt mode (page 3 only) ──────────────────
     # Deliberately the SAME physical key as stamp mode above: one "engage this

@@ -6,6 +6,7 @@ from gameengine.ui.tui.widgets.command_bar import CommandBar
 from gameengine.ui.tui.widgets.debug_panel import DebugPanel
 from gameengine.ui.tui.widgets.dossier import CondensedDossier, DossierPanel
 from gameengine.ui.tui.widgets.evidence import EvidenceBoard, EvidenceState
+from gameengine.ui.tui.widgets.log_list import LogListPanel
 from gameengine.ui.tui.widgets.overseer import OverseerPanel
 from gameengine.ui.tui.widgets.reference import ReferencePanel
 from gameengine.ui.tui.widgets.status_header import StatusHeader
@@ -24,6 +25,7 @@ __all__ = [
     'DossierPanel',
     'EvidenceBoard',
     'EvidenceState',
+    'LogListPanel',
     'OverseerPanel',
     'ReferencePanel',
     'StatusHeader',

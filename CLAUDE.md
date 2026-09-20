@@ -111,6 +111,7 @@ HackDox/
     │   ├── day_cycle.py        ← orchestrates intro → candidates → outro
     │   ├── overseer.py         ← progression-aware dialogue selector
     │   ├── tools_bridge.py     ← in-process bridge to ghostscan/logwatch/hashcrack/stegotool
+    │   ├── logwatch_report.py  ← Logwatch Activity Report: built FROM the day log + its renderer (2026-09-19)
     │   └── persistence.py      ← save/load GameState as JSON
     ├── ui/
     │   ├── tui/                ← Textual application (v1)
@@ -290,6 +291,7 @@ The `Dossier` dataclass carries everything the candidate *claims* to submit. All
 - `submitted_hash` — populated by `candidate_gen` for candidates with `LEAKED_PASSWORD` or `WEAK_CREDENTIAL` discrepancies; a real MD5 or SHA256 hash of a deterministically derived password
 - `submitted_log_path` — populated for candidates with logwatch discrepancies (e.g. `auth.log`, `sshd.log`)
 - `submitted_image_path` — populated for candidates with stego discrepancies (e.g. `profile.png`, `header.png`)
+- `claimed_role` / `claimed_location` *(2026-09-19)* — the Logwatch Activity Report's header claims: role is a pure lookup from the stated purpose (`candidate_gen.PURPOSE_ROLES`), location an `OFFICE_CITIES` pick (disjoint from the attack-city pool). The claimed internal IP resolves to this city on the report.
 
 ### gameengine — Progressive disclosure mechanic (`core/tools_bridge.py`)
 All four tool pages follow the same three-tier information model:
@@ -303,7 +305,7 @@ All four tool pages follow the same three-tier information model:
 Per-tool free content:
 - **Ghostscan** (`get_ghostscan_identity`): passive dossier cross-check — email domain (disposable / privacy / trusted), affiliation trust assessment, GitHub claim status
 - **Hashcrack** (`get_auth_log`): synthetic auth log with timestamp, IP, login success/fail events; credential-stuffing pattern visible for suspicious candidates
-- **Logwatch** (`get_logwatch_raw`): raw log entries with timestamps, IPs, event types; brute-force bursts, impossible-travel city tags, after-hours file access all visible but unlabelled
+- **Logwatch** (`get_logwatch_shared`, 2026-09-19 overhaul): the **Activity Report** — aggregate bars, 24h swimlane timeline, login origins, resource counts, analyst notes — computed from the day log. Attacks are *detected* (unclassified) but never named; the raw auth log is **sealed** in the right panel until the base run
 - **Stegotool** (`get_stego_image_info`): image metadata + per-channel LSB entropy scores (0–100, color-coded); RS analysis ratio; LSB autocorrelation — anomalous channels show red before any tool is run
 
 ---
@@ -418,7 +420,7 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
   - **Page 0 — Candidate**: Dossier (identity + submitted artifacts) · Chat · Evidence Board · Overseer panel · Reference
   - **Page 1 — Ghostscan**: Condensed dossier · Dynamic reference (target info + signal guide) · Tool terminal
   - **Page 2 — Hashcrack**: Condensed dossier · Dynamic reference (target info + violation types) · Tool terminal
-  - **Page 3 — Logwatch**: Condensed dossier · Dynamic reference (target info + today's rules + attack patterns) · Tool terminal
+  - **Page 3 — Logwatch** *(2026-09-19)*: sidebar (24%) · Activity Report (40%, free) · Auth log panel (36%, `LogListPanel`, sealed until L; `[`/`]` jump the target's rows)
   - **Page 4 — Stegotool**: Condensed dossier · Dynamic reference (target info + signal guide) · Tool terminal
 - **Progressive disclosure** — every tool terminal is pre-populated with free data on candidate load. More information is revealed as the player spends ⏱.
 - **Evidence Board** is a **global overlay** (`EvidenceScreen`, toggled with **Tab** from any page) — player-controlled only, nothing auto-populates. Findings are grouped into five categories (DOSSIER · OSINT · FORENSICS · CREDENTIAL · STEGO) navigated with ←/→; each finding can be assigned an **intensity** (minor/major/critical via 1/2/3, or `i` to cycle). Intensity is documentation-only — scoring still keys off the set of flagged `DiscrepancyKind`s. State lives in a headless `EvidenceLog` owned by `IntakeScreen` so it survives page nav + toggling.
@@ -431,7 +433,7 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
 | Tool | Free (always) | Base run | Filter |
 |------|---------------|----------|--------|
 | `ghostscan` | Email domain + affiliation + GitHub claim assessed from dossier | Platform sweep + commit email + HIBP raw output (player spots mismatches) | Email/commit cross-reference — explicit `▲ MISMATCH` confirmation |
-| `logwatch` | Raw auth log — timestamps, IPs, event types with anomalies embedded but unlabelled | Pattern detection — flags rapid failures, geo regions, after-hours events | Geo timeline overlay — explicit `▲ BRUTE_FORCE / IMPOSSIBLE_TRAVEL / INSIDER_BEHAVIOR` |
+| `logwatch` | Activity Report: bars vs a normal-ceiling tick, timeline lanes, origins (claimed ✓/✗, Δ city changes), resource counts, alerts. Identifiable free: `CLAIMED_IP_MISMATCH`, `IMPOSSIBLE_TRAVEL`; visible: off-hours, insider counts; brute force / stuffing = one **unclassified** "authentication anomaly"; low-and-slow never alerts | Unseals the full auth log (right panel) — every row, target in yellow, **no labels**; player reads the attack's shape | `▲ VIOLATION` labels in the log + a `▲ CONFIRMED` block on the report (low-and-slow correlation, travel km/h) |
 | `hashcrack` | Auth log with login history; claimed IP visible for comparison | Hash cracked — shows plaintext, algorithm type; player judges weakness themselves | Breach corpus + complexity check — explicit `▲ LEAKED_PASSWORD / WEAK_CREDENTIAL` |
 | `stegotool` | Pixel-grid image viewer (dominant right column) with subtle blue tint over hot zones + channel entropy stats in the findings terminal | **Stamp minigame** — X enters stamp mode; arrows move a square stamp, Space stamps (`config.STEGO_STAMP_COST` ⏱/stamp), revealing what the cells carry: color = payload type (amber plaintext / crimson encrypted / violet C2), density = carrier fill, size = zone extent, **shape = payload operation** (2026-09-19: the glyph the carrier cells trace — conventional blocks = nothing extra; cross = `SIGNAL_COMMS_PAYLOAD`; hollow ring/diamond = `RECURSIVE_PAYLOAD`; 2–4 parallel non-touching strokes = `HOSTILE_PAYLOAD`). Unfiltered, the resolve block only *describes* the glyph's geometry | Reveal ≥60% of the zone → signature resolves. With the classification filter (F): explicit `▲ STEGO_PAYLOAD_PRESENT / ENCRYPTED_PAYLOAD / COVERT_C2_CHANNEL`, plus a second `▲ SIGNAL_COMMS_PAYLOAD / RECURSIVE_PAYLOAD / HOSTILE_PAYLOAD` for a special glyph (never for conventional). Stamps replaced the old scan/filter tiers |
 
@@ -566,6 +568,18 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 > `batch5_plan.md`). Treat this Session Log, and the Evidence Catalog table further up, as accurate
 > only through 2026-08-16; check `rules_content.py`'s `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` and
 > project memory for anything current.
+
+### 2026-09-19 (Logwatch report overhaul)
+Nick's redesign of the Logwatch page. Plan + status: project doc `claude/logwatch_report_plan.md`.
+- **Page is now 3-column:** sidebar | **Activity Report** (free, centre) | **auth log panel** (`widgets/log_list.py`, sealed until L). Base run unseals the log with NO labels; the filter adds ▲ labels to the log and a ▲ CONFIRMED block to the report. `[`/`]` jump between the target's rows, PgUp/PgDn page it; rows never wrap.
+- **The report is computed from the log** (`core/logwatch_report.py` → `build_logwatch_report`), never from ground truth — pinned by `test_report_ignores_engine_only_row_fields`. The reveal-tier table (what the report can/can't tell) is in that module's docstring and pinned by `tests/test_logwatch_report.py`.
+- **BREACH_MATCH rows removed from Logwatch** — breach hits are Ghostscan's and Hashcrack's only. HASH_SUBMIT stays as neutral context.
+- **Log Analyzer HUD reworked** — neutral ▸ gutter marks + "◂ out of range" report bars; it never names an attack (the old HUD printed attack names).
+- **Generator changes (day logs re-rolled):** daytime activity fits the 08:00–18:00 shift (`LW_WORKDAY_WINDOW` now 08:05–11:30 + chain compression); a benign single typo AUTH_FAIL for ~30% of candidates; brute/stuffing attack IPs now random cities (fixed Frankfurt / unmapped 45.131 were tells). New dossier fields `claimed_role`, `claimed_location`.
+- Day 4 briefing summary + Overseer `day4_intro` reworded for the report-first flow; Rules tab 4 and the Logwatch reference panel rewritten.
+- **Tunables — all in `config.py`, "Logwatch Activity Report" block:** `LW_SHIFT_START/END/END_MARGIN` (shift), `LW_BURST_WINDOW` + `LW_BURST_ALERT` (attack alert), `LW_TRAVEL_REPORT_WINDOW`, `LW_HOSTILE_ORIGIN_FAILS`, `LW_BENIGN_TYPO_CHANCE/LEAD`, `LW_PROFILE_METRICS` (bar label, normal ceiling, scale), `LW_REPORT_WIDTH`, `LW_BAR_WIDTH(_COMPACT)`, `LW_TIMELINE_BIN_MIN(_COMPACT)`; keys `KEY_BINDINGS["log_prev_row"/"log_next_row"]`. The tier tests will tell you if a retune breaks the reveal table (e.g. an alert threshold above `LW_BRUTE_BURST_SIZE`'s minimum).
+- Known, not fixed: ~0.5% of generated days hold two candidates with the same email (same name rolled twice).
+- Tests: 584/584 (new `test_logwatch_report.py`, `test_logwatch_page.py`).
 
 ### 2026-08-16 (playtest fixes)
 Ad-hoc fixes from Nick's manual playtesting, applied directly (not a numbered backlog batch — see `planning_sprint.md`/`playtest_fixes.md` in project memory for the Batch 1 epic that shipped separately the same day). All 32 `gameengine/tests` pass throughout; changes also verified with 2000+-candidate generation sweeps across days 1-5.

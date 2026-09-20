@@ -30,7 +30,7 @@
   "day3_outro_failed": "Stay behind.",
   "day3_between": "A second breach corpus is live as of today. Reused passwords show up in more than one — that's the tell.",
 
-  "day4_intro": "Logwatch. And a warning: this one doesn't hand you your applicant.\nIt's the whole day's traffic, every account, sorted by time. Your candidate is somewhere in there among people who have nothing to do with them. Finding them is the skill.\nWhat you're looking for: a wall of failed logins, access at hours nobody works, or two logins from places nobody could travel between in the time. Any of those, from their account, and you have your answer.",
+  "day4_intro": "Logwatch. It opens on a report of your applicant's day — bars, a timeline, where they logged in from. That part is free. Read it first.\nThe raw log costs you, and it doesn't hand you your applicant: it's the whole day's traffic, every account, sorted by time. Finding their lines in it is the skill.\nWhat you're looking for: a wall of failed logins, access at hours nobody works, or two logins from places nobody could travel between in the time. Any of those, from their account, and you have your answer.",
   "day4_outro_excellent": "You found them in the noise. Most people take a week to do that.",
   "day4_outro_passing": "You got there. Slowly, but you got there.",
   "day4_outro_poor": "The evidence was in the log. You didn't go and get it.",

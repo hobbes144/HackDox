@@ -165,3 +165,90 @@ def test_office_cities_never_collide_with_attack_cities():
 def test_profile_metric_config_is_sane(key):
     label, ceiling, scale = config.LW_PROFILE_METRICS[key]
     assert label and 0 <= ceiling < scale
+
+
+# ── Rendering (P2) ──────────────────────────────────────────────────────────
+
+_LW_KINDS = (K.BRUTE_FORCE_IN_LOG, K.CREDENTIAL_STUFFING, K.LOW_AND_SLOW,
+             K.IMPOSSIBLE_TRAVEL, K.INSIDER_BEHAVIOR, K.AFTER_HOURS_ACCESS,
+             K.CLAIMED_IP_MISMATCH)
+# Words that would classify a violation before the filter is bought.
+_NAMING = tuple(k.name for k in _LW_KINDS) + (
+    "brute", "stuffing", "insider", "impossible", "low-and-slow", "low and slow",
+    "▲ ")
+
+
+def _state(upgrades=()):
+    from gameengine.core.models import GameState
+    s = GameState(seed=0, current_day=20, compute_hours=10_000)
+    s.upgrades = set(upgrades)
+    return s
+
+
+def test_free_and_base_tiers_never_name_a_violation():
+    from gameengine.core.logwatch_report import render_report
+    for c, _ks, r, log in _sample()[::3]:
+        outs = [render_report(r, log_state="sealed"),
+                render_report(r, log_state="open", hud=True),
+                tools_bridge.get_logwatch_log_lines(
+                    log, c, _state({config.UPGRADE_LOG_HIGHLIGHT}))]
+        for lines in outs:
+            text = "\n".join(lines).lower()
+            for w in _NAMING:
+                assert w.lower() not in text, (c.id, w)
+
+
+def test_filter_names_every_logwatch_kind_the_candidate_carries():
+    for c, ks, _r, log in _sample():
+        owned = ks & set(_LW_KINDS)
+        if not owned:
+            continue
+        res = tools_bridge.run_logwatch_filtered_shared(log, c, _state())
+        text = "\n".join(res.report_lines)
+        for k in owned:
+            assert f"▲ {k.name}" in text, (c.id, k.name)
+
+
+def test_every_rendered_line_is_valid_markup():
+    from rich.text import Text
+    for c, _ks, _r, log in _sample()[::5]:
+        st = _state({config.UPGRADE_LOG_HIGHLIGHT})
+        for lines in (tools_bridge.get_logwatch_shared(log, c, state=st),
+                      tools_bridge.run_logwatch_shared(log, c, st).report_lines,
+                      tools_bridge.run_logwatch_shared(log, c, st).raw_lines,
+                      tools_bridge.run_logwatch_filtered_shared(log, c, st).report_lines,
+                      tools_bridge.run_logwatch_filtered_shared(log, c, st).raw_lines):
+            for ln in lines:
+                Text.from_markup(ln)   # raises MarkupError on bad markup
+
+
+def test_report_fits_its_column():
+    """Every report line fits LW_REPORT_WIDTH (+ the 2-char indent) except the
+    free-text footers/confirmations, which may wrap."""
+    from rich.text import Text
+    from gameengine.core.logwatch_report import render_report
+    limit = config.LW_REPORT_WIDTH + 2
+    for _c, _ks, r, _log in _sample()[::4]:
+        lines = render_report(r, log_state="sealed", hud=True)
+        body = lines[:-1]                  # the footer hint may wrap
+        for ln in body:
+            assert Text.from_markup(ln).cell_len <= limit, ln
+
+
+def test_logwatch_tunables_are_coherent():
+    """Plain-English guards for config retunes (see the TUNING CHEAT-SHEET)."""
+    assert config.LW_BURST_ALERT <= config.LW_BRUTE_BURST_SIZE[0], (
+        "LW_BURST_ALERT is above the smallest brute-force burst — some brute "
+        "force candidates would never trip the report's alert")
+    assert config.LW_BURST_ALERT <= config.LW_STUFFING_SPRAY_SIZE, (
+        "LW_BURST_ALERT is above the credential-stuffing spray size — stuffing "
+        "would never trip the report's alert")
+    assert config.LW_BURST_WINDOW < config.LW_SLOW_GAP[0], (
+        "LW_BURST_WINDOW is wider than the low-and-slow gap — low-and-slow "
+        "could trip the alert it is designed to stay under")
+    assert config.LW_SHIFT_START <= config.LW_WORKDAY_WINDOW[0], (
+        "the workday starts before the shift — honest logins read as off-hours")
+    assert config.LW_HOSTILE_ORIGIN_FAILS >= 2, (
+        "a single benign typo would mark the user's own origin hostile")
+    assert set(config.LW_PROFILE_METRICS) == {
+        "logins", "failures", "origins", "files", "privileged", "off_hours"}

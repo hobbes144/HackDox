@@ -1132,7 +1132,8 @@ EVIDENCE_TOKENS: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.LOW_AND_SLOW:          "LOW_AND_SLOW",
     # Prose annotation, not a named label — Logwatch's IP mismatch is meant to
     # read as an observation about the log, not a violation code.
-    DiscrepancyKind.CLAIMED_IP_MISMATCH:   "login IP differs from dossier claim",
+    # 2026-09-19: named by the Activity Report's ▲ CONFIRMED block (filter).
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:   "CLAIMED_IP_MISMATCH",
     # ── Stegotool ────────────────────────────────────────────────────────
     DiscrepancyKind.STEGO_PAYLOAD_PRESENT: "STEGO_PAYLOAD_PRESENT",
     DiscrepancyKind.ENCRYPTED_PAYLOAD:     "ENCRYPTED_PAYLOAD",
@@ -1202,8 +1203,10 @@ def _filtered_output(candidate, kind, day, seed) -> str:
             {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT}))
     if tool == ToolName.LOGWATCH:
         entries = tools_bridge.generate_day_log(seed, day)
-        return "\n".join(tools_bridge.run_logwatch_filtered_shared(
-            entries, candidate, state).raw_lines)
+        # 2026-09-19: the filter's output is the auth log panel AND the
+        # Activity Report's ▲ CONFIRMED block.
+        res = tools_bridge.run_logwatch_filtered_shared(entries, candidate, state)
+        return "\n".join(res.raw_lines + res.report_lines)
     if tool == ToolName.STEGOTOOL:
         img = tools_bridge.build_stego_image(candidate, day.number)
         return "\n".join(tools_bridge.stamp_signature_lines(img, reveal_type=True))
@@ -1436,9 +1439,10 @@ def _all_tool_outputs(candidate, day, seed) -> dict[str, str]:
                 block, candidate, day.number,
                 {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT})),
         "logwatch": "\n".join(
-            tools_bridge.run_logwatch_filtered_shared(
-                tools_bridge.generate_day_log(seed, day),
-                candidate, state).raw_lines),
+            (lambda r: r.raw_lines + r.report_lines)(
+                tools_bridge.run_logwatch_filtered_shared(
+                    tools_bridge.generate_day_log(seed, day),
+                    candidate, state))),
         "stegotool": "\n".join(
             tools_bridge.stamp_signature_lines(img, reveal_type=True)),
     }
@@ -3411,10 +3415,13 @@ def test_cipher_block_marks_no_band_without_the_upgrade():
 
 
 def test_logwatch_highlighting_actually_gated_by_log_analyzer_hud():
-    """Batch-3 task #4e: same bug as #4d, for Logwatch/log_highlight. The
-    claimed-IP-mismatch call-out is intentionally excluded from this gate —
-    it's documented elsewhere (rules_content._CATCH) as always-free evidence,
-    a separate, pre-existing design decision.
+    """Batch-3 task #4e, reworked 2026-09-19 (Logwatch report overhaul).
+
+    The Log Analyzer HUD must (a) actually change something — neutral ▸
+    gutter marks in the auth log and "◂ out of range" tags on the report's
+    bars — and (b) never NAME an attack. The pre-overhaul HUD printed lines
+    like "credential stuffing — same source IP targeting multiple accounts",
+    which handed the player the answer; Nick wanted guidance, not verdicts.
     """
     from gameengine.core import tools_bridge
 
@@ -3423,31 +3430,33 @@ def test_logwatch_highlighting_actually_gated_by_log_analyzer_hud():
     for seed in range(200):
         c = candidate_gen.generate(seed, day, 0)
         kinds = {d.kind for d in c.truth.discrepancies}
-        if kinds & {DiscrepancyKind.BRUTE_FORCE_IN_LOG, DiscrepancyKind.CREDENTIAL_STUFFING,
-                    DiscrepancyKind.IMPOSSIBLE_TRAVEL, DiscrepancyKind.INSIDER_BEHAVIOR}:
+        if kinds & {DiscrepancyKind.BRUTE_FORCE_IN_LOG, DiscrepancyKind.CREDENTIAL_STUFFING}:
             cand = c
             break
-    assert cand is not None, "no logwatch-violation candidate in 200 seeds"
+    assert cand is not None, "no attack candidate in 200 seeds"
 
     import random as _random
-    entries = tools_bridge._lw_candidate_entries(cand, _random.Random(1))
-    # The claimed-IP-mismatch call-out is free by design (unrelated to this
-    # upgrade) — exclude it so the assertion targets only the gated
-    # violation-annotation phrases.
-    violation_markers = ("rapid auth failures", "credential stuffing",
-                         "geographically distant", "after-hours privileged",
-                         "outside business hours")
+    entries = tools_bridge._lw_candidate_entries(cand, _random.Random(1), day.number)
+    naming = ("rapid auth failures", "credential stuffing", "brute", "stuffing",
+              "geographically distant", "after-hours privileged",
+              "outside business hours", "▲ ")
 
     plain_state = GameState(seed=SEED, current_day=20)
-    ungated = tools_bridge.run_logwatch_shared(entries, cand, plain_state).raw_lines
-    assert not any(m in ln for ln in ungated for m in violation_markers), (
-        "attention-drawing ▲ annotation appeared without Log Analyzer HUD")
+    ungated = tools_bridge.run_logwatch_shared(entries, cand, plain_state)
+    assert not any("▸" in ln for ln in ungated.raw_lines), "▸ marks without the HUD"
+    assert not any("out of range" in ln for ln in ungated.report_lines)
 
     gated_state = GameState(seed=SEED, current_day=20)
     gated_state.upgrades = {config.UPGRADE_LOG_HIGHLIGHT}
-    gated = tools_bridge.run_logwatch_shared(entries, cand, gated_state).raw_lines
-    assert any(m in ln for ln in gated for m in violation_markers), (
-        "Log Analyzer HUD did not restore the ▲ annotations")
+    gated = tools_bridge.run_logwatch_shared(entries, cand, gated_state)
+    assert any("▸" in ln for ln in gated.raw_lines), "HUD added no ▸ marks"
+    assert any("out of range" in ln for ln in gated.report_lines), (
+        "HUD did not flag the out-of-range failures bar")
+    for ln in gated.raw_lines + gated.report_lines:
+        low = ln.lower()
+        for phrase in naming:
+            assert phrase.lower() not in low, (
+                f"the HUD (base run) names the attack: {phrase!r} in {ln!r}")
 
 
 def test_clean_credential_resolves_without_being_called_safe():

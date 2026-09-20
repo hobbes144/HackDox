@@ -115,6 +115,28 @@ HackDoxApp
 | `4` | Logwatch | Log analysis | `analyze` / `logwatch` / `l` + `filter` |
 | `5` | Stegotool | Steganography | `extract` / `stegotool` / `s` + `filter` |
 
+### Page 4 — Logwatch (3-column, 2026-09-19 overhaul)
+```
+┌─ lw-left (24%) ─┬─ Activity Report (40%, #terminal-lw) ─┬─ LogListPanel (36%) ─┐
+│ CondensedDossier│ SUBJECT / ACCOUNT / ROLE / HOURS /    │ AUTH LOG — SEALED    │
+│ ReferencePanel  │ CLAIMS header                         │ (until L)            │
+│                 │ ACTIVITY PROFILE bars (│ = ceiling)   │                      │
+│                 │ ACTIVITY TIMELINE 24h lanes           │ after L: every row,  │
+│                 │   AUTH ● FAIL × FILES □ PRIV ◆        │ target in yellow,    │
+│                 │ LOCATIONS & ACCESS (origins, Δ travel,│ no labels; [ ] jump, │
+│                 │   resource counts)                    │ PgUp/PgDn, h-scroll  │
+│                 │ ANALYST NOTES (alerts, unclassified)  │ after F: ▲ labels    │
+│                 │ ▲ FILTER — CONFIRMED (after F)        │                      │
+└─────────────────┴───────────────────────────────────────┴──────────────────────┘
+```
+- The report is **free** and computed from the log itself (`core/logwatch_report.py`); it
+  detects attacks but never classifies them. The log panel is what L buys.
+- Tab (Evidence Board) hides `lw-left` **and** the log panel; the report stays.
+- The report switches to a compact layout (shorter bars, hour-wide timeline cells) when
+  the column is narrower than `config.LW_REPORT_WIDTH` (`IntakeScreen._lw_report_width`).
+- Log Analyzer HUD: neutral `▸` gutter marks on the target's anomalous rows + `◂ out of
+  range` on report bars. It never names a violation.
+
 ---
 
 ## Widgets
@@ -165,6 +187,11 @@ HackDoxApp
 - Base run output appended when tool is invoked (costs ⏱)
 - Filter output appended when filter is run (costs additional ⏱)
 - Empty label removed on first content add
+
+### LogListPanel (`ScrollableContainer`, `widgets/log_list.py`)
+- Right column of the Logwatch page. States: `sealed` → `open` (L) → `filtered` (F)
+- `seal(entry_count, cost)` per candidate; `open(lines, target_rows, filtered)`; `jump(±1)`
+- Rows never wrap (`text-wrap: nowrap`, horizontal scroll) so a row index is its scroll offset
 
 ### DebugPanel
 - Dev-only: shows candidate ground truth (archetype, discrepancies, correct verdict)
@@ -316,6 +343,8 @@ All bindings are defined in `gameengine/config.py → KEY_BINDINGS`. Change ther
 | `↑` / `↓` | Cycle widget focus within current page |
 | `←` / `→` | Cycle widget focus (same as ↑/↓) |
 | `` ` `` | Toggle debug panel |
+| `[` / `]` | Logwatch page: previous / next target row in the auth log (`log_prev_row` / `log_next_row`) |
+| `PgUp` / `PgDn` | Logwatch page: page the auth log |
 
 ### Command Bar (type + Enter)
 
@@ -323,7 +352,7 @@ All bindings are defined in `gameengine/config.py → KEY_BINDINGS`. Change ther
 |------------|--------|------|
 | `recon` · `ghostscan` · `g` | Run Ghostscan | 5⏱ |
 | `crack` · `hashcrack` · `h` | Run Hashcrack | 3⏱ |
-| `analyze` · `logwatch` · `l` | Run Logwatch | 4⏱ |
+| `analyze` · `logwatch` · `l` | Unseal the Logwatch auth log | 4⏱ |
 | `extract` · `stegotool` · `stego` · `s` | Run Stegotool | 2⏱ |
 | `filter` · `f` | Run filter on current tool page | +2–4⏱ |
 | `admit` · `a` | Admit candidate | — |

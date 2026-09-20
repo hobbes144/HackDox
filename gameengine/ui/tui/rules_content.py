@@ -502,13 +502,13 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.BURNER_IDENTITY:        "account registry: creation dates clustered within days — filter labels",
     DiscrepancyKind.THREAT_FORUM_MATCH:     "handle in the threat-forum list — filter reveals with [CRITICAL] tag",
     DiscrepancyKind.TYPOSQUAT_HANDLE:       "free cue on identity check · filter confirms the lookalike",
-    DiscrepancyKind.BRUTE_FORCE_IN_LOG:     "free log shows the AUTH_FAIL burst · base run flags · filter labels",
-    DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "base run tags cities · filter's geo timeline makes it explicit",
-    DiscrepancyKind.INSIDER_BEHAVIOR:       "sensitive FILE_ACCESS + PRIV_ESCALATE after hours · filter labels",
-    DiscrepancyKind.CREDENTIAL_STUFFING:    "one IP, many accounts, few tries — base detects · filter names it",
-    DiscrepancyKind.AFTER_HOURS_ACCESS:     "activity outside business hours — benign alone (minor)",
-    DiscrepancyKind.LOW_AND_SLOW:           "sub-threshold on purpose — only the filter's correlation finds it",
-    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free tier highlights AUTH_OK rows that diverge from the dossier's claimed IP — corroborate before denying",
+    DiscrepancyKind.BRUTE_FORCE_IN_LOG:     "free report raises an UNCLASSIFIED authentication anomaly · the auth log shows ONE account hammered · filter labels it",
+    DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "free report lists the city change and the minutes between clean logins · filter adds the km/h",
+    DiscrepancyKind.INSIDER_BEHAVIOR:       "free report shows off-shift activity + sensitive/privileged COUNTS · the auth log shows the paths and the sudo · filter labels it",
+    DiscrepancyKind.CREDENTIAL_STUFFING:    "free report raises the SAME unclassified anomaly as brute force · the auth log shows ONE source failing on MANY accounts · filter names it",
+    DiscrepancyKind.AFTER_HOURS_ACCESS:     "free report's off-shift note; the auth log shows routine paths — benign alone (minor)",
+    DiscrepancyKind.LOW_AND_SLOW:           "never trips the report's alert — failures bar past its tick, scattered × on the FAIL lane · filter correlates it",
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free report: the claimed IP never appears among the login origins — corroborate before denying",
     DiscrepancyKind.LEAKED_PASSWORD:        "align the cipher block and the recovery readout names the corpus the plaintext was dumped in; the Ghostscan breach panel corroborates it",
     DiscrepancyKind.WEAK_CREDENTIAL:        "the recovered plaintext is a dictionary word or keyboard walk — judge it yourself, or buy Crack Verdict Analyzer to have it called",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "the recovery readout names TWO corpora holding the same plaintext — the breach panel lists both",
@@ -633,12 +633,12 @@ _EXAMPLE: dict[DiscrepancyKind, tuple[str, str, str]] = {
     DiscrepancyKind.LOW_AND_SLOW: (
         "03:12  AUTH_FAIL  91.219.4.8  j.torres93@corp.net",
         "07:58  AUTH_FAIL  91.219.4.8  j.torres93@corp.net",
-        "12:40  AUTH_FAIL  91.219.4.8  j.torres93@corp.net  (no ▲ — too spread out for the base run)",
+        "12:40  AUTH_FAIL  91.219.4.8  j.torres93@corp.net  (no report alert — hours apart)",
     ),
     DiscrepancyKind.CLAIMED_IP_MISMATCH: (
-        "DOSSIER CLAIMED IP:  10.0.4.22",
-        "09:12:00  AUTH_OK  185.220.31.7  j.torres93@corp.net  ← doesn't match",
-        "free tier already tints this row orange — no upgrade needed to see it",
+        "CLAIMS   Boston, US  via 10.0.4.22",
+        "ORIGINS  ✗ claimed IP 10.0.4.22 never seen · ✗ Frankfurt, DE  4 logins",
+        "the free Activity Report shows it — no ⏱ needed to see it",
     ),
     DiscrepancyKind.LEAKED_PASSWORD: (
         'CRACKED:  "dragon2019"',
@@ -1323,56 +1323,67 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
         return _locked_tab_text(ToolName.LOGWATCH, "LOGWATCH — LOG ANALYSIS")
     lw = config.TOOL_COSTS["logwatch"]
     lf = config.FILTER_COSTS["logwatch"]
+    s0 = f"{config.LW_SHIFT_START // 3600:02d}:00"
+    s1 = f"{config.LW_SHIFT_END // 3600:02d}:00"
+    burst_n, burst_m = config.LW_BURST_ALERT, config.LW_BURST_WINDOW // 60
     lines: list[str] = []
     lines += _band("LOGWATCH — LOG ANALYSIS", "#ffb454")
     lines += [
-        "  Every server keeps a structured event log: who connected, from",
-        "  where, when, doing what. One entry is mundane; in aggregate they",
-        "  expose attack patterns nothing else can. The free terminal shows",
-        "  the raw shared day log; ⏱ buys detection and explicit labels.",
-    ]
-    lines += _sub("log entry format", "#ffb454")
-    lines += [
-        "  TIMESTAMP  IP_ADDRESS  EVENT_TYPE  USERNAME  RESOURCE",
-        "",
-        "  [dim]2024-03-15 02:14:07  185.220.101.45  AUTH_FAIL  admin  /ssh",
-        "  2024-03-15 02:14:11  185.220.101.45  AUTH_SUCCESS  admin  /ssh[/]",
-        "",
-        "  [#6b7785]AUTH_SUCCESS/FAIL[/] logins · [#6b7785]FILE_ACCESS[/] reads/writes ·",
-        "  [#6b7785]PRIV_ESCALATE[/] sudo/su · [#6b7785]API_CALL[/] external requests",
+        "  Every server keeps an event log: who connected, from where, when,",
+        "  doing what. Logwatch hands you a SUMMARY of it for free — the",
+        "  Activity Report — and keeps the raw auth log sealed until you",
+        "  decide this account's numbers are worth the ⏱.",
     ]
     lines += _sub("investigation tiers", "#ffb454")
     lines += [
-        "  [#00ff9f]free[/]     raw day log — anomalies present but unlabelled",
-        f"  [#ffb454]run L[/]    pattern detection — bursts, geo tags, after-hours  [dim]{lw} ⏱[/]",
-        f"  [#c084fc]filter[/]   geo timeline + ▲ labels + low-and-slow correlation [dim]+{lf} ⏱[/]",
+        "  [#00ff9f]free[/]     Activity Report (centre) — bars, timeline, origins,",
+        "           resource counts, analyst notes. Nothing is named.",
+        f"  [#ffb454]run L[/]    unseals the auth log (right panel) — every row,",
+        f"           this account's in yellow, no labels          [dim]{lw} ⏱[/]",
+        f"  [#c084fc]filter[/]   ▲ names each violation in the log AND adds a",
+        f"           ▲ CONFIRMED block to the report         [dim]+{lf} ⏱[/]",
+    ]
+    lines += _sub("reading the Activity Report", "#ffb454")
+    lines += [
+        "  [#7dd3c0]ACTIVITY PROFILE[/]  each bar has a [b]│[/] tick = the normal",
+        "    ceiling for that metric. Past the tick is unusual, not proof.",
+        f"  [#7dd3c0]TIMELINE[/]  24h lanes AUTH ● · FAIL × · FILES □ · PRIV ◆;",
+        f"    ░ is the {s0}–{s1} shift; a digit = several events in one cell.",
+        "  [#7dd3c0]ORIGINS[/]  where this account logged in from. ✓ = the",
+        "    claimed IP. Δ lines = a city change between CLEAN logins.",
+        "  [#7dd3c0]RESOURCES[/]  routine / sensitive reads, privileged commands",
+        "    — counts only; the auth log shows which paths.",
+        f"  [#ff5470]AUTHENTICATION ANOMALY[/]  {burst_n}+ linked failures inside",
+        f"    {burst_m} min. [b]Unclassified[/] — the report cannot tell a brute",
+        "    force from credential stuffing. The auth log can.",
     ]
     lines.append("")
     lines += violation_table(day, "FORENSICS")
-    lines += _sub("reading the patterns", "#ffb454")
+    lines += _sub("reading the auth log", "#ffb454")
     lines += [
-        "  [#ff5470]BRUTE_FORCE_IN_LOG[/]   5+ AUTH_FAILs in ~60s on one account,",
-        "                       usually ending in AUTH_SUCCESS",
-        "  [#ff5470]CREDENTIAL_STUFFING[/]  one IP, MANY accounts, few tries each —",
-        "                       a stolen combo list being replayed. Flaggable",
-        "                       on the board like any other violation.",
-        "  [#ff8c42]IMPOSSIBLE_TRAVEL[/]    two logins whose cities are physically",
-        "                       unreachable in the elapsed time",
-        "  [#ff8c42]INSIDER_BEHAVIOR[/]     sensitive FILE_ACCESS + PRIV_ESCALATE",
-        "                       outside business hours",
-        "  [#ffd93d]AFTER_HOURS_ACCESS[/]   ordinary activity at odd hours — minor;",
-        "                       benign alone, meaningful in combination",
-        "  [#ff5470]LOW_AND_SLOW[/]         deliberately sub-threshold — the base run",
-        "                       will NOT flag it; only the filter's cross-day",
-        "                       correlation summary surfaces it",
-        "  [#ffd93d]CLAIMED_IP_MISMATCH[/]  free tier — AUTH_OK rows that diverge",
-        "                       from the dossier's claimed IP are highlighted;",
-        "                       corroborate before denying on this alone",
+        "  [#ff5470]BRUTE_FORCE_IN_LOG[/]   a burst of AUTH_FAILs on THIS account,",
+        "                       usually ending in an AUTH_OK",
+        "  [#ff5470]CREDENTIAL_STUFFING[/]  one source IP failing on MANY OTHER",
+        "                       accounts, then logging in to this one",
+        "  [#ff8c42]IMPOSSIBLE_TRAVEL[/]    two clean logins whose cities are",
+        "                       unreachable in the time between them",
+        "  [#ff8c42]INSIDER_BEHAVIOR[/]     sensitive FILE_READ + SUDO_EXEC off-shift",
+        "  [#ffd93d]AFTER_HOURS_ACCESS[/]   ordinary work off-shift — minor; benign",
+        "                       alone, meaningful in combination",
+        "  [#ff5470]LOW_AND_SLOW[/]         a few failures from one IP, hours apart —",
+        "                       built to stay under the report's alert",
+        "  [#ffd93d]CLAIMED_IP_MISMATCH[/]  the claimed IP never logs in at all —",
+        "                       visible on the free report",
+        "",
+        "  [dim]One failed login is not an attack — honest people mistype.[/]",
+        "  [dim]HASH_SUBMIT rows are context only; Logwatch shows no breach data.[/]",
     ]
     lines += _sub("upgrades that change this page", "#ffb454")
     lines += [
-        "  [#00ff9f]Log Analyzer HUD[/]  pre-colours suspicious lines in the free",
-        "                    log — before any ⏱ is spent",
+        "  [#00ff9f]Log Analyzer HUD[/]  ▸ marks this account's rows that sit",
+        "                    inside an anomaly, and flags report bars that",
+        "                    are out of range. It points; it never names.",
+        "  [#00ff9f]Logwatch Optimizer[/]  the log pull costs less ⏱",
     ]
     return "\n".join(lines)
 

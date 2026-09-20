@@ -49,6 +49,9 @@ class ToolResult:
     summary: str
     raw_lines: tuple[str, ...] = ()   # verbatim terminal output lines (pre-analysis)
     filtered: bool = False            # True if a filter was applied
+    # Logwatch only (2026-09-19): the Activity Report for the centre column,
+    # re-rendered for this tier. raw_lines is then the auth log panel.
+    report_lines: tuple[str, ...] = ()
 
 
 # #53: the canonical org handles a typosquat imitates, so the filter can show
@@ -1019,19 +1022,20 @@ def _hc_algo(h: str | None) -> str:
 # One combined auth log for the full day, generated once from the game seed.
 # Candidate entries are interleaved with noise, sorted chronologically.
 #
-# Violations planted in the log:
-#   BRUTE_FORCE_IN_LOG — rapid AUTH_FAIL cluster on the same account (brute force)
-#                        OR AUTH_FAIL on multiple accounts from same IP (stuffing)
-#   IMPOSSIBLE_TRAVEL  — AUTH_OK from two geographically impossible IPs
-#   INSIDER_BEHAVIOR   — FILE_READ on sensitive path + SUDO_EXEC after 22:00
+# Violations planted in the log: brute force (burst on one account), credential
+# stuffing (one IP failing across many accounts, then logging in), impossible
+# travel, insider (sensitive reads + sudo off-shift), after-hours, low-and-slow
+# (scattered sub-threshold failures), claimed-IP mismatch (logins never from
+# the claimed IP). Plus honest noise: a benign single typo for ~30% of
+# candidates. Daytime activity is kept inside the LW_SHIFT window.
 #
-# All AUTH_OK entries carry a city tag (None for internal IPs).
-# Claimed IP mismatch is surfaced in the free tier as a subtle colour signal.
-#
-# Render modes:
-#   get_logwatch_shared(entries, candidate)                     — free, full log
-#   run_logwatch_shared(entries, candidate, state)              — ▲ inline markers
-#   run_logwatch_filtered_shared(entries, candidate, state)     — explicit labels
+# 2026-09-19 overhaul — the page has two surfaces over this one log:
+#   get_logwatch_shared(entries, candidate, state=)   — FREE: the Activity Report
+#                                                       (core/logwatch_report.py)
+#   run_logwatch_shared(entries, candidate, state)    — L: unseals the auth log panel
+#                                                       (raw_lines) + report (report_lines)
+#   run_logwatch_filtered_shared(...)                 — F: ▲ labels in both
+#   get_logwatch_log_lines(...)                       — the panel's lines on their own
 
 _LW_DATE = "2024-01-15"
 
@@ -1346,7 +1350,7 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
     # stream so no other row in this candidate's block moves.
     _typo_rng = _random.Random(_stable_hash(candidate.id, "lw_benign_typo") & 0xFFFFFFFF)
     if _typo_rng.random() < _cfg.LW_BENIGN_TYPO_CHANCE:
-        tt = max(0, t_first_login - _typo_rng.randint(8, 90))
+        tt = max(0, t_first_login - _typo_rng.randint(*_cfg.LW_BENIGN_TYPO_LEAD))
         entries.append(_LogEntry(
             ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_FAIL",
             ip=login_ip, account=account, extra="",
@@ -1440,25 +1444,38 @@ def _lw_render(
     candidate,
     annotate:         bool = False,
     explicit_tags:    bool = False,
-    upgrade_highlight: bool = False,   # log_highlight upgrade (issue #23):
-                                       # free tier colours suspicious lines,
-                                       # WITHOUT the ▲ annotations of a base run
+    upgrade_highlight: bool = False,
+    target_rows_out:  list[int] | None = None,
 ) -> tuple[str, ...]:
-    """Render the shared day log to Rich markup lines.
+    """Render the shared day log (the Logwatch page's right-hand auth log panel).
 
-    Free tier  : full log, candidate rows in yellow, claimed-IP mismatches in orange.
-    Annotate   : adds ▲ inline markers for violations.
-    Explicit   : adds ▲ VIOLATION_TYPE labels.
+    2026-09-19 overhaul — what each tier prints:
+      base (annotate / plain) : every row; the target account's rows in yellow,
+                                AUTH_OK rows from an IP other than the claimed
+                                one tinted orange (a fact the free report
+                                already states). NO labels — the player reads
+                                the shapes themselves.
+      explicit_tags (filter)  : the target's engine-flagged rows in red with
+                                ▲ VIOLATION_TYPE labels, plus the low-and-slow
+                                correlation line.
+      upgrade_highlight (HUD) : a neutral ▸ in the gutter of the target's rows
+                                the engine considers part of an anomaly. The
+                                SAME mark for every kind and never any text —
+                                the Log Analyzer HUD points, it does not name.
+                                Low-and-slow rows are not marked (they are
+                                sub-threshold by design).
+    `annotate` is kept for API compatibility and no longer adds anything.
+    `target_rows_out`, if given, receives the line index of every target row
+    (the panel's [ / ] jump keys use it).
     """
     claimed_ip = (candidate.dossier.claimed_ip or "") if candidate else ""
 
     lines: list[str] = [
-        "[#3d6478]── shared server log ──────────────────────────────────────────[/]",
-        f"[dim]{_LW_DATE}  (all users — locate your target account below)[/]",
+        f"[#3d6478]── auth log · {_LW_DATE} · all accounts ──[/]",
     ]
     if claimed_ip:
-        lines.append(f"[#6b7785]claimed IP[/]  [#ffd93d]{claimed_ip}[/]  "
-                     f"[dim](compare against AUTH_OK source IPs for candidate)[/]")
+        lines.append(f"[#6b7785]target claims[/] [#ffd93d]{claimed_ip}[/]  "
+                     f"[dim]rows in yellow are this account[/]")
     lines.append("")
 
     evt_col = {
@@ -1472,130 +1489,120 @@ def _lw_render(
         # violation is Hashcrack's job. (BREACH_MATCH removed 2026-09-19.)
         "HASH_SUBMIT":  "#c084fc",
     }
-    # Batch-3 task #4e: `annotate` alone used to be enough to trigger
-    # highlighting — meaning log_highlight ("Log Analyzer HUD") never
-    # actually gated anything once the tool was run. The claimed-IP mismatch
-    # special-case below is intentionally NOT part of this gate — it's
-    # documented elsewhere (rules_content._CATCH) as always-free evidence,
-    # a different, pre-existing design decision this task doesn't touch.
-    highlight_active = explicit_tags or upgrade_highlight
+    _TAGS = {
+        "brute_force":       ("#ff5470", "BRUTE_FORCE_IN_LOG", "same account hammered, then a login"),
+        "stuffing":          ("#ff5470", "CREDENTIAL_STUFFING", "one source, many accounts"),
+        "impossible_travel": ("#ff8c42", "IMPOSSIBLE_TRAVEL", ""),
+        "insider":           ("#ff8c42", "INSIDER_BEHAVIOR", "after-hours + privilege escalation"),
+        "after_hours":       ("#ffd93d", "AFTER_HOURS_ACCESS", "minor — corroborate"),
+    }
     prev_vk: str | None = None
 
-    def _format_entry(e: _LogEntry, mine: bool, sus: bool, col: str) -> str:
+    def _row(e: _LogEntry, col: str, gutter: str) -> str:
         ec      = evt_col.get(e.event, "#6b7785")
-        city_s  = f"  [dim][{e.city}][/]" if e.city else ""
+        city_s  = f"  [dim]\\[{e.city}][/]" if e.city else ""
         extra_s = f"  {e.extra}" if e.extra else ""
-        row     = (f"{e.ts_str}  [{ec}]{e.event:<12}[/]  "
-                   f"{e.ip:<18}  {e.account}{extra_s}{city_s}")
+        return (f"{gutter}[{col}]{e.ts_str[11:]}  [/][{ec}]{e.event:<12}[/][{col}] "
+                f"{e.ip:<15}  {e.account}{extra_s}[/]{city_s}")
 
-        # In free tier: highlight claimed-IP mismatches for the candidate
-        if mine and not annotate and not explicit_tags:
-            if e.event == "AUTH_OK" and claimed_ip and e.ip != claimed_ip:
-                return f"[#ff8c42]{row}[/]"   # subtle orange — IP doesn't match claim
-            return f"[{col}]{row}[/]"
-        return f"[{col}]{row}[/]"
+    for e in entries:
+        is_mine = target_id is not None and e.owner_id == target_id
+        if not is_mine:
+            prev_vk = None
+            lines.append(_row(e, "#2e3d4f", "  "))
+            continue
+        if target_rows_out is not None:
+            target_rows_out.append(len(lines))
+        gutter = ("[#ffb454]▸[/] " if (upgrade_highlight and e.is_suspicious
+                                       and not explicit_tags) else "  ")
+        if explicit_tags and e.is_suspicious:
+            lines.append(_row(e, "#ff5470", gutter))
+            tag = _TAGS.get(e.violation_kind or "")
+            if tag and prev_vk != e.violation_kind:
+                tcol, name, note = tag
+                if e.violation_kind == "impossible_travel" and e.city:
+                    note = e.city
+                lines.append(f"    [{tcol}][b]▲ {name}[/][/]"
+                             + (f"  [dim]{note}[/]" if note else ""))
+            prev_vk = e.violation_kind
+            continue
+        prev_vk = None
+        mismatch = e.event == "AUTH_OK" and claimed_ip and e.ip != claimed_ip
+        lines.append(_row(e, "#ff8c42" if mismatch else "#ffd93d", gutter))
 
-    def _render_flat(entries_list: list[_LogEntry]) -> None:
-        nonlocal prev_vk
-        for e in entries_list:
-            is_mine = (e.owner_id == target_id)
-            if is_mine and e.is_suspicious and highlight_active:
-                col = "#ff5470" if explicit_tags else "#ff8c42"
-                lines.append(_format_entry(e, True, True, col))
-                if upgrade_highlight and not explicit_tags:
-                    if e.violation_kind == "brute_force" and e.event == "AUTH_FAIL" and prev_vk != "brute_force":
-                        lines.append("  [#ff8c42]▲ rapid auth failures on this account[/]")
-                    elif e.violation_kind == "stuffing" and e.event == "AUTH_OK" and prev_vk != "stuffing":
-                        lines.append("  [#ff8c42]▲ credential stuffing — same source IP targeting multiple accounts[/]")
-                    elif e.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
-                        lines.append(f"  [#ff8c42]▲ login from geographically distant IP  [{e.city}][/]")
-                    elif e.violation_kind == "insider" and prev_vk != "insider":
-                        lines.append("  [#ff8c42]▲ after-hours privileged access[/]")
-                    elif e.violation_kind == "after_hours" and prev_vk != "after_hours":
-                        lines.append("  [#ff8c42]▲ activity outside business hours[/]")
-                if explicit_tags:
-                    if e.violation_kind == "brute_force" and prev_vk != "brute_force":
-                        lines.append("  [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]")
-                    elif e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                        lines.append("  [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]  — one source IP, many accounts")
-                    elif e.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
-                        lines.append(f"  [#ff5470][b]▲ IMPOSSIBLE_TRAVEL[/][/]  [{e.city}]")
-                    elif e.violation_kind == "insider" and prev_vk != "insider":
-                        lines.append("  [#ff5470][b]▲ INSIDER_BEHAVIOR[/][/]  — after-hours + priv escalation")
-                    elif e.violation_kind == "after_hours" and prev_vk != "after_hours":
-                        lines.append("  [#ff8c42][b]▲ AFTER_HOURS_ACCESS[/][/]  — minor, corroborate")
-                prev_vk = e.violation_kind
-            elif is_mine:
-                prev_vk = None
-                # Claimed IP mismatch: orange even without annotation
-                if e.event == "AUTH_OK" and claimed_ip and e.ip != claimed_ip:
-                    if annotate or explicit_tags:
-                        lines.append(f"[#ff8c42]{_format_entry(e, True, False, '#ff8c42')}[/]")
-                        if annotate:
-                            lines.append("  [#ff8c42]▲ login IP differs from dossier claim[/]")
-                    else:
-                        lines.append(_format_entry(e, True, False, "#ffd93d"))
-                else:
-                    lines.append(_format_entry(e, True, False, "#ffd93d"))
-            else:
-                prev_vk = None
-                lines.append(_format_entry(e, False, False, "#2e3d4f"))
-
-    _render_flat(entries)
-
-    # v2 Low-and-slow only surfaces under the filter's cross-day correlation —
-    # the individual failures are sub-threshold and unflagged in the base run.
+    # Low-and-slow only surfaces under the filter's correlation — each
+    # failure is sub-threshold on its own.
     if explicit_tags and target_id:
         slow = [e for e in entries
                 if e.owner_id == target_id and e.violation_kind == "low_and_slow"]
         if slow:
             lines.append("")
             lines.append(
-                f"  [#ff5470][b]▲ LOW_AND_SLOW[/][/]  — {len(slow)} auth failures from "
-                f"{slow[0].ip} scattered across the day (each sub-threshold)"
-            )
+                f"  [#ff5470][b]▲ LOW_AND_SLOW[/][/]  {len(slow)} auth failures from "
+                f"{slow[0].ip} scattered across the day (each sub-threshold)")
 
     lines.append("")
-    lines.append(f"[dim]{len(entries)} entries  ·  highlighted = current target account[/]")
+    lines.append(f"[dim]{len(entries)} entries[/]")
     return tuple(lines)
 
 
+def _lw_report_lines(entries, candidate, state, log_state: str,
+                     hud: bool = False, width: int | None = None) -> tuple[str, ...]:
+    """The Activity Report (centre column) for one tier. See core/logwatch_report."""
+    from . import logwatch_report as _lr
+    report = _lr.build_logwatch_report(entries, candidate)
+    hud = hud or config.UPGRADE_LOG_HIGHLIGHT in (getattr(state, "upgrades", ()) or ())
+    conf = (_lr.filter_confirmations(entries, candidate, report)
+            if log_state == "filtered" else ())
+    cost = tool_cost(state, "logwatch") if state is not None else None
+    return _lr.render_report(report, log_state=log_state, hud=hud,
+                             confirmations=conf, pull_cost=cost, width=width)
+
+
 def get_logwatch_shared(entries: list[_LogEntry], candidate,
-                        upgrade_highlight: bool = False) -> tuple[str, ...]:
-    """Free full log — candidate highlighted, claimed-IP mismatches in orange.
-    With the log_highlight upgrade, suspicious lines are pre-coloured."""
-    return _lw_render(entries, candidate.id, candidate,
-                      upgrade_highlight=upgrade_highlight)
+                        upgrade_highlight: bool = False, state=None,
+                        width: int | None = None) -> tuple[str, ...]:
+    """FREE tier: the Activity Report with the auth log still sealed.
 
-
-def run_logwatch_shared(entries: list[_LogEntry], candidate, state) -> ToolResult:
-    """Base run: ▲ inline markers on anomalous entries. findings=() — player judges.
-
-    Batch-3 task #4e: previously called _lw_render with only annotate=True —
-    log_highlight ("Log Analyzer HUD") never actually gated anything once
-    the tool was run. Now threads the upgrade from state.
+    (Before 2026-09-19 this returned the whole raw log — see
+    core/logwatch_report.py for why that changed.) `upgrade_highlight` is the
+    Log Analyzer HUD; `state`, when given, also supplies the upgrade set and
+    the ⏱ cost shown in the footer.
     """
+    return _lw_report_lines(entries, candidate, state, "sealed",
+                            hud=upgrade_highlight, width=width)
+
+
+def get_logwatch_log_lines(entries: list[_LogEntry], candidate, state=None, *,
+                           filtered: bool = False,
+                           target_rows_out: list[int] | None = None) -> tuple[str, ...]:
+    """The auth log panel's lines for the current candidate."""
+    hud = config.UPGRADE_LOG_HIGHLIGHT in (getattr(state, "upgrades", ()) or ())
+    return _lw_render(entries, candidate.id, candidate, explicit_tags=filtered,
+                      upgrade_highlight=hud, target_rows_out=target_rows_out)
+
+
+def run_logwatch_shared(entries: list[_LogEntry], candidate, state,
+                        width: int | None = None) -> ToolResult:
+    """Base run (L): pulls the auth log into the panel. findings=() — the
+    player reads the log themselves. raw_lines = the log panel; report_lines
+    = the Activity Report re-rendered with the log open."""
     _charge(state, "logwatch")
-    _highlight = config.UPGRADE_LOG_HIGHLIGHT in getattr(state, "upgrades", ())
-    raw_lines  = _lw_render(entries, candidate.id, candidate, annotate=True,
-                            upgrade_highlight=_highlight)
-    n_findings = len(_findings_from(candidate, ToolName.LOGWATCH))
-    summary = (
-        f"{n_findings} anomalous pattern(s) flagged — review highlighted entries."
-        if n_findings else
-        "No suspicious patterns detected for this account."
-    )
-    return ToolResult(tool=ToolName.LOGWATCH, findings=(), raw_lines=raw_lines, summary=summary)
+    raw_lines = get_logwatch_log_lines(entries, candidate, state)
+    report = _lw_report_lines(entries, candidate, state, "open", width=width)
+    return ToolResult(tool=ToolName.LOGWATCH, findings=(), raw_lines=raw_lines,
+                      summary="auth log pulled — examine it in the right panel",
+                      report_lines=report)
 
 
-def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state) -> ToolResult:
-    """Filter: explicit ▲ VIOLATION_TYPE labels."""
+def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state,
+                                 width: int | None = None) -> ToolResult:
+    """Filter: explicit ▲ VIOLATION_TYPE labels in the log AND a ▲ CONFIRMED
+    block on the report."""
     _charge(state, "logwatch", filter=True)
     findings  = _findings_from(candidate, ToolName.LOGWATCH)
-    _highlight = config.UPGRADE_LOG_HIGHLIGHT in getattr(state, "upgrades", ())
-    raw_lines = _lw_render(entries, candidate.id, candidate,
-                            annotate=True, explicit_tags=True,
-                            upgrade_highlight=_highlight)
+    raw_lines = get_logwatch_log_lines(entries, candidate, state, filtered=True)
+    report = _lw_report_lines(entries, candidate, state, "filtered", width=width)
     summary = (
         f"[FILTERED] {len(findings)} violation(s) confirmed — see ▲ labels."
         if findings else
@@ -1604,6 +1611,7 @@ def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state) -> 
     return ToolResult(
         tool=ToolName.LOGWATCH, findings=findings,
         raw_lines=raw_lines, summary=summary, filtered=True,
+        report_lines=report,
     )
 
 

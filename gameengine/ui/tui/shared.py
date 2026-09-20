@@ -212,17 +212,23 @@ always free, a random sweep isn't.[/]
 
 
 def build_ref_logwatch(state=None) -> str:
-    return f"""[#7dd3c0][b]COMMANDS — LOGWATCH[/][/]
+    # 2026-09-19 overhaul: the free tier is the Activity Report; L unseals
+    # the auth log panel on the right; the filter names violations.
+    return f"""[#7dd3c0][b]LOGWATCH — REPORT FIRST[/][/]
+
+[dim]free[/]  Activity Report (centre)
+  read it before spending ⏱
 
 [#00ff9f]analyze[/]  [dim]or[/] [#00ff9f]logwatch[/]  [dim]or[/] [#00ff9f]{_key('tool_logwatch')}[/]
-  pattern detection — brute force,
-  geo anomalies, after-hours events
+  unseal the auth log (right)
+  — every row, no labels
   [dim]cost: {_base_cost('logwatch', state)} ⏱[/]
+[#00ff9f]\\[ ][/]  jump this account's rows
+[#00ff9f]PgUp PgDn[/]  page the log
 
 [#c084fc]filter[/]  [dim]or[/] [#c084fc]{_key('filter_current')}[/]
-  geographic timeline overlay —
-  explicit BRUTE_FORCE /
-  IMPOSSIBLE_TRAVEL / INSIDER flag
+  ▲ names each violation in the
+  log and on the report
   [dim]cost: +{config.FILTER_COSTS['logwatch']} ⏱[/]
 
 {_verdict_footer()}"""

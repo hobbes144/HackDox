@@ -233,3 +233,307 @@ def build_logwatch_report(entries, candidate: Candidate) -> LogwatchReport:
         own_rows=len(own),
         total_entries=len(entries),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Rendering — Rich markup for the Logwatch page's centre column
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Tiers (the `log_state` argument):
+#   "sealed"   free  — the report alone; the auth log panel is still sealed
+#   "open"     L run — same report; footer points at the now-open log panel
+#   "filtered" F run — adds the ▲ CONFIRMED block, the only place a violation
+#                      is NAMED on this page (besides the log's own filter tags)
+#
+# `hud` is the Log Analyzer HUD upgrade: bars past their normal ceiling turn
+# amber and get a "◂ out of range" tag. Without it the player compares each
+# bar to its │ tick themselves. It never names anything.
+
+from math import asin, cos, radians, sin, sqrt
+
+from rich.markup import escape as _esc
+
+_C_HEAD   = "#ffb454"   # forensics accent (matches the FORENSICS board group)
+_C_LABEL  = "#6b7785"
+_C_RULE   = "#3d6478"
+_C_VALUE  = "#c8d4e1"
+_C_BAR    = "#7dd3c0"
+_C_HOT    = "#ffb454"
+_C_WARN   = "#ff8c42"
+_C_CRIT   = "#ff5470"
+_C_OK     = "#00ff9f"
+_C_SHIFT  = "#1f2c38"
+_C_OFF    = "#2e3d4f"
+
+_LANE_GLYPH = {"AUTH": ("●", "#00ff9f"), "FAIL": ("×", "#ff5470"),
+               "FILES": ("□", "#7dd3c0"), "PRIV": ("◆", "#ff8c42")}
+# (PRIV is ◆, not the mockup's ▲: in this game ▲ always means "a filter
+# confirmed a named violation", and a free-tier glyph must not look like one.)
+
+# Approximate city coordinates, for the filter's travel-speed readout only.
+_COORDS: dict[str, tuple[float, float]] = {
+    "Seattle, US": (47.61, -122.33), "Austin, US": (30.27, -97.74),
+    "Denver, US": (39.74, -104.99), "Chicago, US": (41.88, -87.63),
+    "Boston, US": (42.36, -71.06), "San Francisco, US": (37.77, -122.42),
+    "Portland, US": (45.52, -122.68), "Atlanta, US": (33.75, -84.39),
+    "Frankfurt, DE": (50.11, 8.68), "Singapore, SG": (1.35, 103.82),
+    "New York, US": (40.71, -74.01), "Amsterdam, NL": (52.37, 4.90),
+    "Moscow, RU": (55.76, 37.62), "Taipei, TW": (25.03, 121.57),
+    "Nairobi, KE": (-1.29, 36.82), "Sao Paulo, BR": (-23.55, -46.63),
+    "London, GB": (51.51, -0.13), "Sydney, AU": (-33.87, 151.21),
+    "Dubai, AE": (25.20, 55.27), "Mumbai, IN": (19.08, 72.88),
+    "Seoul, KR": (37.57, 126.98), "Mexico City, MX": (19.43, -99.13),
+    "Lagos, NG": (6.52, 3.38), "Toronto, CA": (43.65, -79.38),
+}
+
+
+def travel_kmh(pair: TravelPair) -> int | None:
+    a, b = _COORDS.get(pair.place_a), _COORDS.get(pair.place_b)
+    if not a or not b or pair.minutes <= 0:
+        return None
+    la1, lo1, la2, lo2 = map(radians, (*a, *b))
+    h = sin((la2 - la1) / 2) ** 2 + cos(la1) * cos(la2) * sin((lo2 - lo1) / 2) ** 2
+    km = 2 * 6371 * asin(sqrt(h))
+    return int(km / (pair.minutes / 60))
+
+
+@dataclass(frozen=True)
+class _Layout:
+    width: int
+    bar:   int
+    bin_min: int
+
+
+def layout_for(width: int | None) -> _Layout:
+    """Full layout at >= LW_REPORT_WIDTH columns, compact below it (narrow
+    terminals): shorter bars and hour-wide timeline cells, so nothing wraps."""
+    if width is None or width >= config.LW_REPORT_WIDTH:
+        return _Layout(config.LW_REPORT_WIDTH, config.LW_BAR_WIDTH,
+                        config.LW_TIMELINE_BIN_MIN)
+    return _Layout(max(36, width), config.LW_BAR_WIDTH_COMPACT,
+                   config.LW_TIMELINE_BIN_MIN_COMPACT)
+
+
+def _rule(title: str = "", lay: _Layout | None = None) -> str:
+    w = (lay or layout_for(None)).width
+    if not title:
+        return f"[{_C_RULE}]{'─' * w}[/]"
+    return (f"[{_C_RULE}]── [/][{_C_HEAD}][b]{title}[/][/] "
+            f"[{_C_RULE}]{'─' * max(2, w - len(title) - 4)}[/]")
+
+
+def _bar(r: LogwatchReport, key: str, hud: bool, lay: _Layout) -> str:
+    label, ceiling, scale = config.LW_PROFILE_METRICS[key]
+    w = lay.bar
+    v = r.metric(key)
+    filled = round(min(v, scale) / scale * w)
+    tick = min(w - 1, round(ceiling / scale * w))
+    hot = hud and r.out_of_range(key)
+    col = _C_HOT if hot else _C_BAR
+    cells = []
+    for i in range(w):
+        if i == tick:
+            cells.append(f"[{_C_VALUE}]│[/]")
+        elif i < filled:
+            cells.append(f"[{col}]█[/]")
+        else:
+            cells.append(f"[{_C_OFF}]░[/]")
+    over = f"[{col}]▸[/]" if v > scale else " "
+    tag = f"  [{_C_HOT}]◂ out of range[/]" if hot else ""
+    return f"  [{_C_LABEL}]{label:<14}[/]{''.join(cells)}{over}[{_C_VALUE}]{v:>3}[/]{tag}"
+
+
+def _timeline(r: LogwatchReport, lay: _Layout) -> list[str]:
+    bin_s = lay.bin_min * 60
+    n = 86400 // bin_s
+    per_hour = 3600 // bin_s
+    axis = [" "] * n
+    for h in range(0, 24, 3):
+        pos = h * per_hour
+        for j, ch in enumerate(f"{h:02d}"):
+            if pos + j < n:
+                axis[pos + j] = ch
+    lines = [f"  [{_C_LABEL}]{'':<6}{''.join(axis)}[/]"]
+    for lane in LANES:
+        glyph, gcol = _LANE_GLYPH[lane]
+        counts = [0] * n
+        for ts in r.lane(lane):
+            counts[(ts % 86400) // bin_s] += 1
+        cells = []
+        for i, c in enumerate(counts):
+            if c > 1:          # several events in one cell: show how many
+                cells.append(f"[b {gcol}]{min(c, 9)}[/]")
+            elif c:
+                cells.append(f"[{gcol}]{glyph}[/]")
+            elif in_shift(i * bin_s):
+                cells.append(f"[{_C_SHIFT}]░[/]")
+            else:
+                cells.append(f"[{_C_OFF}]·[/]")
+        lines.append(f"  [{_C_LABEL}]{lane:<6}[/]{''.join(cells)}")
+    s, e = fmt_hhmm(config.LW_SHIFT_START), fmt_hhmm(config.LW_SHIFT_END)
+    lines.append(f"  [{_C_LABEL}]{'':<6}[/][{_C_SHIFT}]░[/][dim] shift {s}–{e} · n = count"
+                 + (f" per {lay.bin_min} min" if lay.width >= config.LW_REPORT_WIDTH else "")
+                 + "[/]")
+    return lines
+
+
+def _origins_and_resources(r: LogwatchReport, lay: _Layout) -> list[str]:
+    full = lay.width >= config.LW_REPORT_WIDTH
+    sub = f"  [{_C_LABEL}]where this account logged in from[/]" if full else ""
+    rows = [f"  [{_C_HEAD}][b]ORIGINS[/][/]{sub}"]
+    if not r.claimed_ip_seen:
+        rows.append(f"  [{_C_WARN}]✗ claimed IP {_esc(r.claimed_ip)} never seen[/]")
+    for o in r.origins:
+        mark = f"[{_C_OK}]✓[/]" if o.is_claimed_ip else f"[{_C_WARN}]✗[/]"
+        detail = f"{o.logins} login{'s' if o.logins != 1 else ''}"
+        if o.failures_from:
+            detail += f" · {o.failures_from} fail"
+        ip_col = (f"[{_C_LABEL}]{o.ip:<16}[/] "
+                  if lay.width >= config.LW_REPORT_WIDTH else "")
+        rows.append(f"  {mark} [{_C_VALUE}]{_esc(o.place):<18}[/] "
+                    f"{ip_col}[{_C_LABEL}]{detail}[/]")
+    for t in r.travel:
+        rows += _pair(f"[{_C_WARN}]Δ {t.minutes:>3} min[/] [{_C_LABEL}]@{fmt_hhmm(t.ts_a)}[/]",
+                      f"[{_C_VALUE}]{_esc(t.place_a)} → {_esc(t.place_b)}[/]", lay)
+    rows.append("")
+    rows += _pair(
+        f"[{_C_HEAD}][b]RESOURCES[/][/]",
+        f"[{_C_LABEL}]routine[/] [{_C_VALUE}]{r.files_routine}[/] [{_C_LABEL}]·[/] "
+        f"[{_C_LABEL}]sensitive[/] [{_C_VALUE}]{r.files_sensitive}[/] [{_C_LABEL}]·[/] "
+        f"[{_C_LABEL}]privileged[/] [{_C_VALUE}]{r.privileged}[/]", lay)
+    return rows
+
+
+def _pair(title: str, detail: str, lay: _Layout) -> list[str]:
+    """A note as one line in the full layout, title + indented detail in compact."""
+    if lay.width >= config.LW_REPORT_WIDTH:
+        return [f"  {title}  {detail}"]
+    return [f"  {title}", f"    {detail}"]
+
+
+def _alerts(r: LogwatchReport, lay: _Layout) -> list[str]:
+    out: list[str] = []
+    if r.burst_alert:
+        mins = config.LW_BURST_WINDOW // 60
+        out += _pair(f"[{_C_CRIT}][b]⚠ AUTHENTICATION ANOMALY[/][/]",
+                     f"[{_C_VALUE}]{r.peak_burst} linked failures in {mins} min[/]", lay)
+        out.append(f"    [{_C_LABEL}]pattern unclassified — read the auth log[/]")
+    if not r.claimed_ip_seen:
+        out += _pair(f"[{_C_WARN}][b]⚠ SOURCE DISCREPANCY[/][/]",
+                     f"[{_C_VALUE}]claimed {_esc(r.claimed_ip)} never seen[/]", lay)
+    if r.travel:
+        n = len(r.travel)
+        out += _pair(f"[{_C_WARN}][b]⚠ LOCATION SHIFT[/][/]",
+                     f"[{_C_VALUE}]{n} city change{'s' if n != 1 else ''} "
+                     f"between clean logins[/]", lay)
+    if r.off_hours:
+        out += _pair("[#ffd93d]● off-shift activity[/]",
+                     f"[{_C_VALUE}]{r.off_hours} event{'s' if r.off_hours != 1 else ''} "
+                     f"outside {fmt_hhmm(config.LW_SHIFT_START)}–"
+                     f"{fmt_hhmm(config.LW_SHIFT_END)}[/]", lay)
+    if not out:
+        out.append(f"  [{_C_LABEL}]no anomaly crosses an alert threshold[/]")
+    return out
+
+
+def filter_confirmations(entries, candidate: Candidate, r: LogwatchReport) -> list[str]:
+    """FILTER tier: name each Logwatch-owned violation this candidate carries,
+    with the evidence the log holds for it. Filter-tier code MAY read the
+    engine's per-row `violation_kind` — this is the paid explicit tier."""
+    from .models import DiscrepancyKind as K, ToolName
+    own = [e for e in entries if e.owner_id == candidate.id]
+    kinds = {d.kind for d in candidate.truth.discrepancies
+             if d.revealed_by == ToolName.LOGWATCH}
+    lines: list[str] = []
+
+    def by(vk):
+        return [e for e in own if e.violation_kind == vk]
+
+    if K.BRUTE_FORCE_IN_LOG in kinds:
+        rows = by("brute_force")
+        fails = [e for e in rows if e.event == "AUTH_FAIL"]
+        span = (rows[-1].ts_secs - rows[0].ts_secs) if rows else 0
+        lines.append(f"  [{_C_CRIT}][b]▲ BRUTE_FORCE_IN_LOG[/][/]  {len(fails)} failures on "
+                     f"this account from {rows[0].ip if rows else '?'} in {span}s, then a login")
+    if K.CREDENTIAL_STUFFING in kinds:
+        rows = by("stuffing")
+        ip = rows[0].ip if rows else "?"
+        sprayed = {e.account for e in entries if e.ip == ip and e.event == "AUTH_FAIL"}
+        lines.append(f"  [{_C_CRIT}][b]▲ CREDENTIAL_STUFFING[/][/]  {ip} failed on "
+                     f"{len(sprayed)} other accounts, then logged in here")
+    if K.LOW_AND_SLOW in kinds:
+        rows = sorted(by("low_and_slow"), key=lambda e: e.ts_secs)
+        if rows:
+            span = rows[-1].ts_secs - rows[0].ts_secs
+            lines.append(f"  [{_C_CRIT}][b]▲ LOW_AND_SLOW[/][/]  {len(rows)} failures from "
+                         f"{rows[0].ip} across {span // 3600}h {(span % 3600) // 60}m "
+                         f"(each under the alert)")
+    if K.IMPOSSIBLE_TRAVEL in kinds:
+        for t in r.travel:
+            kmh = travel_kmh(t)
+            spd = f" ≈ {kmh:,} km/h" if kmh else ""
+            lines.append(f"  [{_C_WARN}][b]▲ IMPOSSIBLE_TRAVEL[/][/]  {_esc(t.place_a)} → "
+                         f"{_esc(t.place_b)} in {t.minutes} min{spd}")
+    if K.CLAIMED_IP_MISMATCH in kinds:
+        seen = ", ".join(_esc(o.place) for o in r.origins) or "nowhere"
+        lines.append(f"  [#ffd93d][b]▲ CLAIMED_IP_MISMATCH[/][/]  claimed "
+                     f"{_esc(r.claimed_ip)}; every login came from {seen}")
+    if K.INSIDER_BEHAVIOR in kinds:
+        rows = by("insider")
+        at = fmt_hhmm(rows[0].ts_secs) if rows else "?"
+        lines.append(f"  [{_C_WARN}][b]▲ INSIDER_BEHAVIOR[/][/]  sensitive reads + "
+                     f"privilege escalation at {at}")
+    if K.AFTER_HOURS_ACCESS in kinds:
+        rows = by("after_hours")
+        at = fmt_hhmm(rows[0].ts_secs) if rows else "?"
+        lines.append(f"  [#ffd93d][b]▲ AFTER_HOURS_ACCESS[/][/]  routine work at {at} "
+                     f"(minor — corroborate)")
+    if not lines:
+        lines.append(f"  [{_C_OK}]no Logwatch violation confirmed for this account[/]")
+    return lines
+
+
+def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = False,
+                  confirmations: list[str] | tuple[str, ...] = (),
+                  pull_cost: int | None = None,
+                  width: int | None = None) -> tuple[str, ...]:
+    """The Activity Report as Rich markup lines (see the tier notes above).
+
+    `width` is the usable column width if known; below LW_REPORT_WIDTH the
+    compact layout is used (see layout_for)."""
+    lay = layout_for(width)
+    s, e = fmt_hhmm(config.LW_SHIFT_START), fmt_hhmm(config.LW_SHIFT_END)
+    L = _C_LABEL
+    lines = [
+        f"  [{L}]SUBJECT[/]  [b {_C_VALUE}]{_esc(r.name)}[/]",
+        f"  [{L}]ACCOUNT[/]  [{_C_VALUE}]{_esc(r.email)}[/]",
+        f"  [{L}]ROLE   [/]  [{_C_VALUE}]{_esc(r.role)}[/]",
+        f"  [{L}]HOURS  [/]  [{_C_VALUE}]{s}–{e}[/]",
+        f"  [{L}]CLAIMS [/]  [{_C_VALUE}]{_esc(r.location)}[/]  [{L}]via[/] "
+        f"[#ffd93d]{_esc(r.claimed_ip)}[/]",
+        "",
+        _rule("ACTIVITY PROFILE", lay),
+        f"  [{L}]{'':<14}{'│ = normal ceiling':>{lay.bar + 4}}[/]",
+    ]
+    lines += [_bar(r, k, hud, lay) for k in config.LW_PROFILE_METRICS]
+    lines += ["", _rule("ACTIVITY TIMELINE", lay)]
+    lines += _timeline(r, lay)
+    lines += ["", _rule("LOCATIONS & ACCESS", lay)]
+    lines += _origins_and_resources(r, lay)
+    lines += ["", _rule("ANALYST NOTES", lay)]
+    lines += _alerts(r, lay)
+    if log_state == "filtered":
+        lines += ["", _rule("▲ FILTER — CONFIRMED", lay)]
+        lines += list(confirmations)
+    lines.append("")
+    if log_state == "sealed":
+        cost = f" — {pull_cost} ⏱" if pull_cost is not None else ""
+        lines.append(f"  [{L}]auth log sealed · {r.total_entries} entries[/]")
+        lines.append(f"  [{_C_BAR}]L[/] [{L}]pulls it into the right panel{cost}[/]")
+    elif log_state == "open":
+        lines.append(f"  [{L}]auth log open → right panel[/]")
+        lines.append(f"  [{_C_BAR}]{_esc('[ ]')}[/] [{L}]jump this account's "
+                     f"{r.own_rows} rows ·[/] [{_C_BAR}]F[/] [{L}]filter[/]")
+    else:
+        lines.append(f"  [{L}]filter applied — ▲ tags are in the log too[/]")
+    return tuple(lines)

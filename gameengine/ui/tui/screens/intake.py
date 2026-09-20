@@ -44,6 +44,7 @@ from gameengine.ui.tui.widgets import (
     DossierPanel,
     EvidenceBoard,
     EvidenceState,
+    LogListPanel,
     OverseerPanel,
     ReferencePanel,
     StatusHeader,
@@ -190,7 +191,10 @@ class IntakeScreen(Screen):
             # sweeping and recording at the same time — the whole reason the
             # board opens over a tool page at all.
             (self.board_hc, ("hc-left", "terminal-hc")),
-            (self.board_lw, ("lw-left",)),
+            # Logwatch keeps its Activity Report (the summary, with the ▲
+            # CONFIRMED block once filtered) and gives up the auth log panel
+            # while the 60%-wide board is open.
+            (self.board_lw, ("lw-left", "log-list-panel")),
             (self.board_st, ("st-left", "terminal-st")),
         ]
         self._evidence_open = False   # shared visibility across tool pages
@@ -214,6 +218,11 @@ class IntakeScreen(Screen):
 
         # Breach list panel — right column of the Ghostscan page
         self.breach_lists = BreachListPanel()
+
+        # Auth log panel — right column of the Logwatch page (2026-09-19).
+        # Sealed until the player pays for the base run; the centre column
+        # (term_lw) holds the free Activity Report.
+        self.log_lw = LogListPanel()
 
         # Interactive image viewer — right column of the Stegotool page
         self.image_st = StegoImagePanel()
@@ -274,12 +283,15 @@ class IntakeScreen(Screen):
                 yield self.term_hc
 
             # ── Page 3: Logwatch ──────────────────────────────────────
+            # 3-column layout (2026-09-19): sidebar | Activity Report | auth
+            # log. The report is free; the log panel is sealed until L.
             with Horizontal(id="page-logwatch", classes="tool-page"):
                 yield self.board_lw
                 with Vertical(classes="tool-left", id="lw-left"):
                     yield self.cdos_lw
                     yield self.ref_lw
                 yield self.term_lw
+                yield self.log_lw
 
             # ── Page 4: Stegotool ─────────────────────────────────────
             # 3-column layout: sidebar | findings terminal | image viewer.
@@ -361,6 +373,8 @@ class IntakeScreen(Screen):
             )
         stamp_hint = ("[#00ffd5][b]X[/][/] Stamp  " if self._page_index == 4
                       else "[#00ffd5][b]X[/][/] Decrypt  " if self._page_index == 2
+                      else "[#00ffd5][b]L[/][/] Pull log  [#00ffd5][b]\\[ ][/][/] Jump  "
+                      if self._page_index == 3
                       else "")
         return (
             "[#00ff9f][b]1-5[/][/] Pages  "
@@ -370,6 +384,18 @@ class IntakeScreen(Screen):
             "[dim]↑↓ Cursor  Space Flag[/]  "
             "[#00ff9f][b]`[/][/] Dev"
         )
+
+    def _lw_report_width(self) -> int | None:
+        """Usable columns in the Logwatch report column, so the report can pick
+        its compact layout on narrow terminals (logwatch_report.layout_for).
+        Measured from the app width because the page may not be laid out yet
+        when a candidate loads; mirrors #terminal-lw's 40% in app.tcss, minus
+        border + padding + the vertical scrollbar."""
+        try:
+            w = self.app.size.width
+        except Exception:  # noqa: BLE001 -- no app yet (unit construction)
+            return None
+        return (w * 40) // 100 - 8 if w else None
 
     def _refresh_footer(self) -> None:
         if self._footer_widget:
@@ -540,11 +566,14 @@ class IntakeScreen(Screen):
         if self.cipher_hc.block is not None and self.cipher_hc.block.pre_revealed:
             self._cipher_resolved = True
             self._publish_recovered_password(c)
-        # Logwatch terminal: shared day log (Log Analyzer HUD upgrade applied
-        # when owned — issue #23)
+        # Logwatch: the free Activity Report in the centre column (Log
+        # Analyzer HUD applied from state when owned); the auth log panel on
+        # the right starts sealed (2026-09-19 overhaul).
         self.term_lw.set_initial_content(tools_bridge.get_logwatch_shared(
-            self._day_log, c,
-            upgrade_highlight=config.UPGRADE_LOG_HIGHLIGHT in ups))
+            self._day_log, c, state=self._state, width=self._lw_report_width()))
+        self.term_lw.scroll_home(animate=False)
+        self.log_lw.seal(len(self._day_log),
+                         tools_bridge.tool_cost(self._state, "logwatch"))
         # Logwatch reference: target info + today's rules + attack pattern guide
         self.ref_lw.update_content(build_ref_logwatch(self._state))
         # Stegotool: findings terminal gets the free stats block; the pixel
@@ -870,9 +899,11 @@ class IntakeScreen(Screen):
             ToolName.GHOSTSCAN: (tools_bridge.run_ghostscan_shared,
                                  tools_bridge.run_ghostscan_filtered_shared),
             ToolName.LOGWATCH:  (lambda c, s: tools_bridge.run_logwatch_shared(
-                                     self._day_log, c, s),
+                                     self._day_log, c, s,
+                                     width=self._lw_report_width()),
                                  lambda c, s: tools_bridge.run_logwatch_filtered_shared(
-                                     self._day_log, c, s)),
+                                     self._day_log, c, s,
+                                     width=self._lw_report_width())),
             # HASHCRACK and STEGOTOOL intentionally absent — both pages use
             # an interactive minigame instead of a flat tool run. Hashcrack
             # joined them in the 2026-09-14 cipher-block rework; its entry
@@ -912,7 +943,20 @@ class IntakeScreen(Screen):
         term_id = self._TOOL_TERM[tool]
         term = self.query_one(f"#{term_id}", ToolTerminal)
         if tool == ToolName.LOGWATCH:
-            term.set_initial_content(result.raw_lines)
+            # Centre: the report re-rendered for this tier. Right: the auth
+            # log, unsealed (and ▲-tagged when filtered). The log is rendered
+            # again here only to collect the target-row indices for [ / ].
+            term.set_initial_content(result.report_lines)
+            # Filtered: land on the ▲ CONFIRMED block at the report's foot.
+            if filtered:
+                term.call_after_refresh(term.scroll_end, animate=False)
+            else:
+                term.scroll_home(animate=False)
+            rows: list[int] = []
+            lines = tools_bridge.get_logwatch_log_lines(
+                self._day_log, self._candidate, self._state,
+                filtered=filtered, target_rows_out=rows)
+            self.log_lw.open(lines, rows, filtered=filtered)
         elif tool == ToolName.GHOSTSCAN:
             term.set_result(result)
         else:
@@ -1356,6 +1400,22 @@ class IntakeScreen(Screen):
         if (k == config.KEY_BINDINGS["stamp_mode"] and self._page_index == 4
                 and not self.command_bar.get_buffer()):
             self._enter_stamp_mode(); event.stop(); return
+
+        # ── Logwatch auth log navigation (2026-09-19) — [ / ] jump between
+        # the target account's rows, PgUp/PgDn page the log. Only with an
+        # empty command buffer, so typing is never hijacked.
+        if self._page_index == 3 and not self.command_bar.get_buffer():
+            if k in (config.KEY_BINDINGS["log_prev_row"],
+                     config.KEY_BINDINGS["log_next_row"]):
+                delta = -1 if k == config.KEY_BINDINGS["log_prev_row"] else 1
+                if not self.log_lw.jump(delta):
+                    self.command_bar.set_response(
+                        "auth log is sealed — L to pull it", error=False)
+                event.stop(); return
+            if k == "pagedown":
+                self.log_lw.scroll_page_down(animate=False); event.stop(); return
+            if k == "pageup":
+                self.log_lw.scroll_page_up(animate=False); event.stop(); return
 
         # ── Verdict/Next buttons — let Enter reach their own binding instead
         # of the command bar, when one of them is focused (batch-3 follow-up).
