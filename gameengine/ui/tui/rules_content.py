@@ -289,10 +289,13 @@ VIOLATION_CLUSTERS: list[
     # claims in the cluster above: how they spoke to you, and how they kept
     # their own credential. UNSALTED_STORAGE joined it 2026-09-15 with the
     # group move — storing your password in the clear is a thing this person
-    # did, not a property of the site.
+    # did, not a property of the site. Reordered ahead of HOSTILE_CHAT
+    # 2026-09-21 (Nick) — row position is now authored display order (both
+    # the board and the Rules page render this tuple's order verbatim), not
+    # just cluster membership.
     ("DOSSIER",    "dossier-personal", "Personal", (
-        DiscrepancyKind.HOSTILE_CHAT,
-        DiscrepancyKind.UNSALTED_STORAGE)),
+        DiscrepancyKind.UNSALTED_STORAGE,
+        DiscrepancyKind.HOSTILE_CHAT)),
     # OSINT / Ghostscan — the claim, the fabrication, the trace left elsewhere.
     ("OSINT",      "osint-association", "Association Confirmation", (
         DiscrepancyKind.MISSING_PUBLIC_PROFILE,

@@ -66,7 +66,7 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
         ("Identity Confirmation",
          ["Affiliation not stated", "Disposable email domain"]),
         ("Personal",
-         ["Hostile chat", "Unsalted / plaintext storage"]),
+         ["Unsalted / plaintext storage", "Hostile chat"]),
     ]),
     ("OSINT", [
         ("Association Confirmation",
