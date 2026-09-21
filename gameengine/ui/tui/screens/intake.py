@@ -134,12 +134,13 @@ class IntakeScreen(Screen):
         # bake in at construction — IntakeScreen is rebuilt fresh each day.
         _unlocked = state.unlocked_tools
         self.board    = EvidenceBoard(self.evidence_state, "evidence-board", summary=True,
-                                      unlocked_tools=_unlocked)
+                                      unlocked_tools=_unlocked, day=self._day)
         # Full editable board on the Candidate/Dossier page too, so the player
         # always has direct access. Hidden by default; Tab swaps it in for the
         # read-only summary.
         self.board_c0 = EvidenceBoard(self.evidence_state, "evidence-c0", "tool-evidence",
-                                      home_group="DOSSIER", unlocked_tools=_unlocked)
+                                      home_group="DOSSIER", unlocked_tools=_unlocked,
+                                      day=self._day)
         # Verdict buttons (batch-3 follow-up, Nick): a clickable/arrow-
         # navigable ADMIT/DENY pair alongside the evidence board, sharing the
         # mid row with it 50/50. Both route through the exact same
@@ -160,16 +161,16 @@ class IntakeScreen(Screen):
         # mounted on the left, hidden until the player toggles them on.
         self.board_gs = EvidenceBoard(self.evidence_state, "evidence-gs", "tool-evidence",
                                       home_group=_BOARD_HOME_GROUP["evidence-gs"],
-                                      unlocked_tools=_unlocked)
+                                      unlocked_tools=_unlocked, day=self._day)
         self.board_hc = EvidenceBoard(self.evidence_state, "evidence-hc", "tool-evidence",
                                       home_group=_BOARD_HOME_GROUP["evidence-hc"],
-                                      unlocked_tools=_unlocked)
+                                      unlocked_tools=_unlocked, day=self._day)
         self.board_lw = EvidenceBoard(self.evidence_state, "evidence-lw", "tool-evidence",
                                       home_group=_BOARD_HOME_GROUP["evidence-lw"],
-                                      unlocked_tools=_unlocked)
+                                      unlocked_tools=_unlocked, day=self._day)
         self.board_st = EvidenceBoard(self.evidence_state, "evidence-st", "tool-evidence",
                                       home_group=_BOARD_HOME_GROUP["evidence-st"],
-                                      unlocked_tools=_unlocked)
+                                      unlocked_tools=_unlocked, day=self._day)
         self._tool_boards = (self.board_gs, self.board_hc, self.board_lw, self.board_st)
         # What each tool board hides when it is shown. Usually just the
         # condensed-dossier sidebar it stands in for.
@@ -743,7 +744,7 @@ class IntakeScreen(Screen):
         # evidence it refused to show them (#33's progressive unlock).
         actual  = {d.kind for d in self._candidate.truth.discrepancies}
         visible = {k for _g, k, _l in
-                   rules_content.visible_catalog(self._state.unlocked_tools)}
+                   rules_content.visible_catalog(self._state.unlocked_tools, self._day)}
         self.evidence_state.reveal(actual, visible)
         for b in (self.board, self.board_c0, *self._tool_boards):
             b.repaint()
@@ -1496,6 +1497,15 @@ class IntakeScreen(Screen):
                 self._run_tool(tool, filtered=True)
 
         elif kind == "verdict":
+            # Quick Add (2026-09-20): a verdict typed at the command line
+            # sends the player back to the Dossier page first, so they land
+            # on the candidate's chat response and the verdict-reveal
+            # animation instead of a silent tool page. Only when the verdict
+            # actually commits (mirrors _commit_verdict's own guard) — an
+            # already-locked or candidate-less command shouldn't yank the
+            # player off whatever page they were reading.
+            if not self._verdict_locked and self._candidate is not None:
+                self._goto_page(0)
             self._commit_verdict(arg)   # sets command_bar response internally
 
         elif kind == "reveal":

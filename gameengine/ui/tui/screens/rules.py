@@ -54,7 +54,8 @@ class RulesScreen(ModalScreen):
         # overlay too, so the board is always within reach.
         self._ev_board = (
             EvidenceBoard(evidence_state, "evidence-rules", "rules-evidence",
-                          home_group="DOSSIER", unlocked_tools=unlocked_tools)
+                          home_group="DOSSIER", unlocked_tools=unlocked_tools,
+                          day=day)
             if evidence_state is not None else None
         )
 

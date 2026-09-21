@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 
 from gameengine import config
-from gameengine.core import candidate_gen, tools_bridge
+from gameengine.core import candidate_gen, content_loader, tools_bridge
 from gameengine.core.models import Day, DiscrepancyKind, ToolName
 
 # ─── Violation catalog — (group, kind, player-facing label) ─────────────────
@@ -34,7 +34,6 @@ from gameengine.core.models import Day, DiscrepancyKind, ToolName
 
 VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     # DOSSIER (no tool)
-    ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
     # UNSALTED_STORAGE moved CREDENTIAL -> DOSSIER (Nick, 2026-09-15). It was
     # always DOSSIER-TIER — its evidence is the plaintext sitting on the
     # dossier, readable on day 1 with no tool — but it was GROUPED under
@@ -46,6 +45,7 @@ VIOLATION_CATALOG: list[tuple[str, DiscrepancyKind, str]] = [
     # algorithm there to be weak), so nothing about this kind lives on the
     # Hashcrack side any more.
     ("DOSSIER",     DiscrepancyKind.UNSALTED_STORAGE,       "Unsalted / plaintext storage"),
+    ("DOSSIER",     DiscrepancyKind.HOSTILE_CHAT,           "Hostile chat"),
     ("DOSSIER",     DiscrepancyKind.AFFILIATION_NOT_STATED, "Affiliation not stated"),
     ("DOSSIER",     DiscrepancyKind.DISPOSABLE_EMAIL,       "Disposable email domain"),
 
@@ -202,6 +202,7 @@ GROUP_ORDER = ["DOSSIER", "OSINT", "CREDENTIAL", "FORENSICS", "STEGO"]
 
 def visible_catalog(
     unlocked_tools: set[str] | None,
+    day: Day | None = None,
 ) -> list[tuple[str, DiscrepancyKind, str]]:
     """VIOLATION_CATALOG filtered to kinds the player can currently observe,
     ordered by GROUP_ORDER and then by severity ascending (minor -> major ->
@@ -210,9 +211,37 @@ def visible_catalog(
     Used by the Evidence Board (app.py) so its single scrollable list only
     ever offers violations the player could actually have caught, in the
     same order it has always displayed them in.
+
+    `day`, when given, additionally drops a kind nothing seen SO FAR in the
+    campaign could ever plant — the CUMULATIVE union, across every day from 1
+    through `day.number`, of the day's `allowed_violations` whitelist and
+    whichever archetypes were eligible for it that day (see
+    `content_loader.kinds_discovered_through`). This is a NARROWER, separate
+    question from `_tool_unlocked`: a tool can be fully unlocked and a kind
+    still be unreachable so far because nothing in any day's lineup up to now
+    has been able to carry it (e.g. a Stego carrier-shape kind before any
+    shape-eligible archetype has ever been scheduled).
+
+    Deliberately cumulative, not single-day: a kind that was reachable on an
+    earlier day stays reachable even on a later day whose own scripted
+    `archetype_mix` wouldn't roll it — once something is a thing to check
+    for, it stays a thing to check for, rather than flickering off the board
+    because today's script didn't happen to draw the archetype that carries
+    it. `day=None` (tests, the rules-lab preview, and the module-level
+    `EVIDENCE_ITEMS` catalog at import time) skips this check and shows
+    everything the tool-unlock gate alone would allow, matching
+    `_tool_unlocked`'s own `unlocked_tools=None` behaviour.
     """
+    # unlocked_tools=None is this module's established "no gating context"
+    # signal (see _tool_unlocked's docstring) — honour it for the content
+    # filter too, not just the tool filter, so a caller that explicitly asked
+    # for the unfiltered catalog (tests, the rules-lab preview) still gets it
+    # even when it also happens to pass a real `day`.
+    reachable = (content_loader.kinds_discovered_through(day.number)
+                 if day is not None and unlocked_tools is not None else None)
     items = [(g, k, lbl) for g, k, lbl in VIOLATION_CATALOG
-             if _tool_unlocked(_TOOL.get(k), unlocked_tools)]
+             if _tool_unlocked(_TOOL.get(k), unlocked_tools)
+             and (reachable is None or k in reachable)]
     items.sort(key=lambda it: (
         GROUP_ORDER.index(it[0]),
         _SEV_RANK.get(_SEVERITY.get(it[1], "minor"), 0),
@@ -380,11 +409,15 @@ if _CLUSTER_GROUP_RUNS != [g for g in GROUP_ORDER if g in _CLUSTER_GROUP_RUNS]:
 
 def clustered_catalog(
     unlocked_tools: set[str] | None,
+    day: Day | None = None,
 ) -> list[tuple[str, str, str, list[tuple[str, DiscrepancyKind, str]]]]:
     """`(group, cluster_id, subcategory name, items)` for the board's layout.
 
     Same filtering rule as `visible_catalog` — a kind whose revealing tool is
-    still locked is dropped, because a candidate cannot carry it yet.
+    still locked is dropped, because a candidate cannot carry it yet. `day`
+    applies the same additional content-reachability filter `visible_catalog`
+    documents (the day's `allowed_violations` whitelist and its
+    `archetype_mix`) — pass it and the two surfaces agree by construction.
 
     Order inside a cluster is AUTHORED, not sorted. These are hand-laid rows
     that Nick arranged by hand, and re-sorting them would quietly rearrange a
@@ -399,16 +432,28 @@ def clustered_catalog(
     where a locked violation used to sit.
 
     This is a SECOND ordering of the same catalog, not a replacement:
-    `visible_catalog` (group, then severity) still drives the Rules-page tables
-    and the flagged-evidence summary strip. Both derive from VIOLATION_CATALOG
-    and both filter through `_tool_unlocked`, so they can disagree about order
-    but never about membership.
+    `visible_catalog` (group, then severity) still drives the
+    flagged-evidence summary strip. `violation_table` (the Rules-page tables)
+    now walks THIS SAME cluster order rather than sorting by severity, so the
+    board and the Rules page agree on position too, not just membership — a
+    row's spot in its group never moves, and only its colour changes as a
+    rule's severity steps up or down. Both surfaces derive from
+    VIOLATION_CATALOG and both filter through `_tool_unlocked`, so they can
+    disagree about ORDER from `visible_catalog` but never about membership.
     """
+    # unlocked_tools=None is this module's established "no gating context"
+    # signal (see _tool_unlocked's docstring) — honour it for the content
+    # filter too, not just the tool filter, so a caller that explicitly asked
+    # for the unfiltered catalog (tests, the rules-lab preview) still gets it
+    # even when it also happens to pass a real `day`.
+    reachable = (content_loader.kinds_discovered_through(day.number)
+                 if day is not None and unlocked_tools is not None else None)
     catalog = {k: (g, lbl) for g, k, lbl in VIOLATION_CATALOG}
     out: list[tuple[str, str, str, list[tuple[str, DiscrepancyKind, str]]]] = []
     for group, cluster_id, cluster_label, kinds in VIOLATION_CLUSTERS:
         items = [(group, k, catalog[k][1]) for k in kinds
-                 if _tool_unlocked(_TOOL.get(k), unlocked_tools)]
+                 if _tool_unlocked(_TOOL.get(k), unlocked_tools)
+                 and (reachable is None or k in reachable)]
         if not items:
             continue
         out.append((group, cluster_id, cluster_label, items))
@@ -503,7 +548,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.THREAT_FORUM_MATCH:     "handle in the threat-forum list — filter reveals with [CRITICAL] tag",
     DiscrepancyKind.TYPOSQUAT_HANDLE:       "free cue on identity check · filter confirms the lookalike",
     DiscrepancyKind.BRUTE_FORCE_IN_LOG:     "free report raises an UNCLASSIFIED authentication anomaly · the auth log shows ONE account hammered · filter labels it",
-    DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "free report lists the city change and the minutes between clean logins · filter adds the km/h",
+    DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "the origin map + legend give each city change's distance and time — judge the speed yourself (honest people fly too) · Threat Triage HUD flags it · filter adds the km/h",
     DiscrepancyKind.INSIDER_BEHAVIOR:       "free report shows off-shift activity + sensitive/privileged COUNTS · the auth log shows the paths and the sudo · filter labels it",
     DiscrepancyKind.CREDENTIAL_STUFFING:    "free report raises the SAME unclassified anomaly as brute force · the auth log shows ONE source failing on MANY accounts · filter names it",
     DiscrepancyKind.AFTER_HOURS_ACCESS:     "free report's off-shift note; the auth log shows routine paths — benign alone (minor)",
@@ -728,7 +773,17 @@ def violation_table(day: Day | None, group: str,
 
     Columns: violation (exact enum value) · severity · revealing surface ·
     today's rule status. A dim second line per row carries the trigger and
-    how to catch it. Rows sort minor → critical, matching the board.
+    how to catch it.
+
+    Rows are grouped under the same player-facing subcategory headers the
+    Evidence Board uses (`VIOLATION_CLUSTERS`), in the same AUTHORED order —
+    "dynamic colour, static position" (Nick, 2026-09-21): a row's spot in its
+    group never moves, so the player builds spatial memory of the table the
+    same way they do the board, and can tell a violation was RE-TIERED (its
+    colour changed) from one that simply moved (it didn't — nothing here
+    ever reorders on severity). Only `_day_severity`'s colour is live; the
+    subcategory headers and each row's position within one are exactly
+    `clustered_catalog`'s layout, filtered down to this `group`.
 
     `unlocked_tools` filters rows to kinds the player can actually observe
     today, exactly as visible_catalog() does for the evidence board — pass it
@@ -737,36 +792,57 @@ def violation_table(day: Day | None, group: str,
     unaffected; the one caller that needs it is build_creds_text's LOCKED
     branch, which documents the dossier-tier credential kind while the tool
     itself is still days away.
+
+    `day` (already a required positional parameter here) additionally drops
+    a kind nothing seen so far in the campaign could ever plant — see
+    visible_catalog's docstring for the exact rule (the cumulative
+    `allowed_violations` whitelist / `archetype_mix` union via
+    `content_loader.kinds_discovered_through`). This was previously
+    unchecked here even though `day` was already in hand, which is how a
+    violation could sit in this table (and its matching Evidence Board chip)
+    on a day nothing generated could actually carry it.
     """
-    rows = sorted(
-        [(k, lbl) for g, k, lbl in VIOLATION_CATALOG
-         if g == group and _tool_unlocked(_TOOL.get(k), unlocked_tools)],
-        key=lambda it: _SEV_RANK.get(_day_severity(it[0], day), 0),
-    )
+    # unlocked_tools=None is this module's established "no gating context"
+    # signal (see _tool_unlocked's docstring) — honour it for the content
+    # filter too, not just the tool filter, so a caller that explicitly asked
+    # for the unfiltered catalog (tests, the rules-lab preview) still gets it
+    # even when it also happens to pass a real `day`.
+    reachable = (content_loader.kinds_discovered_through(day.number)
+                 if day is not None and unlocked_tools is not None else None)
+    catalog = {k: lbl for g, k, lbl in VIOLATION_CATALOG if g == group}
     accent = GROUP_ACCENT.get(group, "#7dd3c0")
     out = [
         f"[{accent}][b]▎ VIOLATIONS — {group}[/][/]",
         "[#6b7785]  VIOLATION                 SEVERITY  SOURCE     TODAY[/]",
         f"[#1c2733]{'─' * _W}[/]",
     ]
-    for kind, _lbl in rows:
-        sev  = _day_severity(kind, day)
-        scol = SEV_COLOR[sev]
-        tool = _TOOL_LABEL.get(_TOOL.get(kind, ToolName.DOSSIER), "?")
-        status, stcol = _rule_status(day, kind)
-        out.append(
-            f"  [{scol}][b]{_fit(kind.value.upper(), 26)}[/][/]"
-            f"[{scol}]{_fit(sev, 10)}[/]"
-            f"[#7dd3c0]{_fit(tool, 11)}[/]"
-            f"[{stcol}][b]{status}[/][/]"
-        )
-        out.append(f"    [dim]{_DESC.get(kind, '')}[/]")
-        catch = _CATCH.get(kind)
-        if catch:
-            out.append(f"    [#3d6478]catch: {catch}[/]")
-        for i, ex_line in enumerate(_EXAMPLE.get(kind, ())):
-            lead = "example:" if i == 0 else "        "
-            out.append(f"      [#3d6478]{lead}[/] [dim]{ex_line}[/]")
+    for cgroup, _cid, cluster_label, kinds in VIOLATION_CLUSTERS:
+        if cgroup != group:
+            continue
+        rows = [(k, catalog[k]) for k in kinds
+                if _tool_unlocked(_TOOL.get(k), unlocked_tools)
+                and (reachable is None or k in reachable)]
+        if not rows:
+            continue
+        out.append(f"[#6b7785]  {cluster_label}[/]")
+        for kind, _lbl in rows:
+            sev  = _day_severity(kind, day)
+            scol = SEV_COLOR[sev]
+            tool = _TOOL_LABEL.get(_TOOL.get(kind, ToolName.DOSSIER), "?")
+            status, stcol = _rule_status(day, kind)
+            out.append(
+                f"  [{scol}][b]{_fit(kind.value.upper(), 26)}[/][/]"
+                f"[{scol}]{_fit(sev, 10)}[/]"
+                f"[#7dd3c0]{_fit(tool, 11)}[/]"
+                f"[{stcol}][b]{status}[/][/]"
+            )
+            out.append(f"    [dim]{_DESC.get(kind, '')}[/]")
+            catch = _CATCH.get(kind)
+            if catch:
+                out.append(f"    [#3d6478]catch: {catch}[/]")
+            for i, ex_line in enumerate(_EXAMPLE.get(kind, ())):
+                lead = "example:" if i == 0 else "        "
+                out.append(f"      [#3d6478]{lead}[/] [dim]{ex_line}[/]")
     out.append(f"[#1c2733]{'─' * _W}[/]")
     out.append("[dim]  TODAY column: DENY = disqualifying rule · FLAG = weighted "
                "(corroborate) · — = not in today's ruleset[/]")
@@ -1349,10 +1425,18 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
         "    ceiling for that metric. Past the tick is unusual, not proof.",
         f"  [#7dd3c0]TIMELINE[/]  24h lanes AUTH ● · FAIL × · FILES □ · PRIV ◆;",
         f"    ░ is the {s0}–{s1} shift; a digit = several events in one cell.",
-        "  [#7dd3c0]ORIGINS[/]  where this account logged in from. ✓ = the",
-        "    claimed IP. Δ lines = a city change between CLEAN logins.",
+        "  [#7dd3c0]ORIGINS[/]  a world map of where this account logged in",
+        "    from, numbered to match the legend. ✓ = the claimed IP; red",
+        "    numbers failed their way in. Dotted arcs + the 1→2 lines are",
+        "    city changes between CLEAN logins: distance and time only.",
+        f"    [b]People travel[/] — faster than ~{config.LW_MAX_FEASIBLE_KMH} km/h is",
+        "    what no flight explains.",
         "  [#7dd3c0]RESOURCES[/]  routine / sensitive reads, privileged commands",
         "    — counts only; the auth log shows which paths.",
+        "  [#7dd3c0]ANALYST NOTES[/]  [dim](Threat Triage HUD)[/] the report's own",
+        "    conclusions: attack bursts, a claimed IP never seen, city changes",
+        "    faster than any flight, off-shift work. Locked until bought —",
+        "    everything they summarise is on the report for a careful reader.",
         f"  [#ff5470]AUTHENTICATION ANOMALY[/]  {burst_n}+ linked failures inside",
         f"    {burst_m} min. [b]Unclassified[/] — the report cannot tell a brute",
         "    force from credential stuffing. The auth log can.",
@@ -1383,6 +1467,7 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
         "  [#00ff9f]Log Analyzer HUD[/]  ▸ marks this account's rows that sit",
         "                    inside an anomaly, and flags report bars that",
         "                    are out of range. It points; it never names.",
+        "  [#00ff9f]Threat Triage HUD[/]   unlocks the report's Analyst Notes",
         "  [#00ff9f]Logwatch Optimizer[/]  the log pull costs less ⏱",
     ]
     return "\n".join(lines)

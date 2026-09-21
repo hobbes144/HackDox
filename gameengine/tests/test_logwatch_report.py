@@ -90,11 +90,12 @@ def test_claimed_ip_mismatch_iff_claimed_ip_never_seen():
 
 
 def test_impossible_travel_iff_travel_pair():
+    """2026-09-20: an IMPOSSIBLE pair, not any pair — honest trips exist now."""
     for c, ks, r in _all():
-        assert bool(r.travel) == (K.IMPOSSIBLE_TRAVEL in ks), (
+        assert bool(r.impossible) == (K.IMPOSSIBLE_TRAVEL in ks), (
             c.id, [(t.place_a, t.place_b, t.minutes) for t in r.travel])
     for c, r in _carriers(K.IMPOSSIBLE_TRAVEL):
-        assert all(t.minutes * 60 <= config.LW_TRAVEL_REPORT_WINDOW for t in r.travel)
+        assert r.impossible, "carrier has no impossible pair"
 
 
 def test_insider_shows_as_counts_only():
@@ -252,3 +253,85 @@ def test_logwatch_tunables_are_coherent():
         "a single benign typo would mark the user's own origin hostile")
     assert set(config.LW_PROFILE_METRICS) == {
         "logins", "failures", "origins", "files", "privileged", "off_hours"}
+
+
+# ── 2026-09-20: travel noise, the origin map, paid Analyst Notes ────────────
+
+def test_honest_travel_happens_and_is_always_feasible():
+    trips = 0
+    for c, ks, r, log in _sample():
+        travelled = any(e.owner_id == c.id and e.violation_kind == "legit_trip"
+                        for e in log)
+        trips += travelled
+        if K.IMPOSSIBLE_TRAVEL not in ks:
+            assert not r.impossible, (
+                c.id, [(t.place_a, t.place_b, t.minutes, t.kmh) for t in r.travel])
+        if travelled:
+            assert r.travel and all(t.feasible for t in r.travel), c.id
+    assert trips >= len(_sample()) * 0.08, f"only {trips} honest trips generated"
+
+
+def test_travel_tunables_keep_the_two_kinds_apart():
+    worst_planted = config.LW_TRAVEL_MIN_KM / (config.LW_TRAVEL_GAP[1] / 3600)
+    assert worst_planted > config.LW_MAX_FEASIBLE_KMH, (
+        "a planted IMPOSSIBLE_TRAVEL pair could read as a feasible flight — "
+        "raise LW_TRAVEL_MIN_KM or shorten LW_TRAVEL_GAP")
+    fastest_trip = config.LW_TRIP_CRUISE_KMH / config.LW_TRIP_TIME_MARGIN
+    assert fastest_trip < config.LW_MAX_FEASIBLE_KMH, (
+        "an honest trip could read as impossible — lower LW_TRIP_CRUISE_KMH "
+        "or raise LW_TRIP_TIME_MARGIN")
+
+
+def test_analyst_notes_are_locked_without_threat_triage():
+    for c, _ks, _r, log in _sample()[::9]:
+        free = "\n".join(tools_bridge.get_logwatch_shared(log, c, state=_state()))
+        paid = "\n".join(tools_bridge.get_logwatch_shared(
+            log, c, state=_state({config.UPGRADE_LOG_TRIAGE})))
+        assert "locked — Threat Triage HUD" in free
+        for word in ("AUTHENTICATION ANOMALY", "SOURCE DISCREPANCY",
+                     "LOCATION SHIFT", "off-shift activity"):
+            assert word not in free, (c.id, word)
+        assert "locked" not in paid
+
+
+def test_threat_triage_notes_match_the_report():
+    for c, ks, r, log in _sample():
+        text = "\n".join(tools_bridge.get_logwatch_shared(
+            log, c, state=_state({config.UPGRADE_LOG_TRIAGE})))
+        assert ("AUTHENTICATION ANOMALY" in text) == r.burst_alert, c.id
+        assert ("LOCATION SHIFT" in text) == bool(r.impossible), c.id
+        assert ("SOURCE DISCREPANCY" in text) == (not r.claimed_ip_seen), c.id
+
+
+def test_origin_map_scales_and_plots_every_origin():
+    from rich.text import Text
+    from gameengine.core.logwatch_report import render_report
+    for width in (38, 42, 48, None):
+        limit = (width or config.LW_REPORT_WIDTH) + 2
+        for c, _ks, r, _log in _sample()[::11]:
+            lines = render_report(r, width=width)
+            text = "\n".join(Text.from_markup(ln).plain for ln in lines)
+            assert "┌" in text, f"no map at width {width}"
+            plain = [Text.from_markup(ln).plain for ln in lines]
+            start = next(i for i, p in enumerate(plain) if "ORIGINS" in p)
+            end = next(i for i, p in enumerate(plain) if "RESOURCES" in p)
+            for ln in lines[start:end]:          # the map + its legend
+                assert Text.from_markup(ln).cell_len <= limit, (width, ln)
+            map_rows = [Text.from_markup(ln).plain for ln in lines
+                        if "│" in Text.from_markup(ln).plain
+                        and Text.from_markup(ln).plain.strip().startswith("│")]
+            plotted = sum(ch.isdigit() for row in map_rows for ch in row)
+            expected = sum(1 for o in r.origins[:9]
+                           if o.place in __import__(
+                               "gameengine.core.logwatch_report",
+                               fromlist=["CITY_COORDS"]).CITY_COORDS)
+            assert plotted == expected, (c.id, width, plotted, expected)
+
+
+def test_no_map_below_its_minimum_width():
+    from rich.text import Text
+    from gameengine.core.logwatch_report import render_report
+    _c, _ks, r, _log = _sample()[0]
+    text = "\n".join(Text.from_markup(ln).plain
+                     for ln in render_report(r, width=config.LW_MAP_MIN_WIDTH - 1))
+    assert "┌" not in text

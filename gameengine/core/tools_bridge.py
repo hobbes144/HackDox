@@ -1228,7 +1228,16 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
         t += rng.randint(*_cfg.LW_STUFFING_COOLDOWN)
 
     if has_travel:
-        city_a_entry, city_b_entry = rng.sample(_LW_CITIES, 2)
+        # 2026-09-20: the two cities must be far enough apart that the
+        # LW_TRAVEL_GAP between them is impossible at ANY airliner speed —
+        # honest business travel is now generated too (see the trip block
+        # below), and the two must never be confusable.
+        from .logwatch_report import distance_between as _dist
+        for _ in range(40):
+            city_a_entry, city_b_entry = rng.sample(_LW_CITIES, 2)
+            _km = _dist(city_a_entry[1], city_b_entry[1])
+            if _km is None or _km >= _cfg.LW_TRAVEL_MIN_KM:
+                break
         ip_a = city_a_entry[0] + f"{rng.randint(1,254)}.{rng.randint(1,254)}"
         ip_b = city_b_entry[0] + f"{rng.randint(1,254)}.{rng.randint(1,254)}"
         entries.append(_LogEntry(
@@ -1319,6 +1328,40 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
             ))
             t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
 
+    # ── Honest noise: a real business trip (2026-09-20) ───────────────────
+    # Without this, a second login city ALWAYS meant "deny": impossible travel
+    # was the only way one ever appeared. Now LW_LEGIT_TRIP_CHANCE of the
+    # candidates who carry no IMPOSSIBLE_TRAVEL actually fly somewhere and log
+    # in on arrival, so the player has to read the clock, not the map.
+    #
+    # The destination is chosen so the gap is at least LW_TRIP_TIME_MARGIN x
+    # the flight time it needs — comfortably under LW_MAX_FEASIBLE_KMH, the
+    # line the report treats as evidence. Planned HERE, before the shift
+    # compression below, so the compression can reserve room for it; the rows
+    # themselves are appended after it.
+    #
+    # Skipped for after-hours candidates: their late login from home would
+    # become a return leg with a much tighter gap, and a clean candidate must
+    # never produce an infeasible pair.
+    _trip: tuple[str, str, int] | None = None     # (ip, city, seconds needed)
+    _trip_rng = _random.Random(_stable_hash(candidate.id, "lw_legit_trip") & 0xFFFFFFFF)
+    if (not has_travel and not has_after
+            and _trip_rng.random() < _cfg.LW_LEGIT_TRIP_CHANCE):
+        from .logwatch_report import distance_between as _dist2
+        home_city = login_city or candidate.dossier.claimed_location
+        options = []
+        for prefix, city in _LW_CITIES:
+            km = _dist2(home_city, city)
+            if km is None or not (200 < km <= _cfg.LW_TRIP_MAX_KM):
+                continue
+            need = int((km / _cfg.LW_TRIP_CRUISE_KMH + _cfg.LW_TRIP_OVERHEAD_H)
+                       * 3600 * _cfg.LW_TRIP_TIME_MARGIN)
+            options.append((prefix, city, need))
+        if options:
+            prefix, city, need = _trip_rng.choice(options)
+            _trip = (prefix + f"{_trip_rng.randint(1,254)}.{_trip_rng.randint(1,254)}",
+                     city, need)
+
     # ── Keep the working day inside the shift (2026-09-19) ────────────────
     # The Activity Report counts off-hours activity against the standard
     # shift, so everything on the daytime `t` chain (logins, attack bursts,
@@ -1332,16 +1375,39 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
     _off_clock = {"insider", "after_hours", "low_and_slow"}
     _day_rows = [e for e in entries if e.violation_kind not in _off_clock]
     _latest = _cfg.LW_SHIFT_END - _cfg.LW_SHIFT_END_MARGIN
+    _reserve = _trip[2] if _trip else 0      # room for the trip's flight time
     # The chain ends at the running clock `t` (>= the last daytime row); the
     # HASH_SUBMIT row below lands one more gap after it, so reserve that gap.
     _chain_end = max([t] + [e.ts_secs for e in _day_rows])
     _gap_max = _cfg.LW_CLEAN_ACTIVITY_GAP[1]
-    if _chain_end + _gap_max > _latest and _chain_end > t_first_login:
-        _k = (_latest - _gap_max - t_first_login) / (_chain_end - t_first_login)
+    if _chain_end + _gap_max + _reserve > _latest and _chain_end > t_first_login:
+        _k = (_latest - _gap_max - _reserve - t_first_login) / (_chain_end - t_first_login)
+        if _k <= 0:          # no room for the trip after all — drop it
+            _trip, _reserve = None, 0
+            _k = (_latest - _gap_max - t_first_login) / (_chain_end - t_first_login)
         for e in _day_rows:
             e.ts_secs = t_first_login + int((e.ts_secs - t_first_login) * _k)
             e.ts_str = _lw_ts(e.ts_secs)
         t = t_first_login + int((t - t_first_login) * _k)
+
+    # The planned trip's arrival logins, off the real end of the (possibly
+    # compressed) chain so they always land inside the shift.
+    if _trip is not None:
+        _ip, _city, _need = _trip
+        _chain = max([t] + [e.ts_secs for e in entries if e.owner_id == candidate.id])
+        _budget = _latest - _chain
+        if _budget >= _need:
+            tt = _chain + _trip_rng.randint(_need, _budget)
+            for _ in range(_trip_rng.randint(*_cfg.LW_TRIP_ARRIVAL_LOGINS)):
+                if tt > _latest:
+                    break
+                entries.append(_LogEntry(
+                    ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_OK",
+                    ip=_ip, account=account, extra="",
+                    owner_id=candidate.id, is_suspicious=False,
+                    violation_kind="legit_trip", city=_city,
+                ))
+                tt += _trip_rng.randint(*_cfg.LW_TRIP_ARRIVAL_GAP)
 
     # ── Honest noise: one fumbled password (2026-09-19) ───────────────────
     # A single AUTH_FAIL from the user's own origin just before their first
@@ -1551,11 +1617,13 @@ def _lw_report_lines(entries, candidate, state, log_state: str,
     """The Activity Report (centre column) for one tier. See core/logwatch_report."""
     from . import logwatch_report as _lr
     report = _lr.build_logwatch_report(entries, candidate)
-    hud = hud or config.UPGRADE_LOG_HIGHLIGHT in (getattr(state, "upgrades", ()) or ())
+    ups = getattr(state, "upgrades", ()) or ()
+    hud = hud or config.UPGRADE_LOG_HIGHLIGHT in ups
+    notes = config.UPGRADE_LOG_TRIAGE in ups      # Threat Triage HUD (2026-09-20)
     conf = (_lr.filter_confirmations(entries, candidate, report)
             if log_state == "filtered" else ())
     cost = tool_cost(state, "logwatch") if state is not None else None
-    return _lr.render_report(report, log_state=log_state, hud=hud,
+    return _lr.render_report(report, log_state=log_state, hud=hud, notes=notes,
                              confirmations=conf, pull_cost=cost, width=width)
 
 
@@ -1775,6 +1843,129 @@ def _stego_pixel_grid(candidate: Candidate, tier: str) -> list[str]:
     return lines
 
 
+def _stego_entropy_bar(value: int, band: tuple[int, int], colour: str,
+                       width: int | None = None, scale_max: int = 100) -> str:
+    """Magnitude bar for a 0-100 severity score -- fills left-to-right like
+    the Logwatch report's bars (logwatch_report._bar), with │ ticks
+    bracketing the expected/clean band. A channel that fills past the
+    upper tick reads as anomalous by shape alone; `colour` is the caller's
+    job to gate behind the Channel Colorizer upgrade
+    (config.UPGRADE_STEGO_RGB_COLOR) -- the bar's shape is free either way.
+    """
+    w = width or config.STEGO_BAR_WIDTH
+    band_lo, band_hi = band
+    filled = round(min(value, scale_max) / scale_max * w)
+    lo_tick = min(w - 1, max(0, round(band_lo / scale_max * w)))
+    hi_tick = min(w - 1, max(0, round(band_hi / scale_max * w)))
+    cells: list[str] = []
+    for i in range(w):
+        if i in (lo_tick, hi_tick):
+            cells.append("[#6b7785]│[/]")
+        elif i < filled:
+            cells.append(f"[{colour}]█[/]")
+        else:
+            cells.append("[#20303c]░[/]")
+    over = f"[{colour}]▸[/]" if value > scale_max else ""
+    return "".join(cells) + over
+
+
+def _stego_point_bar(value: float, scale: tuple[float, float],
+                     band: tuple[float, float], marker: str, colour: str,
+                     width: int | None = None) -> str:
+    """Point-value bar for a metric that should sit near a centre band (RS
+    ratio, LSB autocorrelation) rather than accumulate from zero like the
+    entropy bars above. Draws the expected band as a shaded strip between
+    two ticks and plots the observed value as a single marker glyph.
+    """
+    w = width or config.STEGO_BAR_WIDTH
+    lo, hi = scale
+    band_lo, band_hi = band
+
+    def pos(v: float) -> int:
+        v = max(lo, min(hi, v))
+        return round((v - lo) / (hi - lo) * (w - 1))
+
+    band_a, band_b = pos(band_lo), pos(band_hi)
+    vpos = pos(value)
+    cells: list[str] = []
+    for i in range(w):
+        if i == vpos:
+            cells.append(f"[{colour}][b]{marker}[/][/]")
+        elif band_a <= i <= band_b:
+            cells.append("[#3d4f5e]▒[/]")
+        else:
+            cells.append("[#20303c]░[/]")
+    return "".join(cells)
+
+
+def _stego_range_col(value: float, band: tuple[float, float], rgb_color: bool) -> str:
+    """Two-tier severity colour for a point-value metric (RS ratio,
+    autocorrelation), gated behind the same Channel Colorizer upgrade as
+    the RGB entropy bars -- neutral grey until it's owned."""
+    if not rgb_color:
+        return "#c8d4e1"
+    band_lo, band_hi = band
+    return "#ff5470" if (value < band_lo or value > band_hi) else "#00ff9f"
+
+
+def _stego_pair_col(x: float, y: float, band: tuple[float, float], rgb_color: bool) -> str:
+    """Severity colour for the RS 2-D point -- red if EITHER axis has
+    drifted outside the expected band, gated behind Channel Colorizer."""
+    if not rgb_color:
+        return "#c8d4e1"
+    lo, hi = band
+    out = x < lo or x > hi or y < lo or y > hi
+    return "#ff5470" if out else "#00ff9f"
+
+
+def _stego_rs_plane(x: float, y: float, scale: tuple[float, float],
+                    band: tuple[float, float], colour: str,
+                    width: int | None = None, height: int | None = None) -> list[str]:
+    """2-D scatter of the RS pair -- R-group ratio on X, S-group ratio on Y,
+    both sharing `scale`. The expected band is drawn as a shaded square on
+    both axes at once; a clean image's point sits inside it, and embedding
+    (which pushes R up and S down, or vice versa) drifts the point off the
+    square diagonally -- a paired divergence that two disconnected 1-D bars
+    couldn't show as one shape.
+    """
+    w = width or config.STEGO_RS_PLANE_W
+    h = height or config.STEGO_RS_PLANE_H
+    lo, hi = scale
+    band_lo, band_hi = band
+
+    def colpos(v: float) -> int:
+        v = max(lo, min(hi, v))
+        return round((v - lo) / (hi - lo) * (w - 1))
+
+    def rowpos(v: float) -> int:
+        # inverted: a higher S-ratio plots nearer the top row
+        v = max(lo, min(hi, v))
+        return round((hi - v) / (hi - lo) * (h - 1))
+
+    bx0, bx1 = sorted((colpos(band_lo), colpos(band_hi)))
+    by0, by1 = sorted((rowpos(band_hi), rowpos(band_lo)))
+    px, py = colpos(x), rowpos(y)
+
+    # Rounded corners (╭╮╰╯) deliberately, not the pixel-grid's sharp ┌┐└┘ —
+    # besides reading as a distinct "plot" frame from the image frame above
+    # it, get_stego_stats() strips everything between a "┌─" line and the
+    # matching "└" as the (relocated) pixel grid; a sharp-cornered box here
+    # would vanish from the stamp-analysis terminal along with it.
+    lines: list[str] = [f"[#3d6478]╭{'─' * w}╮[/]"]
+    for row in range(h):
+        cells: list[str] = []
+        for col in range(w):
+            if col == px and row == py:
+                cells.append(f"[{colour}][b]●[/][/]")
+            elif bx0 <= col <= bx1 and by0 <= row <= by1:
+                cells.append("[#3d4f5e]▒[/]")
+            else:
+                cells.append("[#20303c]·[/]")
+        lines.append(f"[#3d6478]│[/]{''.join(cells)}[#3d6478]│[/]")
+    lines.append(f"[#3d6478]╰{'─' * w}╯[/]")
+    return lines
+
+
 def get_stego_image_info(candidate: Candidate,
                          upgrades: set | None = None) -> tuple[str, ...]:
     """Free image metadata — always visible in the stegotool terminal, no cost."""
@@ -1802,6 +1993,25 @@ def _stego_image_lines(candidate: Candidate,
                       for d in candidate.truth.discrepancies)  # v2
     suspicious  = has_payload or has_c2 or has_enc
 
+    # Multiple points of contact: a suspicious image doesn't push every
+    # readout out of range together. Each signal group rolls its own "tell"
+    # independently, so sometimes only the RS plane reads anomalous while
+    # the RGB bars look clean, or the reverse -- no single readout is a
+    # reliable verdict on its own. A clean image never tells on any axis.
+    if suspicious:
+        tell_entropy = rng.random() < config.STEGO_TELL_CHANCE_ENTROPY
+        tell_rs      = rng.random() < config.STEGO_TELL_CHANCE_RS
+        tell_corr    = rng.random() < config.STEGO_TELL_CHANCE_CORR
+        if not (tell_entropy or tell_rs or tell_corr):
+            # never leave a genuinely suspicious image with zero free-tier
+            # tell -- force one signal so there's always at least one
+            # thread to pull before reaching for the stamp mechanic.
+            tell_entropy, tell_rs, tell_corr = rng.choice([
+                (True, False, False), (False, True, False), (False, False, True),
+            ])
+    else:
+        tell_entropy = tell_rs = tell_corr = False
+
     img_file    = candidate.dossier.submitted_image_path or "image.png"
     img_type    = "PNG" if img_file.endswith(".png") else "JPEG"
     width       = rng.choice([640, 800, 1024, 1280])
@@ -1824,7 +2034,7 @@ def _stego_image_lines(candidate: Candidate,
     g_score = rng.randint(10, 25)
     b_score = rng.randint(11, 26)
 
-    if suspicious:
+    if tell_entropy:
         # plant one anomalously high channel
         hot_ch = rng.choice(["R", "G", "B"])
         hot_score = rng.randint(62, 94)
@@ -1847,23 +2057,35 @@ def _stego_image_lines(candidate: Candidate,
         if s >= 31: return "#ff8c42"
         return "#00ff9f"
 
-    lines.append(f"  R channel LSB entropy  [{score_col(r_score)}]{r_score:>3}[/] / 100")
-    lines.append(f"  G channel LSB entropy  [{score_col(g_score)}]{g_score:>3}[/] / 100")
-    lines.append(f"  B channel LSB entropy  [{score_col(b_score)}]{b_score:>3}[/] / 100")
+    ent_band = config.STEGO_ENTROPY_EXPECTED
+    lines.append(f"  {'R channel entropy':<19}{_stego_entropy_bar(r_score, ent_band, score_col(r_score))} {r_score:>3}/100")
+    lines.append(f"  {'G channel entropy':<19}{_stego_entropy_bar(g_score, ent_band, score_col(g_score))} {g_score:>3}/100")
+    lines.append(f"  {'B channel entropy':<19}{_stego_entropy_bar(b_score, ent_band, score_col(b_score))} {b_score:>3}/100")
     lines.append("")
 
-    # RS analysis ratio — clean images near 1.0; stego images show divergence
-    if suspicious:
+    # RS analysis ratio — clean images near 1.0; stego images show divergence.
+    # Plotted as one 2-D point (R on X, S on Y) rather than two separate
+    # numbers, since the two ratios move in OPPOSITE directions together
+    # under embedding — a shape a pair of disconnected bars can't show.
+    if tell_rs:
         rs_r = round(rng.uniform(1.08, 1.22), 3)
         rs_s = round(rng.uniform(0.78, 0.92), 3)
     else:
         rs_r = round(rng.uniform(0.97, 1.03), 3)
         rs_s = round(rng.uniform(0.97, 1.03), 3)
-    lines.append(f"  RS analysis  R/S ratio  {rs_r:.3f} / {rs_s:.3f}")
+    rs_scale = config.STEGO_RS_SCALE
+    rs_band = config.STEGO_RS_EXPECTED
+    rs_col = _stego_pair_col(rs_r, rs_s, rs_band, _rgb_color)
+    lines.append(f"  RS pair analysis  [dim](R -> , S ^)[/]")
+    lines.extend(_stego_rs_plane(rs_r, rs_s, rs_scale, rs_band, rs_col))
+    lines.append(f"    R {rs_r:.3f}   S {rs_s:.3f}")
+    lines.append("")
 
     # Pixel pair correlation — clean near 0.0; stego shows disruption
-    corr = round(rng.uniform(0.08, 0.19) if suspicious else rng.uniform(-0.02, 0.03), 3)
-    lines.append(f"  LSB autocorrelation    {corr:+.3f}")
+    corr = round(rng.uniform(0.08, 0.19) if tell_corr else rng.uniform(-0.02, 0.03), 3)
+    corr_scale = config.STEGO_CORR_SCALE
+    corr_band = config.STEGO_CORR_EXPECTED
+    lines.append(f"  {'LSB autocorrelation':<19}{_stego_point_bar(corr, corr_scale, corr_band, 'x', _stego_range_col(corr, corr_band, _rgb_color))} {corr:+.3f}")
 
     return lines
 

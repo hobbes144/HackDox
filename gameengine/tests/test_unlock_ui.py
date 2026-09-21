@@ -152,7 +152,18 @@ def test_evidence_boards_are_gated_by_unlocked_tools():
     candidate can never actually carry one yet (candidate_gen.intro_day gates
     generation on the same TOOL_UNLOCK_DAY schedule)."""
     async def go():
-        day = load_day(1)
+        # Day 6, not Day 1: the boards now also gate on whether TODAY'S OWN
+        # content (its allowed_violations whitelist, its archetype_mix) could
+        # ever plant a kind, on top of unlocked_tools (progression-unlock
+        # subagent fix). Day 1's own whitelist doesn't teach any OSINT kind
+        # yet (that starts Day 2), so forcing ghostscan unlocked on Day 1
+        # would correctly show an empty OSINT group under the new gate — a
+        # true statement about Day 1's content, but not what this test means
+        # to isolate. Day 6 is the first day with an empty allowed_violations
+        # (no whitelist restriction) and an archetype mix rich enough to
+        # reach every group, so it exercises pure tool-gating the way this
+        # test always intended, without the day-content gate interfering.
+        day = load_day(6)
         state = GameState(seed=SEED)
         state.unlocked_tools = {"ghostscan"}      # dossier (implicit) + ghostscan
         app = _Host()

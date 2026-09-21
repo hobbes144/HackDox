@@ -385,6 +385,53 @@ STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflo
 # than the default.
 STEGO_SHAPE_CONVENTIONAL_CHANCE = 0.55
 
+# ── Free-tier readout bars (image statistics) ─────────────────────────────
+# The free stego terminal (tools_bridge._stego_image_lines) renders R/G/B
+# channel entropy, RS-pair ratios, and LSB autocorrelation as bars instead
+# of bare numbers -- same block-bar language as the Logwatch Activity
+# Report (LW_PROFILE_METRICS / logwatch_report._bar), so the tool pages
+# read as one system. Each bar shows a shaded "expected" band (what a
+# clean image reads) plus the observed value's position -- visible with
+# no upgrade owned. The Channel Colorizer upgrade (UPGRADE_STEGO_RGB_COLOR)
+# only adds severity colour on top; it never gates the band/shape itself.
+STEGO_BAR_WIDTH          = 14        # chars; LW_BAR_WIDTH_COMPACT-sized to
+                                      # fit the 34%-wide findings terminal
+
+# R/G/B channel LSB entropy score (0-100). Clean images land in this band;
+# suspicious images push one (or two, for C2) channels well past it.
+STEGO_ENTROPY_SCALE      = 100
+STEGO_ENTROPY_EXPECTED   = (8, 30)
+
+# RS pair analysis: R-group and S-group ratios plotted as two point-value
+# bars on the same 0.70-1.30 scale. Clean images keep both near 1.0;
+# embedding pushes them apart in opposite directions.
+STEGO_RS_SCALE           = (0.70, 1.30)
+STEGO_RS_EXPECTED        = (0.95, 1.05)
+
+# LSB autocorrelation: signed, expected near zero for a clean image.
+STEGO_CORR_SCALE         = (-0.05, 0.25)
+STEGO_CORR_EXPECTED      = (-0.02, 0.04)
+
+# RS pair (R-group / S-group ratio) is plotted as a 2-D point on one square,
+# both axes sharing STEGO_RS_SCALE/STEGO_RS_EXPECTED -- a clean image sits
+# near the centre band on both axes; embedding pushes R and S apart in
+# opposite directions, which reads as the point drifting off the shaded
+# square rather than two separately-legible numbers.
+STEGO_RS_PLANE_W         = 13        # chars (X axis: R-group ratio)
+STEGO_RS_PLANE_H         = 5         # rows  (Y axis: S-group ratio)
+
+# Independent per-signal "tell" chance (issue: multiple points of contact).
+# A suspicious image doesn't push every readout out of range together --
+# each signal group rolls independently, so sometimes only the RS plane
+# reads anomalous while the RGB bars look clean, or vice versa. The player
+# has to cross-check more than one readout before trusting either; no
+# single number is a reliable go/no-go on its own. If every roll misses,
+# one group is forced on so a genuinely suspicious image always leaves at
+# least one thread to pull in the free tier.
+STEGO_TELL_CHANCE_ENTROPY = 0.70
+STEGO_TELL_CHANCE_RS      = 0.70
+STEGO_TELL_CHANCE_CORR    = 0.70
+
 # ─── Hashcrack cipher block ──────────────────────────────────────────────────
 #
 # The Hashcrack page is a standalone TWO-STAGE DECRYPTION minigame. The
@@ -942,6 +989,9 @@ LW_SLOW_GAP              = (9000, 16000)    # gap between each scattered attempt
 #   "which bars read as out of range"  -> the middle number in LW_PROFILE_METRICS
 #   "a failed login is too telling"    -> LW_BENIGN_TYPO_CHANCE
 #   "the report wraps on my terminal"  -> LW_REPORT_WIDTH / *_COMPACT layout knobs
+#   "honest travel too rare / common"  -> LW_LEGIT_TRIP_CHANCE (a roll, ~half land)
+#   "when is travel impossible"        -> LW_MAX_FEASIBLE_KMH (+ LW_TRAVEL_MIN_KM)
+#   "turn the origin map off / resize" -> LW_MAP_ENABLED / LW_MAP_MIN_WIDTH / _MAX_WIDTH
 
 # The one standard shift every candidate claims. Off-hours = candidate's own
 # successful activity outside [start, end). Seconds since midnight.
@@ -956,9 +1006,32 @@ LW_SHIFT_END_MARGIN      = 900              # daytime activity is compressed to 
 LW_BURST_WINDOW          = 600              # seconds
 LW_BURST_ALERT           = 4
 
-# Two CLEAN login origins in different cities closer together than this are
-# listed as a travel pair on the report (with the minutes between them).
-LW_TRAVEL_REPORT_WINDOW  = 4 * 3600
+# Travel feasibility (2026-09-20). Two consecutive logins from CLEAN origins
+# in different cities are a travel pair; the report calls it EVIDENCE only
+# when the implied speed beats this. Real trips (below) are noise against the
+# "two cities = deny" reflex, so this line is what separates them.
+LW_MAX_FEASIBLE_KMH      = 900              # airliner cruise + a little slack
+
+# Honest business travel: this share of candidates WITHOUT planted impossible
+# travel actually fly somewhere during the shift and log in from there. The
+# destination is chosen so the trip is comfortably feasible — the gap is at
+# least LW_TRIP_TIME_MARGIN x the flight time it needs.
+# NOTE: this is the ROLL, not the realised rate — a candidate whose day is
+# already full (or who works after hours, see the generator) can't fit a trip.
+# 0.30 here lands at roughly 15% of all candidates actually travelling.
+LW_LEGIT_TRIP_CHANCE     = 0.30
+LW_TRIP_CRUISE_KMH       = 750              # how fast the flight itself is
+LW_TRIP_OVERHEAD_H       = 1.5              # airports, boarding, transfers
+LW_TRIP_TIME_MARGIN      = 1.3
+LW_TRIP_ARRIVAL_LOGINS   = (1, 2)           # logins from the destination city
+LW_TRIP_ARRIVAL_GAP      = (600, 3600)      # seconds between those logins
+LW_TRIP_MAX_KM           = 6000             # a day trip's realistic reach (the
+                                            # flight has to fit inside the shift)
+
+# Planted IMPOSSIBLE_TRAVEL picks two cities at least this far apart, so the
+# LW_TRAVEL_GAP between them is always well past LW_MAX_FEASIBLE_KMH — the
+# violation can never accidentally be a feasible hop.
+LW_TRAVEL_MIN_KM         = 3000
 
 # An origin with at least this many linked failures FROM its IP is treated as
 # hostile (an attacker's foothold), not the user's own travel, and is left out
@@ -980,6 +1053,14 @@ LW_TIMELINE_BIN_MIN      = 30               # minutes per timeline cell (48 cell
 # LW_REPORT_WIDTH (small terminals): shorter bars, hour-wide timeline cells.
 LW_BAR_WIDTH_COMPACT     = 12
 LW_TIMELINE_BIN_MIN_COMPACT = 60            # 24 cells/day
+
+# ASCII world map of login origins (core/ascii_map.py, 2026-09-20). Drawn
+# whenever the report column is at least LW_MAP_MIN_WIDTH wide (it re-draws
+# itself at the column's width — narrower = coarser, never broken); below
+# that the plain origins list is shown instead.
+LW_MAP_ENABLED           = True
+LW_MAP_MIN_WIDTH         = 38
+LW_MAP_MAX_WIDTH         = 56
 
 # Activity Profile bars, top to bottom: metric -> (label, normal ceiling,
 # bar scale max). The ceiling is drawn as a │ tick; a value past it is "out
@@ -1028,6 +1109,7 @@ LW_NOISE_EVENT_WEIGHTS: list[str] = [
 
 # Auto-highlight upgrades — surface signals the engine already computes.
 UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: ▸ marks + out-of-range bars (never names)
+UPGRADE_LOG_TRIAGE       = "log_triage_notes"   # Logwatch: unlocks the report's ANALYST NOTES
 UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: mark the region of the
                                                 # alignment pad holding the true key
 UPGRADE_EMAIL_APPROVED   = "email_approved_highlight"    # dossier: green trusted domains
@@ -1061,6 +1143,7 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
     (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
     (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸) and out-of-range report bars — points, never names"),
+    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     30, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 35, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
@@ -1084,6 +1167,7 @@ UPGRADE_CATEGORY: dict[str, str] = {
     UPGRADE_STEGO_TINT:          "Stegotool",
     UPGRADE_HASH_HIGHLIGHT:      "Hashcrack",
     UPGRADE_LOG_HIGHLIGHT:       "Logwatch",
+    UPGRADE_LOG_TRIAGE:          "Logwatch",
     UPGRADE_TOOLCOST_GHOSTSCAN:  "Ghostscan",
     UPGRADE_TOOLCOST_LOGWATCH:   "Logwatch",
     UPGRADE_TOOLCOST_HASHCRACK:  "Hashcrack",

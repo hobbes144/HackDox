@@ -92,38 +92,46 @@ HackDox/
 │       └── report.py       ← JSON report saver
 │
 └── gameengine/             ← Game Engine: "HackDox Terminal" (Textual TUI v1)
-    ├── hackdox.py          ← main CLI entry point (new-game, continue, day, replay)
+    ├── hackdox.py          ← main CLI entry point (new-game, continue, day, replay, `lab` debug subcommand)
     ├── ARCHITECTURE.md     ← architecture + design doc (read first)
-    ├── config.py           ← currency rates, day-cycle timing, tool costs, loss thresholds
-    ├── requirements.txt    ← textual, rich, plus shared deps from other tools
+    ├── config.py           ← currency rates, tool costs, loss thresholds, unlock schedules, transition/glitch/audio/cipher tuning
+    ├── requirements.txt    ← textual, rich, typer, httpx, bcrypt, pygame (audio) plus shared deps from other tools
     ├── .venv/              ← virtual environment
-    ├── saves/              ← JSON player saves (one slot for v1)
+    ├── saves/              ← JSON player saves + audio_settings.json (volume knobs, kept separate from campaign state)
     ├── content/
     │   ├── archetypes/         ← 7 archetype templates (.py or .json)
     │   ├── word_banks/         ← names, handles, backstories, dialogue snippets
-    │   ├── narratives/         ← Overseer dialogue keyed by day + performance
-    │   └── days/               ← Day 1..N rulesets and candidate-mix specs
+    │   ├── narratives/         ← Overseer dialogue keyed by day + performance + alignment band
+    │   ├── days/               ← day_01..day_20.json — full 20-day campaign authored (see Where I'm At)
+    │   └── audio/              ← SFX sources: raw_assets/ (licensed clips), sfx/ (generated placeholder tones), music/ (empty — no ambient tracks yet); generate_placeholders.py / process_raw_assets.py
     ├── core/                   ← UI-agnostic engine — the brain
     │   ├── models.py           ← Candidate, Discrepancy, Day, Verdict, GameState
     │   ├── candidate_gen.py    ← procedural generator (seed-deterministic)
-    │   ├── rules_engine.py     ← evaluates verdict vs ground truth + day ruleset
+    │   ├── rules_engine.py     ← evaluates verdict vs ground truth + day ruleset; diff_rulesets for rule-change narration
+    │   ├── content_loader.py   ← day-file loading/validation, synthesize_day() procedural days 2-20 fallback, mutate_variable_rules, apply_severity_steps
     │   ├── scoring.py          ← reward/penalty matrix (asymmetric)
-    │   ├── day_cycle.py        ← orchestrates intro → candidates → outro
-    │   ├── overseer.py         ← progression-aware dialogue selector
+    │   ├── overseer.py         ← alignment-band selector (ending_for_state) + the campaign's 3 endings (issue #42)
+    │   ├── audio.py            ← SoundManager — pygame.mixer wrapper, fail-soft, 24-id SFX registry, 3 volume knobs
+    │   ├── ascii_map.py        ← resolution-independent world map rasterizer for the Logwatch Activity Report's origin map
     │   ├── tools_bridge.py     ← in-process bridge to ghostscan/logwatch/hashcrack/stegotool
     │   ├── logwatch_report.py  ← Logwatch Activity Report: built FROM the day log + its renderer (2026-09-19)
     │   └── persistence.py      ← save/load GameState as JSON
     ├── ui/
     │   ├── tui/                ← Textual application (v1)
     │   │   ├── app.py
-    │   │   ├── screens/        ← intro, intake, chat, rulebook, tools, eod
-    │   │   └── widgets/        ← reusable Textual widgets
-    │   └── web/                ← Flask renderer (planned for v2)
-    └── tests/
-        ├── test_rules_engine.py
-        ├── test_candidate_gen.py
-        └── test_scoring.py
+    │   │   ├── app.tcss
+    │   │   ├── UI_CATALOG.md       ← authoritative screen/widget/keybinding catalog — read alongside this file for TUI detail
+    │   │   ├── rules_content.py    ← VIOLATION_CATALOG/VIOLATION_CLUSTERS/_CATCH/_EXAMPLE — single source for Rules pages + evidence board
+    │   │   ├── shared.py           ← cross-page rendering helpers (banded panels, highlight rules)
+    │   │   ├── glitch.py           ← shared engine for the screen-transition + damage-glitch CRT effects
+    │   │   ├── reactions.py        ← per-archetype chat reaction lines (verdict reveal window)
+    │   │   ├── screens/            ← intro, briefing, intake, rules (modal), eod, between_day, credit_reveal, game_over, campaign_end, transition, _narration (unlock/rule-change copy)
+    │   │   └── widgets/            ← reusable Textual widgets — evidence board, dossier, tool terminals, breach_list, cipher_block, stego_image, log_list, status_header, typewriter, …
+    │   └── web/                ← Flask renderer (planned for v2, not started)
+    └── tests/                  ← 593+ tests across the legacy foundation runner and pytest (see Where I'm At for current pass count)
 ```
+
+**Also accumulated at the repo root and elsewhere since the initial build:** `BUILD_PLAN.md` plus one `BUILD_PLAN_*.md` per batch/feature (Batch1 Progressive Unlock, Batch2 Difficulty/Replayability, Batch3 Playtest/Randomness, Batch4 UserFeedback/ContentGeneration, Batch5 MainGame Content, Issues50-60 Status, HashcrackCipherBlock, Credentials) — shipped-log detail beyond what's narrated below; `CONTENT_AUTHORING.md` — the authoring-surface map (which file owns days/rules/word banks/reference pages); `SPRINT_ROADMAP.md` — the backlog-sprint batch sequencing; `Jenkinsfile` + `JENKINS_SETUP.md` — a real, green Jenkins CI/CD pipeline (Session Log, 2026-09-01/04); `sim_pad.py` — a standalone simulator for tuning the Hashcrack cipher block's alignment feel outside the TUI; `hackdox.sh` — launcher script; `.claude/agents/rules-evidence.md` and `.claude/agents/progression-unlock.md` — two project-specific Claude Code subagents (the former owns keeping any `DiscrepancyKind`'s 5-stage touchpoint chain in sync; Session Log, 2026-09-14).
 
 ---
 
@@ -308,6 +316,18 @@ Per-tool free content:
 - **Logwatch** (`get_logwatch_shared`, 2026-09-19 overhaul): the **Activity Report** — aggregate bars, 24h swimlane timeline, login origins, resource counts, analyst notes — computed from the day log. Attacks are *detected* (unclassified) but never named; the raw auth log is **sealed** in the right panel until the base run
 - **Stegotool** (`get_stego_image_info`): image metadata + per-channel LSB entropy scores (0–100, color-coded); RS analysis ratio; LSB autocorrelation — anomalous channels show red before any tool is run
 
+### gameengine — Hashcrack Cipher Block v2 (`ui/tui/widgets/cipher_block.py`, `core/tools_bridge.py`) *(2026-09-14/15)*
+
+Replaced an entirely different v1 mechanic (an "aperture sweep" — moveable reveal windows, per-batch ⏱, a coverage threshold) that Nick rejected the same day he saw it: *"a spatial hunt wearing a cryptography costume"* — too redundant with the Stego stamp mechanic. v1's model, config, and tests were deleted outright, not adapted; don't reintroduce `evaluate_aperture`, `CIPHER_APERTURES_PER_BATCH`, `CIPHER_RESOLVE_COVERAGE`, `hint_region`, or `tint_boost` for Hashcrack.
+
+v2 is a genuine two-stage decrypt:
+- **Stage 0 (free):** the block header always shows the block's dimensions, its glyph alphabet, and its digest shape (e.g. "64 hex characters") — enough on its own to know which window fits and whether the credential is worth opening at all.
+- **Stage 1 (costs the tool's base ⏱):** pick one of three decryption windows — MD5 / SHA-256 / bcrypt. A wrong pick: "no structure emerged," ⏱ lost, window stays open to retry. bcrypt is a deliberate trap — correctly identifying it as bcrypt is not the same as it being viable to open; it engages, then stalls.
+- **Stage 2 (free once stage 1 resolves):** an alignment pad stepped along X and Y (`config.CIPHER_ALIGN_SPAN` / `CIPHER_ALIGN_FALLOFF`); each cell has its own tolerance, and cells within tolerance of the true alignment show plaintext — tiled across rows, read by consensus as you narrow in. A near-ship bug here: per-cell tolerance must be rolled `randint(0, tol)`, not `randint(1, tol)`, or being exactly right and being one step off render identically.
+- `UNSALTED_STORAGE` skips both stages entirely — it arrives already decrypted.
+
+Violation retier that came with this rework (also noted in the Evidence Catalog above): `CROSS_BREACH_REUSE` → Hashcrack **critical** (was major); `LEAKED_PASSWORD` → Hashcrack **major** (was critical); `UNSALTED_STORAGE` stays Dossier-tier, moved to the **CREDENTIAL** board group; `WEAK_ENCRYPTION` → Hashcrack **minor**, CREDENTIAL group. Group and tier are now deliberately decoupled — `rules_content.visible_catalog()` gates a kind by its own tool, not its board group. Suite was at 503 tests passing when this landed (2 container-only failures — missing `.wav` assets not staged on purpose, not a regression).
+
 ---
 
 ## Game Design
@@ -329,6 +349,8 @@ The player's verdicts steer them toward one of three alignments:
 - **Neutral** — strictly follows the day's rules without taking sides
 
 The Dark Web is a "grand conspiracy" — the player can choose to resist or comply, and the ending diverges accordingly.
+
+**Implemented 2026-09-12 (issue #42, Batch 5 Phase 5a — see Session Log):** `GameState.alignment` is a running ±10 counter, moved by each verdict's `moral_modifier` (sign-flipped on a deny). In the current content that means the Dark Web encounters spread across most of the campaign (`moral_modifier = -1` each) and the single, larger day-12 White Hat encounter (`moral_modifier = +4`). Crossing ±`config.ALIGNMENT_BAND_*_THRESHOLD` (currently ±4 — set at the White Hat's own single-encounter magnitude) locks in the White Hat- or Dark-Web-aligned ending; otherwise the campaign ends Neutral. `core/overseer.py`'s `ending_for_state` is a pure function of `GameState`, and `screens/campaign_end.py` renders the three authored epilogues.
 
 ### Candidate Archetypes
 
@@ -380,7 +402,9 @@ Ten new evidence pieces extend the board. Each one is **two-sided**: it must be 
 
 **2026-09-19 revision, round 2 — shapes fully in the rules.** *Scripted slots:* a `forced_violations` slot carrying a stego colour kind rolls a shape like any other; a day may author one (name the shape kind in `forced_violations`, validated at load) or pin a plain image (`"carrier_shape": {"<slot>": "conventional"}` → `Day.conventional_carrier_slots`). Day 12's White Hat is authored a `SIGNAL_COMMS_PAYLOAD` cross; day 11 slot 5 is pinned conventional to stay rules-clean. *Rule mutation:* `rule_signal_relay_payload` is `overseer_variable` (the only disqualifying-by-default variable rule) — a deny on days 1-7 and 11-19, advisory on days 8-10 and 20, announced by the generic flip lines; `rule_recursive_payload` stays fixed; **DW-06** `dw06_hostile_payload_leniency` (day 13, beside DW-05, re-listed through day 20) downgrades `HOSTILE_PAYLOAD` to a flag. *Bad Actor* now carries `STEGO_PAYLOAD_PRESENT`. *UNSALTED_STORAGE* (DOSSIER tier and group) is minor until `config.TOOL_UNLOCK_DAY["hashcrack"]` and major from then; its rule follows (`content_loader.apply_severity_steps`: flag, then deny) and the step is announced in that day's briefing. Day 1's duplicate `rule_unsalted_storage` / `rule_cross_breach_reuse` entries were removed and the loader now rejects duplicate rule ids. Sidebar reference panels (`shared.build_ref_*`) are derived from config/tools_bridge.
 
-The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOLATION_CATALOG` is authoritative)*. Board categories, board order matches the tool-page order: **DOSSIER** (`MISSING_PUBLIC_PROFILE`, `HOSTILE_CHAT`, `AFFILIATION_UNVERIFIED`, `DISPOSABLE_EMAIL`, `WEAK_ENCRYPTION`, `UNSALTED_STORAGE`) · **OSINT** (`BURNER_IDENTITY`, `THREAT_FORUM_MATCH`, `TYPOSQUAT_HANDLE`, + the pre-v2 Ghostscan kinds) · **CREDENTIAL** (`CROSS_BREACH_REUSE`, `WEAK_CREDENTIAL`, `LEAKED_PASSWORD`) · **FORENSICS** (`CREDENTIAL_STUFFING`, `AFTER_HOURS_ACCESS`, `LOW_AND_SLOW`, `CLAIMED_IP_MISMATCH`, + the pre-v2 Logwatch kinds) · **STEGO** (`ENCRYPTED_PAYLOAD`, + the pre-v2 Stego kinds; 2026-09-19: + the carrier-shape row `SIGNAL_COMMS_PAYLOAD`, `RECURSIVE_PAYLOAD`, `HOSTILE_PAYLOAD`).
+The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOLATION_CATALOG` is authoritative)*. Board categories, board order matches the tool-page order: **DOSSIER** (`MISSING_PUBLIC_PROFILE`, `HOSTILE_CHAT`, `AFFILIATION_UNVERIFIED`, `DISPOSABLE_EMAIL`) · **OSINT** (`BURNER_IDENTITY`, `THREAT_FORUM_MATCH`, `TYPOSQUAT_HANDLE`, + the pre-v2 Ghostscan kinds) · **CREDENTIAL** (`CROSS_BREACH_REUSE`, `WEAK_CREDENTIAL`, `LEAKED_PASSWORD`, `UNSALTED_STORAGE`, `WEAK_ENCRYPTION`) · **FORENSICS** (`CREDENTIAL_STUFFING`, `AFTER_HOURS_ACCESS`, `LOW_AND_SLOW`, `CLAIMED_IP_MISMATCH`, + the pre-v2 Logwatch kinds) · **STEGO** (`ENCRYPTED_PAYLOAD`, + the pre-v2 Stego kinds; 2026-09-19: + the carrier-shape row `SIGNAL_COMMS_PAYLOAD`, `RECURSIVE_PAYLOAD`, `HOSTILE_PAYLOAD`).
+
+**2026-09-14/15 revision — the Hashcrack Cipher Block v2 rework retiers credential evidence and decouples group from tier.** `CROSS_BREACH_REUSE` → Hashcrack **critical** (was major — this had made it unreachable inside Clumsy Cutie's discrepancy budget, so it moved to Sneaky Bugger + Bad Actor instead); `LEAKED_PASSWORD` → Hashcrack **major** (was critical); `UNSALTED_STORAGE` stays Dossier-**tier** (free — the dossier shows the plaintext in the clear) but moved to the **CREDENTIAL** board **group**; `WEAK_ENCRYPTION` → Hashcrack **tier, minor**, CREDENTIAL group (superseding the 2026-08-16 note above, which is now history — it was Dossier-tier only briefly, between that fix and this one). Board group and reveal tier are now deliberately decoupled: `rules_content.visible_catalog()` gates a kind by *its own tool*, not by its board group, so `UNSALTED_STORAGE` and `WEAK_ENCRYPTION` show under CREDENTIAL from day 1 as an intentional partial category. See "gameengine — Hashcrack Cipher Block v2" further up (Key Implementation Notes) for the full mechanic.
 
 ### Papers Please Mechanics (distilled)
 
@@ -434,7 +458,7 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
 |------|---------------|----------|--------|
 | `ghostscan` | Email domain + affiliation + GitHub claim assessed from dossier | Platform sweep + commit email + HIBP raw output (player spots mismatches) | Email/commit cross-reference — explicit `▲ MISMATCH` confirmation |
 | `logwatch` | Activity Report: bars vs a normal-ceiling tick, timeline lanes, origins (claimed ✓/✗, Δ city changes), resource counts, alerts. Identifiable free: `CLAIMED_IP_MISMATCH`, `IMPOSSIBLE_TRAVEL`; visible: off-hours, insider counts; brute force / stuffing = one **unclassified** "authentication anomaly"; low-and-slow never alerts | Unseals the full auth log (right panel) — every row, target in yellow, **no labels**; player reads the attack's shape | `▲ VIOLATION` labels in the log + a `▲ CONFIRMED` block on the report (low-and-slow correlation, travel km/h) |
-| `hashcrack` | Auth log with login history; claimed IP visible for comparison | Hash cracked — shows plaintext, algorithm type; player judges weakness themselves | Breach corpus + complexity check — explicit `▲ LEAKED_PASSWORD / WEAK_CREDENTIAL` |
+| `hashcrack` | *(superseded 2026-09-14/15 by the Cipher Block rework)* Block header only — dimensions, glyph alphabet, digest shape; tells you which decryption window fits and whether it's worth opening | Stage 1: spend ⏱ to pick MD5 / SHA-256 / bcrypt — a wrong pick burns ⏱ and stays open to retry; bcrypt engages, then stalls, on purpose | Stage 2, free once stage 1 resolves: step a 2-axis alignment dial to bring the plaintext into focus; `UNSALTED_STORAGE` skips both stages and arrives already decrypted — see "gameengine — Hashcrack Cipher Block v2" above (Key Implementation Notes) |
 | `stegotool` | Pixel-grid image viewer (dominant right column) with subtle blue tint over hot zones + channel entropy stats in the findings terminal | **Stamp minigame** — X enters stamp mode; arrows move a square stamp, Space stamps (`config.STEGO_STAMP_COST` ⏱/stamp), revealing what the cells carry: color = payload type (amber plaintext / crimson encrypted / violet C2), density = carrier fill, size = zone extent, **shape = payload operation** (2026-09-19: the glyph the carrier cells trace — conventional blocks = nothing extra; cross = `SIGNAL_COMMS_PAYLOAD`; hollow ring/diamond = `RECURSIVE_PAYLOAD`; 2–4 parallel non-touching strokes = `HOSTILE_PAYLOAD`). Unfiltered, the resolve block only *describes* the glyph's geometry | Reveal ≥60% of the zone → signature resolves. With the classification filter (F): explicit `▲ STEGO_PAYLOAD_PRESENT / ENCRYPTED_PAYLOAD / COVERT_C2_CHANNEL`, plus a second `▲ SIGNAL_COMMS_PAYLOAD / RECURSIVE_PAYLOAD / HOSTILE_PAYLOAD` for a special glyph (never for conventional). Stamps replaced the old scan/filter tiers |
 
 ---
@@ -463,13 +487,38 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
   - [x] **Stegotool stamp minigame rework** — 3-column page (sidebar 26% / findings terminal 34% / interactive image viewer 40%); X → stamp mode, arrows move, Space stamps (1 ⏱), ≥60% zone coverage resolves the ▲ signature. Replaces the stego scan/filter tiers.
   - [x] **Between-day macro loop (issues #18-#25, 2026-07-17)** — lives ripped out (#24); Site Health persistent % loss condition (#20); HackDollar$ persistent currency + per-shift ⏱ reset (#21); HackDox Credits ground-truth reveal via `reveal`/`credit`/`truth` command on every page (#25); 13-upgrade detection-assist catalog with auto-highlights + tool-cost reduction (#23); `BetweenDayScreen` with shift report, Overseer dialogue, and HackDollar$ shop wired EOD → menu → next-day intro (#22)
   - [x] **Issues #27-#30 (2026-07-18)** — finite-daily-⏱ economy (#27); banded, replace-in-place GhostScan report (#28); universal dossier password field + encryption-strength tiers + WEAK_CREDENTIAL minor rework (#29); dynamic engine-derived Rules Pages via `rules_content.py` (#30); stable-hash determinism fix
-  - [ ] Vertical slice: Day 1 playable end-to-end with all 7 archetypes represented
-- [ ] Campaign content: Days 2..N with Overseer hostility arc and Dark Web reveal
+  - [ ] Vertical slice: Day 1 playable end-to-end with all 7 archetypes represented — not confirmed as a dedicated playtest milestone on its own, though everything below has exercised the mechanics it depends on heavily
+- [x] **Campaign content: Days 2-20 authored, Dark Web directives, Overseer alignment bands, and 3 authored endings (2026-08-16 → 2026-09-13, Batches 1-5)** — the full 20-day campaign is authored end to end; see the Session Log for the batch/phase breakdown. Landed on a feature branch (currently `Stego-Shapes`) not yet merged to `main` (see Where I'm At).
+  - [x] Batch 1 (2026-08-16) — progressive tool unlock (epic #2: #3, #31-34)
+  - [x] Batch 2 (2026-08-16) — procedural day synthesis (`content_loader.synthesize_day`) + difficulty curves (#35, #38, #4, #17, #36)
+  - [x] Batch 3 (2026-08-17) — playtest fixes & randomness hardening (#50-54, #56-60) + the `hackdox lab` debugging CLI (#52)
+  - [x] Batch 4 (2026-08-18) — Days 1-5 fully authored + breach-DB unlock schedule (#61-63, #15, #43-49)
+  - [x] Batch 5 (2026-09-12 → 09-13) — Dark Web directive mechanism, Days 6-20 authored, Overseer alignment bands, 3 campaign endings (#37, #39-42)
+- [x] **Evidence Board — clickable chip-grid rework (2026-09-08)** — the flat 27-row checklist became a clustered, named, clickable button grid (`VIOLATION_CLUSTERS`)
+- [x] **Verdict Reveal Window (2026-09-07)** — chat reaction + border pulse + evidence-board grading after every verdict
+- [x] **Audio system (2026-09-07)** — `SoundManager`, 24-id SFX registry, pygame.mixer, fail-soft, 3 volume knobs (placeholder tones — pygame not yet installed on Nick's real machine)
+- [x] **Screen transitions + damage glitch (2026-09-12)** — a CRT signal-loss effect over every screen change, plus a scaled, archetype-tinted burst on any admit that costs Site Health
+- [x] **Hashcrack Cipher Block v2 (2026-09-14/15)** — the Hashcrack page rebuilt as a two-stage decrypt minigame, replacing the old crack-and-read-plaintext model; credential evidence tiers redistributed (see Evidence Catalog)
+- [x] **Rules/Evidence subagent (2026-09-14)** — a dedicated Claude Code subagent (`.claude/agents/rules-evidence.md`) whose job is keeping any `DiscrepancyKind`'s full touchpoint chain in sync
+- [x] **Jenkins CI/CD (2026-09-01/04)** — a real, green pipeline on Nick's own Jenkins (built as a PlayStation SDET II interview artifact, not a game feature); Lint stage cleaned to 0 real findings
+- [x] **Logwatch Activity Report overhaul + origin map (2026-09-19/20)** — see the two most recent Session Log entries
 - [ ] Web renderer — Flask dashboard reusing the engine core (planned v2)
 
 ---
 
-## Where I'm At (last updated 2026-07-18)
+## Where I'm At (last updated 2026-09-21)
+
+The full 20-day campaign is now authored end to end (Batches 1-5, 2026-08-16 → 2026-09-13): progressive tool unlock, procedural-and-authored day content, Dark Web directives, the Overseer's alignment-band dialogue, and all three campaign endings (White Hat / Dark Web / Neutral) are built and wired (`core/overseer.py`, `screens/campaign_end.py`). Layered on since: a full audio pass (placeholder SFX, pygame-based, fail-soft), screen transitions plus a damage-glitch burst on any Site-Health-costing admit, a post-verdict feedback window (chat reaction + border pulse + evidence grading), a clickable chip-grid rework of the Evidence Board, a from-scratch v2 rebuild of the Hashcrack page as a two-stage Cipher Block decrypt minigame (with a matching credential-evidence retier), a Logwatch Activity Report overhaul with an ASCII origin map and honest travel noise, and — most recently — a second Stegotool axis where the carrier's *shape*, not just its color, can plant evidence. A real, green Jenkins CI/CD pipeline now runs the suite on every push (built as a PlayStation SDET II interview artifact). A dedicated Rules/Evidence subagent (`.claude/agents/rules-evidence.md`) exists specifically to keep the Discrepancy-kind touchpoint chain (generator → tool rendering → rules-page catalog → rules-engine predicate → day-file rules) from drifting, since that chain has been the single most common source of bugs across this build.
+
+**Branch/commit state (verified 2026-09-21):** `main` is still at the 2026-09-11 Sound-branch merge (`f6d9e5f`). All of Batch 5, both Hashcrack cipher-block versions, and the carrier-shape/Logwatch-report work are on `Stego-Shapes` — 25 commits ahead of `main`, 0 behind — **not yet merged**. `Stego-Shapes` also currently carries uncommitted working-tree changes (`config.py`, `core/logwatch_report.py`, `core/tools_bridge.py`, `ui/tui/rules_content.py`, `ui/tui/screens/intake.py`, two test files, `UI_CATALOG.md`, and this file, plus a new untracked `core/ascii_map.py`) — this is the 2026-09-19/20 Logwatch-report/origin-map work narrated below, not yet committed as of this writing.
+
+**Test suite:** 593 tests collected as of 2026-09-21 (up from 503 at the 2026-09-14 health-check baseline — the difference is the carrier-shape and Logwatch-report work added since). A run this session got through roughly 90% with no failing dots before hitting the shell's execution-time limit — not a confirmed full green run; re-run the suite properly before trusting it as a baseline.
+
+**Known open items** (see Session Log for origin): issue #73 (dossier-tier evidence guard blind spot, filed 2026-09-14, unresolved); a dormant `DISPOSABLE_EMAIL` / `is_incompatible` ordering risk (0 live occurrences across a 2,800-candidate sweep, left as a flagged judgment call rather than fixed); `day_01.json` still declares `rule_cross_breach_reuse` twice; `_UNLOCK_LINES` in `_narration.py` still placeholder text, now largely redundant with the authored day 2-5 briefings; no in-game audio settings screen yet (volumes are file-only); `play_music()`/`stop_music()` are wired but nothing calls them (no ambient tracks exist); pygame not yet installed in Nick's actual Windows game environment (audio verified only in the Linux device-bridge sandbox); a GitHub Actions companion workflow for Jenkins hasn't been built.
+
+**Next up:** merge `Stego-Shapes` into `main` (25 unmerged commits plus the current uncommitted logwatch/shape work is a lot to be carrying on a feature branch); a clean full-suite pytest run to confirm the 593-test baseline is actually green; then the still-deferred Day-1 vertical-slice playthrough and the Web renderer (v2).
+
+## Where I Was (2026-07-18)
 
 > **2026-08-16:** Epic #2 (progressive unlock, issues #3/#31-34) shipped via the backlog-sprint flow on branch `batch-1-progressive-unlock` (not yet pushed/merged to main), plus a round of ad-hoc playtest fixes. Neither is narrated here in full — see the Session Log entry below and the session's project memory (`planning_sprint.md` / `playtest_fixes.md`) for details. This section still reflects the 2026-07-18 state as the last fully-narrated milestone.
 
@@ -560,14 +609,20 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 
 ## Session Log
 
-> **Documentation note (added 2026-09-14 by the health-check sweep):** this log's most recent
-> narrated entry below is 2026-08-16. Batches 2 through 5, the Evidence Board chip-grid rework,
-> the Hashcrack cipher-block/stamp-minigame rework, `core/overseer.py`, and `core/content_loader.py`
-> all shipped after that date and are **not** narrated here — only in project memory
-> (`planning_sprint.md`, `evidence_board_chips.md`, `hashcrack_cipher_block.md`, `batch4_audit.md`,
-> `batch5_plan.md`). Treat this Session Log, and the Evidence Catalog table further up, as accurate
-> only through 2026-08-16; check `rules_content.py`'s `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` and
-> project memory for anything current.
+> **Documentation note (updated 2026-09-21):** the gap flagged by the original 2026-09-14 note —
+> Batches 2 through 5, the Evidence Board chip-grid rework, the Hashcrack cipher-block rework,
+> `core/overseer.py`, and `core/content_loader.py` — has been backfilled below from git history and
+> project memory (see the entries from 2026-08-17 through 2026-09-15). This Session Log should now
+> read as continuously accurate through 2026-09-20. Still worth cross-checking `rules_content.py`'s
+> `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` directly for anything that's landed since, and note that as
+> of this update everything below from 2026-09-12 onward lives on the unmerged `Stego-Shapes` branch,
+> not `main` (see Where I'm At).
+
+### 2026-09-20 (Logwatch: origin map, travel noise, paid Analyst Notes)
+- **ANALYST NOTES are paid:** new upgrade `UPGRADE_LOG_TRIAGE` "Threat Triage HUD" (30 HD$, Logwatch shop category). Without it the section shows a locked line; the rest of the report is unchanged.
+- **Origin map:** `core/ascii_map.py` — a resolution-independent world map rasterised from coarse lat/lon continent boxes (no copied art), drawn at whatever width the report column has (`LW_MAP_MIN_WIDTH`..`LW_MAP_MAX_WIDTH`; below the minimum the plain origins list is used). Numbered markers match the legend (green = claimed IP, red = an origin that failed its way in, amber = elsewhere); dotted arcs = city changes between clean logins, all ONE colour.
+- **Honest travel noise:** ~15% of candidates without IMPOSSIBLE_TRAVEL now fly somewhere and log in on arrival (`LW_LEGIT_TRIP_*`); the trip is scheduled so its speed stays far below `LW_MAX_FEASIBLE_KMH`. Travel pairs are no longer suspicious by existing — `TravelPair.feasible`/`kmh`, `LogwatchReport.impossible`. Planted impossible travel now picks cities ≥ `LW_TRAVEL_MIN_KM` apart. The report lists every pair with distance + time and never classifies it; the paid notes flag "faster than any flight"; the filter names it with km/h. `CITY_COORDS` moved to `logwatch_report`.
+- Header CLAIMS/VIA IP split onto two lines (narrow terminals). Rules tab 4 + `_CATCH` + config cheat-sheet updated. New tests in `test_logwatch_report.py` (travel feasibility both ways, locked/unlocked notes, map scaling + marker count).
 
 ### 2026-09-19 (Logwatch report overhaul)
 Nick's redesign of the Logwatch page. Plan + status: project doc `claude/logwatch_report_plan.md`.
@@ -581,6 +636,57 @@ Nick's redesign of the Logwatch page. Plan + status: project doc `claude/logwatc
 - **Duplicate identities fixed:** ~0.5% of days used to hold two candidates with the same email/name (one account in the log for two people). `candidate_gen._resolve_identity` now rerolls a slot whose name or email an earlier slot took (salted `identity_retry_N` stream); ~1% of slots moved, every other identity is byte-identical. Pinned by `test_candidate_identities_are_unique_within_a_day`.
 - Auth log panel: the `[`/`]` jumped-to row now wears a `›` cursor and a highlight band (`LogListPanel._with_cursor`).
 - Tests: 587/587 (new `test_logwatch_report.py`, `test_logwatch_page.py`).
+
+### 2026-09-15 (Hashcrack Cipher Block v2 — credential retier + evidence-board polish)
+- Settled the violation redistribution that came with the cipher block (see 2026-09-14 below): `CROSS_BREACH_REUSE` → Hashcrack **critical** (was major, which had made it unreachable inside Clumsy Cutie's discrepancy budget — moved to Sneaky Bugger + Bad Actor instead); `LEAKED_PASSWORD` → Hashcrack **major** (was critical); `UNSALTED_STORAGE` kept its Dossier **tier** but moved to the **CREDENTIAL** board group; `WEAK_ENCRYPTION` → Hashcrack **minor**, CREDENTIAL group.
+- Found day 3 slot 2 was silently losing its forced `cross_breach_reuse` in 40/40 seeds because `forced_violations` validates tier/expressibility/whitelist but never budget capacity; fixed by reassigning that slot's archetype. New guard: `test_every_eligible_kind_fits_its_archetypes_budget`.
+- `BUILD_PLAN_Credentials_2026-09.md` written as the shipped log.
+- Left open: `day_01.json` still declares `rule_cross_breach_reuse` twice; `Dossier.password_plain`'s docstring is stale.
+
+### 2026-09-14 (Hashcrack rebuilt as the Cipher Block; Rules/Evidence subagent built; GitHub merge audit)
+- **Hashcrack v1 built, then rejected the same day.** v1 was "an aperture sweep" — moveable reveal windows, per-batch ⏱, a coverage threshold. Nick's verdict: *"a spatial hunt wearing a cryptography costume"* — too close to the Stego stamp mechanic. Deleted outright (model, config, tests), not adapted.
+- **Hashcrack v2 built the same day — the Cipher Block.** A genuine two-stage decrypt: stage 0 (free) shows the block's dimensions, glyph alphabet, and digest shape; stage 1 (costs ⏱) is picking one of 3 decryption windows (MD5/SHA-256/bcrypt) — a wrong guess burns ⏱, bcrypt engages then deliberately stalls; stage 2 (free) is a 2-axis alignment dial, each cell with its own tolerance, resolving to plaintext tiled across rows as you narrow in. `UNSALTED_STORAGE` skips both stages. Caught and fixed a near-ship bug: per-cell tolerance must roll `randint(0, tol)`, not `randint(1, tol)`, or being exactly right and being one step off were indistinguishable. See "gameengine — Hashcrack Cipher Block v2" above for the full writeup.
+- **Built the Rules/Evidence-propagation subagent** (`.claude/agents/rules-evidence.md`) — a dedicated Claude Code subagent whose sole job is keeping any `DiscrepancyKind`'s full 5-stage touchpoint chain (generator → tool rendering → rules-page catalog → rules-engine predicate → day-file rules) in sync, since that chain had drifted repeatedly across this project's history (cites the Batch 4, evidence-chip-grid, and cipher-block incidents as prior art). A second subagent, `.claude/agents/progression-unlock.md`, also exists in the repo from earlier work not otherwise narrated in this log.
+- **GitHub merge audit:** discovered `batch-2-difficulty-curve-replayablity` and `batch-3-UserFeedback-ContentGeneration` were already fully merged to `main` (0 commits ahead), contrary to the standing belief they were unpushed — Batch 3 merged via PR #64 (2026-09-03); Batch 4's #56-#60 commits had landed directly on `main` back on 2026-08-17. Closed out issues #50/#51/#53/#54/#56/#57/#58/#59/#60 on the project board with verification comments (`BUILD_PLAN_Issues50-60_Status_2026-09.md`). Filed **issue #73**: the tier guard that checks every planted violation is observable excludes DOSSIER-tier kinds — a standing blind spot.
+- **Health-check sweep** (general audit, not tied to a specific change, using the new subagent's own checklist): found and fixed a duplicate `UNSALTED_STORAGE` entry in `rules_content._CATCH` that was silently shadowing the richer, correct hint text; corrected this file's stale `WEAK_ENCRYPTION` tier claim; swept 2,800 candidates (every day × 200 seeds) for a dormant `DISPOSABLE_EMAIL`/`is_incompatible` ordering risk — 0 live occurrences, left as a flagged judgment call rather than fixed outright.
+- Environment note: `device_bash` had been down on Nick's machine since ~2026-09-08 (a Windows update broke the Plan9/virtiofs mount); this and the next few sessions worked via stage/edit/`device_commit_files` instead of live editing.
+
+### 2026-09-12 – 2026-09-13 (Batch 5 — Dark Web directives, Days 6-20, Overseer alignment bands, 3 endings)
+The remainder of the campaign (#37, #39-#42), built in five phases plus per-phase review-fix commits, all on the branch that became `Stego-Shapes`:
+- **Phase 1 (#37):** Dark Web directive mechanism added to the rules engine — a new `"dark_web"` `RuleMutability`. A directive **adds** a new rule (its own id) while the criterion it supersedes is **removed**, rather than replacing a rule by id or restating the day's full rule array — chosen specifically so `diff_rulesets`' add/remove narration keeps working unmodified.
+- **Phase 2 (#39):** Days 6-7 authored — a deliberate Dark Web mix with escalating chat.
+- **Phase 3 (#40):** Days 8-11 authored — "the corruption arc," DW-01 through DW-04 wired in.
+- **Phase 4 (#41):** Day 12 authored — the scripted, unique White Hat encounter. `WHITE_HAT.moral_modifier` raised to **±4** (was +1) so admitting or denying them actually swings alignment meaningfully.
+- **Phase 5a (#42):** `core/overseer.py` built — `GameState.alignment` (a running ±10 counter, moved by each verdict's `moral_modifier`, sign-flipped on a deny) resolves to one of three bands via `ending_for_state`: White Hat-aligned, Dark Web-aligned, or Neutral. Thresholds set to **±4**, matching the White Hat's own single-encounter magnitude. `screens/campaign_end.py` rebuilt from a 34-line "TO BE CONTINUED" stub into the three authored epilogues.
+- **Phase 5b (#42):** Days 13, 17, and 20 authored bespoke (the "hard band"), including **DW-05**, a payload-leniency directive; days 14-16 and 18-19 ride the new alignment-banded content selector instead of being hand-authored. The full 20-day campaign is authored end to end for the first time.
+- Each phase got its own review-fix commit: a day-9 quota bug and `forced_chat` gaps (days 8-11), guaranteed day-12 decoy coverage (previously left probabilistic), a DW-05 intro wording fix and positional chained-supersession validation (days 13/17/20), and a fix to `hackdox.py`'s `simulate` command that both patched a real `KeyError` and made its regression guard actually exercise the bug it was meant to catch.
+- `BUILD_PLAN_Batch5_MainGame_Content.md` and `BUILD_PLAN_Issues50-60_Status_2026-09.md` committed as docs.
+
+### 2026-09-11 (Sound branch merged to main)
+- PR #66 ("Sound") merged into `main` — this is what actually landed the transitions/damage-glitch, audio, and verdict-reveal-window work (built 2026-09-06 through 09-07, see below) in the mainline history. `main` has not moved since; everything from the Dark Web directive mechanism onward (2026-09-12+) is on later branches, currently `Stego-Shapes`, unmerged.
+
+### 2026-09-08 (Evidence Board — clickable chip-grid rework)
+- Branch `Evidence-Board-interaction`, 5 commits, merged via PR #65: the flat 27-row checklist became a grid of clickable buttons, one named category per row (`VIOLATION_CLUSTERS` in `rules_content.py`), grouped into the same 5 tool clusters (DOSSIER/OSINT/CREDENTIAL/FORENSICS/STEGO), always laid out horizontally (a too-wide category wraps its label downward inside the button rather than stacking vertically — an earlier attempt at the latter broke grouping badly enough in playtesting that it was reverted). Categories shipped unnamed first; playtesting showed players couldn't learn the grouping and fell back to arrow-key walking, so names were restored and a blank category name is now an import-time error. Stegotool is the one page that hides its terminal (not just its sidebar) while the board is open, since the image viewer itself is the evidence there. Suite went 256 → 298 tests.
+- Around this date, a Windows update broke `device_bash`'s mount of the project folder ("no Plan9 drive shares mounted") — the outage persisted roughly through 2026-09-15, forcing several sessions in that window into a stage/edit/`device_commit_files` workflow instead of live editing.
+
+### 2026-09-07 (Verdict Reveal Window; Audio system)
+- **Verdict Reveal Window:** a ~3s post-verdict feedback beat — a chat reaction line, a border pulse (right/wrong), and evidence-board grading of the player's own flags (touched items get ✓/✗, untouched ones stay blank with an unrecorded-count footer, never the full answer key). Fully skippable — only the border pulse is time-boxed. 20 tests, suite 256 green.
+- **Audio system:** `core/audio.py`'s `SoundManager` wraps `pygame.mixer`, fail-soft throughout (silently no-ops if pygame is missing, the mixer fails to init, or sound is disabled — nothing in game logic depends on audio actually working). 24 sound ids (`SFX_REGISTRY`), all placeholder synthesized tones from `content/audio/generate_placeholders.py`, wired at roughly 15 trigger points across verdicts, tool runs, page/focus navigation, and the evidence board. 3 independent volume knobs persisted to `saves/audio_settings.json`, kept separate from campaign saves — no in-game settings screen calls the save yet. 7 tests. pygame was added to `requirements.txt` but, as of this build, not yet installed in Nick's actual Windows environment — verified end-to-end only in the Linux device-bridge sandbox.
+
+### 2026-09-06 (Feedback Reactions)
+- Per-archetype chat reaction lines shipped ahead of the full Verdict Reveal Window that would wrap them the next day.
+
+### 2026-09-04 (Jenkins Lint stage — cleaned to zero)
+- First real Lint run on the Windows Jenkins agent found 277 ruff findings; triaged and fixed in batches, verified against the full suite after each. ~230 were mechanical `ruff --fix` cleanups; one auto-fix had to be reverted by hand (`--fix` deleted `app.py`'s intentional re-export facade — F401 doesn't understand re-exports — restored with an explicit `__all__`); two real dead-code bugs surfaced (`run_hashcrack()`/`run_hashcrack_filtered()` called helpers removed in an earlier refactor and would have raised `NameError` if ever invoked); 15 `RUF012` findings (mutable Textual `BINDINGS` class defaults) annotated `ClassVar`; one confirmed-dead `F841` (`rules_block` in `intake.py`, superseded by the RulesScreen overlay) removed after Nick confirmed it was safe. Final state: 0 real findings — only the pre-existing, confirmed-harmless `EXE002` (a Linux-checkout-only artifact) remains.
+
+### 2026-09-01 (Jenkins CI/CD built)
+- Built for a PlayStation SDET II interview (careers.playstation.com/sdet-ii) — a portfolio/interview-prep artifact, not a game feature. `Jenkinsfile` at the repo root: Checkout → Set Up Python → Install Dependencies → Lint (ruff, non-blocking) → Foundation Tests (the legacy stdlib runner) → Pytest Suite (with JUnit + coverage output). Cross-platform (`isUnix()`-gated venv paths, `python -m pip` instead of the locked `pip.exe` wrapper). Live-debugged through 4 real cross-platform bugs on Nick's own native Windows Jenkins server (missing Java, missing `sh`, missing `python3` alias, venv bin/Scripts layout). Build #5 was the first fully green build.
+
+### 2026-08-18 (Batch 4 shipped — Days 1-5 authored)
+- Days 1-5 fully authored for the first time, via a new `forced_violations` + `rule_sheet` day-file schema; before this, every day past Day 1 opened blank and closed on a literal "..." — Overseer copy for days 2-5 plus a generic `generic_*` fallback for days 6-20 fixed that. Sneaky Bugger removed from Day 1's mix (it had been generating zero-discrepancy DENYs). `config.BREACH_DB_UNLOCK_DAY` added — breach databases are now static, sorted, and unlock progressively rather than being randomly assorted from day one; a shared `breach_dbs_for_candidate()` keeps Ghostscan and Hashcrack reading the identical list. Two measured tool-consistency bugs fixed: the Hashcrack credential-stuffing burst had been asserted rather than derived from the actual `CREDENTIAL_STUFFING` flag (91/91 false claims → 0); Ghostscan's platform sweep could omit the GitHub row even when an email/GitHub mismatch was planted (50/76 → 0). Word banks single-sourced (found two more live drifts in the process). Suite went 162 → 185 (legacy runner 16/16). `CONTENT_AUTHORING.md` written as the authoring-surface map. `BUILD_PLAN_Batch4_UserFeedback_ContentGeneration.md` is the full shipped log.
+
+### 2026-08-17 (Batch 3 shipped — playtest fixes & randomness)
+- `MISSING_PUBLIC_PROFILE` retiered DOSSIER → GHOSTSCAN (#51) — it had no dossier-side evidence at all, so roughly half of Day 1's candidates carrying it were unflaggable by design. Typosquatted handles made real (#53) — `_make_handle` had never actually consulted the affiliation list; a genuine Levenshtein-1-or-2 lookalike is now built and recorded on `Dossier.handle_squats`, demoted major→minor. Stego carrier cells now clump into segmented rectangles with a dilated `hint_region` for the base-tier tint (#54). Rules pages split `build_dossier_text` out of `build_rules_text`, with per-tab scroll memory (#50). Four affiliation-adjacent kinds standardized into distinct reads: `AFFILIATION_NOT_STATED` / `AFFILIATION_MISMATCH` / `AFFILIATION_UNLISTED` / `MISSING_PUBLIC_PROFILE` (#56). The disposable-domain detector had drifted from the generator's domain list; now derives from it directly (#57). A privacy-provider dossier hint that instructed players to flag something with no matching `DiscrepancyKind` (scoring against them for following the game's own hint) was reworded to non-actionable context (#58). `WEAK_ENCRYPTION` (the algorithm) and `WEAK_CREDENTIAL` (the plaintext) made orthogonal instead of coupled (#59). Every `DiscrepancyKind` given at least one rule so the ruleset can actually express ground truth — Day 1 went from 14 to 27 rules, closing the gap where The Incompatible archetype was 100% unenforceable "by the book" (#60). Also shipped: the **`hackdox lab` debugging CLI** (#52) — generates candidates under explicit constraints (e.g. `hackdox lab -a sneaky_bugger -v typosquat_handle --day 5`), reports its seed for reproducibility, and can pair ground truth against a tool's real filtered output side by side.
 
 ### 2026-08-16 (playtest fixes)
 Ad-hoc fixes from Nick's manual playtesting, applied directly (not a numbered backlog batch — see `planning_sprint.md`/`playtest_fixes.md` in project memory for the Batch 1 epic that shipped separately the same day). All 32 `gameengine/tests` pass throughout; changes also verified with 2000+-candidate generation sweeps across days 1-5.

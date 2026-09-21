@@ -909,6 +909,63 @@ def _kind_is_expressible_on(kind: DiscrepancyKind, day_number: int) -> bool:
     return True
 
 
+def kinds_the_day_can_plant(day: Day) -> frozenset[DiscrepancyKind]:
+    """Every DiscrepancyKind that TODAY's own content could actually plant.
+
+    Deliberately excludes the tool-unlock floor (`intro_day` / #31) — that is
+    the PLAYER's unlock state (`GameState.unlocked_tools`), not a property of
+    the day's content, and every caller already gates on it separately (see
+    `rules_content._tool_unlocked`). This answers the narrower question a
+    tool-unlock check alone cannot: even once a tool IS unlocked, could
+    today's own candidates ever actually carry this kind?
+
+    Mirrors the non-tool gates `_roll_discrepancies` and the carrier-shape
+    free-rider pass apply, so the Evidence Board / Rules pages can never
+    claim a kind is live when nothing generated today could carry it
+    (#61-class bug — see CLAUDE.md's progression-unlock notes):
+      • `_kind_is_expressible_on` — the world has the artifact yet (e.g.
+        enough breach corpora for CROSS_BREACH_REUSE).
+      • the day's own `allowed_violations` whitelist, when non-empty (#32) —
+        non-monotonic by design (the tutorial narrows it per day, then clears
+        it), so this is intentionally recomputed fresh per day rather than
+        cached across days.
+      • whether an archetype eligible for the kind is actually present in
+        TODAY's `archetype_mix` — budgeted kinds via `ArchetypeSpec.
+        eligible_kinds`; the carrier-shape kinds via `_SHAPE_ELIGIBLE_
+        ARCHETYPES` intersected with which of those archetypes even carry a
+        stego colour kind (a shape can only ride on a colour carrier, see the
+        comment above `_SHAPE_ELIGIBLE_ARCHETYPES`).
+
+    A kind can flicker in and out of this set day to day if its only eligible
+    archetype simply isn't scheduled on a given day (pacing, not a permanent
+    unlock) — that's real and correct: no candidate generated today could
+    actually carry it. This is a different shape of "unlocked" than the
+    tool-unlock gate, which is monotonic once crossed.
+    """
+    present = {a for a, count in day.archetype_mix.items() if count > 0}
+    reachable: set[DiscrepancyKind] = set()
+    for kind in DiscrepancyKind:
+        if kind not in _SEVERITY_REVEAL:
+            continue
+        if not _kind_is_expressible_on(kind, day.number):
+            continue
+        if day.allowed_violations and kind not in day.allowed_violations:
+            continue
+        if kind in _STEGO_SHAPE_KINDS:
+            eligible = {
+                a for a in _SHAPE_ELIGIBLE_ARCHETYPES
+                if set(ARCHETYPE_SPECS[a].eligible_kinds) & _STEGO_ARTIFACT_KINDS
+            }
+        else:
+            eligible = {
+                a for a, spec in ARCHETYPE_SPECS.items()
+                if kind in spec.eligible_kinds
+            }
+        if eligible & present:
+            reachable.add(kind)
+    return frozenset(reachable)
+
+
 _DISCREPANCY_DESCRIPTIONS = {
     DiscrepancyKind.MISSING_PUBLIC_PROFILE: "No public profile found for the claimed handle.",
     DiscrepancyKind.HOSTILE_CHAT:           "Candidate threatened the service operator.",

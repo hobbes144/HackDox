@@ -134,6 +134,8 @@ HackDoxApp
 - Tab (Evidence Board) hides `lw-left` **and** the log panel; the report stays.
 - The report switches to a compact layout (shorter bars, hour-wide timeline cells) when
   the column is narrower than `config.LW_REPORT_WIDTH` (`IntakeScreen._lw_report_width`).
+- LOCATIONS & ACCESS draws an ASCII world map of the login origins (`core/ascii_map.py`, 2026-09-20); it re-rasterises at the column width and falls back to a list below `config.LW_MAP_MIN_WIDTH`.
+- ANALYST NOTES are locked until the Threat Triage HUD upgrade (`UPGRADE_LOG_TRIAGE`).
 - Log Analyzer HUD: neutral `▸` gutter marks on the target's anomalous rows + `◂ out of
   range` on report bars. It never names a violation.
 

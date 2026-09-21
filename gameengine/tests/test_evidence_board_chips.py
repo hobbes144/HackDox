@@ -186,8 +186,19 @@ def _label_row(board: EvidenceBoard, index: int) -> str:
 
 
 async def _open_board(pilot, app, page: int) -> tuple:
-    """Push a real IntakeScreen, go to `page`, and open the editable board."""
-    day = load_day(1)
+    """Push a real IntakeScreen, go to `page`, and open the editable board.
+
+    Day 6, not Day 1: the board now also gates on whether today's own
+    content (allowed_violations, archetype_mix) could plant a kind, on top
+    of unlocked_tools (progression-unlock subagent fix). Day 1's own
+    whitelist is deliberately narrow — it's the first tutorial day, teaching
+    only a handful of kinds — so with ALL_TOOLS force-unlocked it now yields
+    a much shorter, correctly-gated board than these chip-mechanics tests
+    need. Day 6 is the first day with an empty allowed_violations (no
+    whitelist restriction), so it's back to exercising the full catalog these
+    tests were written against.
+    """
+    day = load_day(6)
     state = GameState(seed=SEED)
     state.unlocked_tools = set(ALL_TOOLS)
     await app.push_screen(IntakeScreen(day, state, "briefing"))

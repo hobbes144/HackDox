@@ -272,7 +272,13 @@ def test_rules_screen_evidence_board_respects_unlocked_tools():
     as the tool-page boards — no separate code path to drift out of sync."""
     from gameengine.ui.tui.app import EvidenceState, RulesScreen
 
-    day = load_day(1)
+    # Day 6, not Day 1 — see test_unlock_ui.test_evidence_boards_are_gated_by_
+    # unlocked_tools for why: the board now also gates on whether today's own
+    # content (allowed_violations, archetype_mix) could plant a kind, and
+    # Day 1's own whitelist doesn't teach any OSINT kind yet. Day 6 is the
+    # first day with no whitelist restriction, so it isolates pure
+    # tool-gating the way this test means to.
+    day = load_day(6)
     state_obj = EvidenceState()
     screen = RulesScreen(day, state_obj, unlocked_tools={"ghostscan"})
     groups = {g for g, _k, _l in screen._ev_board._items}
@@ -289,6 +295,140 @@ def test_rules_screen_evidence_board_respects_unlocked_tools():
     # group. Both spellings of this assertion were correct under that rule at
     # different times.
     assert groups == {"DOSSIER", "OSINT"}
+
+
+def test_violation_table_and_board_respect_the_days_whitelist_and_archetype_mix():
+    """Progression-unlock fix: a kind whose TOOL is unlocked can still be
+    unreachable today because the day's own content can't plant it yet --
+    either its allowed_violations whitelist excludes it (the tutorial teaches
+    OSINT kinds progressively across days 2-5, not all at once the moment
+    Ghostscan unlocks) or no archetype eligible for it is in today's
+    archetype_mix. Before this fix, violation_table/visible_catalog/
+    clustered_catalog gated on unlocked_tools alone, so e.g. TYPOSQUAT_HANDLE
+    and the Stego carrier-shape kinds (SIGNAL_COMMS_PAYLOAD etc.) showed on
+    the board and the Rules tabs from the moment their tool unlocked, days
+    before the tutorial's own whitelist actually taught them."""
+    from gameengine.core.models import DiscrepancyKind
+
+    day2 = load_day(2)   # Ghostscan's unlock day; its own whitelist doesn't
+                          # yet include TYPOSQUAT_HANDLE (that opens Day 6).
+    gated_text = "\n".join(
+        rules_content.violation_table(day2, "OSINT", unlocked_tools={"ghostscan"}))
+    assert "TYPOSQUAT_HANDLE" not in gated_text, (
+        "TYPOSQUAT_HANDLE shown on Day 2's OSINT table even though Day 2's "
+        "own allowed_violations whitelist doesn't teach it yet")
+
+    day6 = load_day(6)   # first day with an empty whitelist -> fully taught.
+    open_text = "\n".join(
+        rules_content.violation_table(day6, "OSINT", unlocked_tools={"ghostscan"}))
+    assert "TYPOSQUAT_HANDLE" in open_text, (
+        "TYPOSQUAT_HANDLE missing from Day 6's OSINT table even though "
+        "nothing restricts it any more -- the gate should have opened, not "
+        "just closed"
+    )
+
+    # Same rule, the Evidence Board's own catalog builders (not just the
+    # Rules-tab table), and the Stego carrier-shape kinds specifically --
+    # Nick's other concrete example of the gap.
+    day5 = load_day(5)   # Stegotool's unlock day; its whitelist covers the
+                          # colour kinds but not the carrier-shape kinds yet.
+    day5_kinds = {k for _g, k, _l in
+                  rules_content.visible_catalog({"stegotool"}, day5)}
+    assert DiscrepancyKind.SIGNAL_COMMS_PAYLOAD not in day5_kinds
+    assert DiscrepancyKind.RECURSIVE_PAYLOAD not in day5_kinds
+    assert DiscrepancyKind.HOSTILE_PAYLOAD not in day5_kinds
+
+    day6_kinds = {
+        k for _grp, _cid, _lab, items in
+        rules_content.clustered_catalog({"stegotool"}, day6)
+        for _g2, k, _lbl in items
+    }
+    assert DiscrepancyKind.SIGNAL_COMMS_PAYLOAD in day6_kinds
+
+    # `unlocked_tools=None` must still mean "no gating context at all" --
+    # both filters off, not just the tool one (regression guard for the
+    # None-symmetry bug this fix introduced and then fixed in the same pass).
+    unfiltered = {k for _g, k, _l in rules_content.visible_catalog(None, day2)}
+    assert DiscrepancyKind.TYPOSQUAT_HANDLE in unfiltered
+
+
+def test_reachability_is_cumulative_and_never_revokes_a_kind():
+    """Progression-unlock fix (2026-09-21): once a DiscrepancyKind has been
+    reachable on some day, it must stay reachable on every later day, even
+    when that later day's own scripted archetype_mix wouldn't roll it.
+
+    Nick's concrete repro: Day 3 is hand-scripted and its archetype_mix
+    happens not to include an archetype eligible for DISPOSABLE_EMAIL or
+    UNSALTED_STORAGE, even though both are DOSSIER kinds with no tool gate at
+    all and both were plainly reachable on Day 1 and Day 2. Before this fix,
+    the single-day `candidate_gen.kinds_the_day_can_plant(day)` check made
+    them vanish from the Evidence Board and the Rules tables on Day 3 --
+    evidence types the player had already been shown flickering off the
+    board reads as the Overseer erasing evidence, not as a difficulty gate,
+    and defeats the board's whole point as a running checklist."""
+    from gameengine.core.models import DiscrepancyKind
+    from gameengine.core import candidate_gen, content_loader
+
+    day3 = content_loader.load_day(3)
+    single_day = candidate_gen.kinds_the_day_can_plant(day3)
+    assert DiscrepancyKind.DISPOSABLE_EMAIL not in single_day, (
+        "test fixture assumption broken: Day 3's own archetype_mix now DOES "
+        "carry DISPOSABLE_EMAIL, so it no longer isolates the cumulative fix"
+    )
+    assert DiscrepancyKind.UNSALTED_STORAGE not in single_day
+
+    cumulative = content_loader.kinds_discovered_through(3)
+    assert DiscrepancyKind.DISPOSABLE_EMAIL in cumulative, (
+        "DISPOSABLE_EMAIL was reachable on Day 1/2 and must stay reachable "
+        "through Day 3, even though Day 3's own script wouldn't roll it"
+    )
+    assert DiscrepancyKind.UNSALTED_STORAGE in cumulative
+
+    # And the fix must actually be wired into the player-facing surfaces --
+    # not just the underlying content_loader helper.
+    unlocked = {"dossier", "ghostscan", "hashcrack", "logwatch", "stegotool"}
+    board_kinds = {
+        k for _grp, _cid, _lab, items in
+        rules_content.clustered_catalog(unlocked, day3)
+        for _g2, k, _lbl in items
+    }
+    assert DiscrepancyKind.DISPOSABLE_EMAIL in board_kinds
+    assert DiscrepancyKind.UNSALTED_STORAGE in board_kinds
+
+    table_text = "\n".join(
+        rules_content.violation_table(day3, "DOSSIER", unlocked_tools=unlocked))
+    assert "DISPOSABLE_EMAIL" in table_text
+    assert "UNSALTED_STORAGE" in table_text
+
+
+def test_rules_page_tables_group_rows_under_evidence_board_subcategories():
+    """Nick, 2026-09-21: 'include the evidence types subcategories on the
+    rules page so the user can better understand their organization' with
+    the same 'dynamic colour, static position' policy as the board -- rows
+    grouped and ordered exactly like `VIOLATION_CLUSTERS`/`clustered_catalog`,
+    not re-sorted by severity, so a row's position never moves and only its
+    colour changes when a rule is re-tiered."""
+    day1 = load_day(1)
+    lines = rules_content.violation_table(day1, "DOSSIER")
+    text = "\n".join(lines)
+    # Both DOSSIER subcategory headers from VIOLATION_CLUSTERS must appear,
+    # in their authored order, each ahead of the rows it groups.
+    assert "Identity Confirmation" in text
+    assert "Personal" in text
+    assert text.index("Identity Confirmation") < text.index("AFFILIATION_NOT_STATED")
+    assert text.index("Personal") < text.index("HOSTILE_CHAT")
+    assert text.index("AFFILIATION_NOT_STATED") < text.index("Personal"), (
+        "Identity Confirmation's rows must render before the Personal header"
+    )
+
+    # Rows must NOT be severity-sorted any more: AFFILIATION_NOT_STATED
+    # (minor) stays ahead of DISPOSABLE_EMAIL (major) because that is their
+    # authored cluster order, not because of their severity.
+    assert (text.index("AFFILIATION_NOT_STATED")
+            < text.index("DISPOSABLE_EMAIL")), (
+        "DOSSIER rows were re-sorted by severity instead of keeping "
+        "VIOLATION_CLUSTERS' authored order"
+    )
 
 
 def test_every_violation_has_a_worked_example():

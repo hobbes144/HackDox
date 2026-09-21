@@ -11,7 +11,9 @@ import json
 from dataclasses import replace
 
 from .. import config
-from .candidate_gen import stable_hash, stepped_rule_severity
+from functools import lru_cache
+
+from .candidate_gen import kinds_the_day_can_plant, stable_hash, stepped_rule_severity
 from .models import (
     RULE_MUTABILITIES,
     Archetype,
@@ -779,6 +781,44 @@ def load_day(day_number: int) -> Day:
         directive_removed_rule_ids=directive_removed_rule_ids,
         conventional_carrier_slots=conventional_carrier_slots,
     )
+
+
+@lru_cache(maxsize=None)
+def kinds_discovered_through(day_number: int) -> frozenset[DiscrepancyKind]:
+    """Every DiscrepancyKind reachable on ANY day from 1 through `day_number`,
+    unioned — the cumulative, monotonic answer, as opposed to
+    `candidate_gen.kinds_the_day_can_plant(day)`'s single-day one.
+
+    Progression-unlock fix (2026-09): the Evidence Board and Rules page used
+    to gate on the single-day question alone, so a kind whose only eligible
+    archetype simply wasn't scheduled in *today's* `archetype_mix` would
+    vanish from the board even though an earlier day's candidates could (and
+    did) carry it — e.g. Day 3's scripted mix drops DISPOSABLE_EMAIL and
+    UNSALTED_STORAGE, which Day 1 and Day 2 both taught. That reads as the
+    Overseer erasing evidence, not as a difficulty gate, and it breaks the
+    board's whole premise: once something is a thing to check for, it should
+    stay a thing to check for.
+
+    So this walks every day from 1 to `day_number` and unions what each one
+    could plant — a kind that was ever reachable stays reachable for the rest
+    of the campaign, even on a later day whose own script wouldn't roll it.
+    The whitelist and tool-unlock floors still apply per kind (via
+    `kinds_the_day_can_plant`'s own gates) — this only makes the
+    archetype-mix/whitelist combination monotonic across days, it does not
+    loosen either gate on the day a kind first becomes reachable.
+
+    Cached: day content (`load_day`/`synthesize_day`) is a pure function of
+    `day_number` alone, so the union for a given `day_number` never changes
+    within a process, and re-walking days 1..N on every catalog render would
+    be wasted work — this is called from every Evidence Board repaint and
+    every Rules-page tab switch.
+    """
+    if day_number < 1:
+        return frozenset()
+    discovered: set[DiscrepancyKind] = set()
+    for n in range(1, day_number + 1):
+        discovered |= kinds_the_day_can_plant(load_day(n))
+    return frozenset(discovered)
 
 
 def load_narratives() -> dict[str, str]:

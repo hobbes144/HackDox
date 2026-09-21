@@ -8,14 +8,14 @@ from textual.containers import VerticalScroll
 from textual.events import Key
 from textual.widgets import Static
 
-from gameengine.core import scoring
+from gameengine.core import candidate_gen, scoring
 from gameengine.core.audio import sound_manager
-from gameengine.core.models import DiscrepancyKind
+from gameengine.core.models import Day, DiscrepancyKind
 from gameengine.ui.tui import rules_content
+from gameengine.ui.tui.rules_content import SEV_COLOR
 from gameengine.ui.tui.shared import (
     _GROUP_META,
     _GROUP_ORDER,
-    _sev_color,
 )
 
 
@@ -445,7 +445,8 @@ class EvidenceBoard(VerticalScroll):
     def __init__(self, state: EvidenceState, widget_id: str = "evidence-board",
                  classes: str | None = None, summary: bool = False,
                  home_group: str | None = None,
-                 unlocked_tools: set[str] | None = None) -> None:
+                 unlocked_tools: set[str] | None = None,
+                 day: Day | None = None) -> None:
         super().__init__(id=widget_id, classes=classes)
         # Summary mode (Candidate page): read-only — lists only the violations
         # the player has flagged. Editable mode (tool pages): full checklist.
@@ -467,7 +468,20 @@ class EvidenceBoard(VerticalScroll):
         # is what `_cursor` indexes. Deriving one from the other rather than
         # filtering the catalog twice is what keeps the cursor, the hit map and
         # the painted chips addressing the same violation.
-        self._clusters = rules_content.clustered_catalog(unlocked_tools)
+        # `day`, when given, additionally drops a kind nothing seen SO FAR
+        # this campaign could ever plant (the cumulative union, across every
+        # day up to and including this one, of allowed_violations whitelists
+        # and archetype_mix eligibility) — a narrower, separate question from
+        # unlocked_tools above. Cumulative on purpose: once a kind is ever
+        # reachable it stays on the board, even on a later day whose own
+        # script wouldn't roll it — see rules_content.clustered_catalog /
+        # content_loader.kinds_discovered_through.
+        self._clusters = rules_content.clustered_catalog(unlocked_tools, day)
+        # Kept for _kind_color below: chip colour is the player's day-resolved
+        # severity read (see _kind_color), which needs day.number the same way
+        # the Rules page's _day_severity does. `day` is otherwise only used
+        # above, at construction time, so nothing else on this widget reads it.
+        self._day = day
         self._items: list[tuple[str, DiscrepancyKind, str]] = [
             item for _g, _cid, _lab, items in self._clusters for item in items
         ]
@@ -492,6 +506,26 @@ class EvidenceBoard(VerticalScroll):
 
     def compose(self) -> ComposeResult:
         yield self._content
+
+    def _kind_color(self, kind: DiscrepancyKind) -> str:
+        """This kind's chip colour: its CURRENT (day-resolved) severity —
+        the same value the Rules page colours its row with — not the kind's
+        base/settled severity.
+
+        Nick, 2026-09-21: "the color of the evidence should reflect its
+        current severity ranking, just like on the rules page" — a rule the
+        Overseer steps from major to minor (or the reverse) must repaint the
+        board the day it changes, matching `rules_content._day_severity`.
+        Deliberately does NOT touch chip ORDER — `self._items` (built once at
+        construction from `clustered_catalog`'s authored layout) never
+        reorders, so a severity change reads as "this chip changed colour",
+        which is the whole point: a violation out of its usual severity band
+        is what should draw the player's suspicion, not a shuffled board.
+        """
+        day_number = self._day.number if self._day is not None else None
+        sev = candidate_gen.severity_for(kind, day_number)
+        return SEV_COLOR.get(sev, "#c8d4e1")
+
 
     def on_mount(self) -> None:
         self.repaint()
@@ -763,7 +797,7 @@ class EvidenceBoard(VerticalScroll):
         """
         kind      = self._items[index][1]
         state     = self._state.state_of(kind)
-        sev       = _sev_color(kind)
+        sev       = self._kind_color(kind)
         at_cursor = index == self._cursor and self._focused
         grade     = _grade_cell(self._state.grade_of(kind))
         bold      = "b " if at_cursor else ""
@@ -936,7 +970,7 @@ class EvidenceBoard(VerticalScroll):
             badge = _grade_badge(self._state.grade_of(kind))
             text  = _clip(label, label_room)
             if self._state.state_of(kind) == "marked":
-                sev = _sev_color(kind)
+                sev = self._kind_color(kind)
                 lines.append(f"    [{sev}][b]▲ {text}[/][/]{badge}")
             else:  # absent — ruled out
                 lines.append(f"    [#6b7785]✗ [strike]{text}[/][/]{badge}")

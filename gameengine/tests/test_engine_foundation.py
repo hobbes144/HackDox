@@ -3506,8 +3506,11 @@ def test_clean_credential_resolves_without_being_called_safe():
 
 
 def test_stego_rgb_coloring_gated_behind_channel_colorizer():
-    """Batch-3 task #4f: the R/G/B channel entropy numbers are always shown;
-    only their severity coloring is gated behind UPGRADE_STEGO_RGB_COLOR.
+    """Batch-3 task #4f (carried forward through the entropy-bar rework):
+    the R/G/B channel entropy numbers -- and the bar drawn from them -- are
+    always shown; only their severity coloring is gated behind
+    UPGRADE_STEGO_RGB_COLOR. The bar's shape (fill length, band ticks) is
+    free either way -- only the color on top is the upgrade's job.
     """
     import re
 
@@ -3520,14 +3523,19 @@ def test_stego_rgb_coloring_gated_behind_channel_colorizer():
     gated = tools_bridge.get_stego_stats(cand, upgrades={config.UPGRADE_STEGO_RGB_COLOR})
 
     def channel_lines(lines):
-        return [ln for ln in lines if "channel LSB entropy" in ln]
+        return [ln for ln in lines if "channel entropy" in ln]
 
     ungated_ch, gated_ch = channel_lines(ungated), channel_lines(gated)
     assert len(ungated_ch) == len(gated_ch) == 3
     # Numbers must match — the upgrade only changes color, never the values.
-    _num = re.compile(r"(\d+)\[/\]\s*/\s*100")
+    _num = re.compile(r"(\d+)/100")
     assert [_num.search(l).group(1) for l in ungated_ch] == \
            [_num.search(l).group(1) for l in gated_ch]
+    # Bar shape (fill length + band ticks) must match too, stripped of color —
+    # the upgrade colors the bar, it never changes what shape it draws.
+    _strip = re.compile(r"\[/?[^\]]*\]")
+    assert [_strip.sub("", l) for l in ungated_ch] == \
+           [_strip.sub("", l) for l in gated_ch]
     assert all("#c8d4e1" in l for l in ungated_ch), "ungated lines must be neutral-colored"
     assert any(c in l for l in gated_ch for c in ("#ff5470", "#ff8c42", "#00ff9f")), (
         "gated lines never used a severity color")

@@ -16,7 +16,12 @@ violations — see `filter_labels`, which reads the engine's own per-row
 
 What the report can and cannot tell (the reveal-tier table, pinned by tests):
   CLAIMED_IP_MISMATCH  identifiable  — the claimed IP never appears as a login origin
-  IMPOSSIBLE_TRAVEL    identifiable  — two clean origins in different cities, Δ minutes
+  IMPOSSIBLE_TRAVEL    judgeable     — every city change between clean logins is listed
+                                   with distance + time (and drawn on the map); since
+                                   2026-09-20 honest trips exist too, so the player
+                                   judges the speed. `impossible` = > LW_MAX_FEASIBLE_KMH.
+  ANALYST NOTES        paid          — the report's conclusions (alerts) need the Threat
+                                   Triage HUD upgrade; free tier shows a locked line.
   AFTER_HOURS_ACCESS   visible       — off-hours activity (shared with insider)
   INSIDER_BEHAVIOR     suspicious    — off-hours + sensitive/privileged COUNTS (no paths)
   BRUTE_FORCE_IN_LOG / CREDENTIAL_STUFFING
@@ -28,9 +33,42 @@ What the report can and cannot tell (the reveal-tier table, pinned by tests):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import asin, cos, radians, sqrt, sin
 
 from .. import config
 from .models import Candidate
+
+# Approximate coordinates (lat, lon) for every place a login origin can carry:
+# the OFFICE_CITIES a candidate claims and the external city pool attack and
+# travel logins come from. Used for the travel-feasibility check below and for
+# plotting the ASCII map (core/ascii_map.py). Kept here, not in tools_bridge,
+# so generation and the report agree on one set of distances.
+CITY_COORDS: dict[str, tuple[float, float]] = {
+    "Seattle, US": (47.61, -122.33), "Austin, US": (30.27, -97.74),
+    "Denver, US": (39.74, -104.99), "Chicago, US": (41.88, -87.63),
+    "Boston, US": (42.36, -71.06), "San Francisco, US": (37.77, -122.42),
+    "Portland, US": (45.52, -122.68), "Atlanta, US": (33.75, -84.39),
+    "Frankfurt, DE": (50.11, 8.68), "Singapore, SG": (1.35, 103.82),
+    "New York, US": (40.71, -74.01), "Amsterdam, NL": (52.37, 4.90),
+    "Moscow, RU": (55.76, 37.62), "Taipei, TW": (25.03, 121.57),
+    "Nairobi, KE": (-1.29, 36.82), "Sao Paulo, BR": (-23.55, -46.63),
+    "London, GB": (51.51, -0.13), "Sydney, AU": (-33.87, 151.21),
+    "Dubai, AE": (25.20, 55.27), "Mumbai, IN": (19.08, 72.88),
+    "Seoul, KR": (37.57, 126.98), "Mexico City, MX": (19.43, -99.13),
+    "Lagos, NG": (6.52, 3.38), "Toronto, CA": (43.65, -79.38),
+}
+
+
+def haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    la1, lo1, la2, lo2 = map(radians, (*a, *b))
+    h = (sin((la2 - la1) / 2) ** 2
+         + cos(la1) * cos(la2) * sin((lo2 - lo1) / 2) ** 2)
+    return 2 * 6371 * asin(sqrt(h))
+
+
+def distance_between(place_a: str, place_b: str) -> float | None:
+    ca, cb = CITY_COORDS.get(place_a), CITY_COORDS.get(place_b)
+    return haversine_km(ca, cb) if ca and cb else None
 
 _PRIVATE_PREFIXES = ("10.", "172.16.", "192.168.")
 
@@ -81,6 +119,14 @@ class Origin:
 
 @dataclass(frozen=True)
 class TravelPair:
+    """Two consecutive logins from CLEAN origins in different places.
+
+    2026-09-20: a pair is no longer suspicious just for existing. People do
+    travel — `feasible` is True when the implied speed is one an airliner
+    could actually manage (config.LW_MAX_FEASIBLE_KMH), which is what makes a
+    genuine trip usable as noise against "two cities = deny".
+    """
+
     place_a: str
     place_b: str
     ts_a:    int
@@ -89,6 +135,24 @@ class TravelPair:
     @property
     def minutes(self) -> int:
         return max(0, (self.ts_b - self.ts_a) // 60)
+
+    @property
+    def km(self) -> float | None:
+        return distance_between(self.place_a, self.place_b)
+
+    @property
+    def kmh(self) -> int | None:
+        km = self.km
+        if km is None or self.minutes <= 0:
+            return None
+        return int(km / (self.minutes / 60))
+
+    @property
+    def feasible(self) -> bool:
+        """A trip a person could have taken. Unknown cities count as feasible —
+        the report never accuses on missing data."""
+        kmh = self.kmh
+        return kmh is None or kmh <= config.LW_MAX_FEASIBLE_KMH
 
 
 @dataclass(frozen=True)
@@ -135,6 +199,12 @@ class LogwatchReport:
     def out_of_range(self, key: str) -> bool:
         _label, ceiling, _scale = config.LW_PROFILE_METRICS[key]
         return self.metric(key) > ceiling
+
+    @property
+    def impossible(self) -> tuple[TravelPair, ...]:
+        """Travel pairs no aircraft covers in the time — the only ones that
+        are evidence. A feasible pair is an ordinary business trip."""
+        return tuple(t for t in self.travel if not t.feasible)
 
     def lane(self, name: str) -> tuple[int, ...]:
         return dict(self.lanes)[name]
@@ -198,7 +268,7 @@ def build_logwatch_report(entries, candidate: Candidate) -> LogwatchReport:
     seen_pairs: set[tuple[str, str]] = set()
     for a, b in zip(clean_ok, clean_ok[1:]):
         pa, pb = by_ip[a.ip].place, by_ip[b.ip].place
-        if pa == pb or (b.ts_secs - a.ts_secs) > config.LW_TRAVEL_REPORT_WINDOW:
+        if pa == pb:
             continue
         if (pa, pb) in seen_pairs:
             continue
@@ -249,8 +319,6 @@ def build_logwatch_report(entries, candidate: Candidate) -> LogwatchReport:
 # amber and get a "◂ out of range" tag. Without it the player compares each
 # bar to its │ tick themselves. It never names anything.
 
-from math import asin, cos, radians, sin, sqrt
-
 from rich.markup import escape as _esc
 
 _C_HEAD   = "#ffb454"   # forensics accent (matches the FORENSICS board group)
@@ -270,31 +338,9 @@ _LANE_GLYPH = {"AUTH": ("●", "#00ff9f"), "FAIL": ("×", "#ff5470"),
 # (PRIV is ◆, not the mockup's ▲: in this game ▲ always means "a filter
 # confirmed a named violation", and a free-tier glyph must not look like one.)
 
-# Approximate city coordinates, for the filter's travel-speed readout only.
-_COORDS: dict[str, tuple[float, float]] = {
-    "Seattle, US": (47.61, -122.33), "Austin, US": (30.27, -97.74),
-    "Denver, US": (39.74, -104.99), "Chicago, US": (41.88, -87.63),
-    "Boston, US": (42.36, -71.06), "San Francisco, US": (37.77, -122.42),
-    "Portland, US": (45.52, -122.68), "Atlanta, US": (33.75, -84.39),
-    "Frankfurt, DE": (50.11, 8.68), "Singapore, SG": (1.35, 103.82),
-    "New York, US": (40.71, -74.01), "Amsterdam, NL": (52.37, 4.90),
-    "Moscow, RU": (55.76, 37.62), "Taipei, TW": (25.03, 121.57),
-    "Nairobi, KE": (-1.29, 36.82), "Sao Paulo, BR": (-23.55, -46.63),
-    "London, GB": (51.51, -0.13), "Sydney, AU": (-33.87, 151.21),
-    "Dubai, AE": (25.20, 55.27), "Mumbai, IN": (19.08, 72.88),
-    "Seoul, KR": (37.57, 126.98), "Mexico City, MX": (19.43, -99.13),
-    "Lagos, NG": (6.52, 3.38), "Toronto, CA": (43.65, -79.38),
-}
-
-
 def travel_kmh(pair: TravelPair) -> int | None:
-    a, b = _COORDS.get(pair.place_a), _COORDS.get(pair.place_b)
-    if not a or not b or pair.minutes <= 0:
-        return None
-    la1, lo1, la2, lo2 = map(radians, (*a, *b))
-    h = sin((la2 - la1) / 2) ** 2 + cos(la1) * cos(la2) * sin((lo2 - lo1) / 2) ** 2
-    km = 2 * 6371 * asin(sqrt(h))
-    return int(km / (pair.minutes / 60))
+    """Back-compat alias — the speed now lives on the pair itself."""
+    return pair.kmh
 
 
 @dataclass(frozen=True)
@@ -377,30 +423,90 @@ def _timeline(r: LogwatchReport, lay: _Layout) -> list[str]:
     return lines
 
 
+def _fmt_dur(minutes: int) -> str:
+    return f"{minutes} min" if minutes < 60 else f"{minutes // 60}h {minutes % 60:02d}m"
+
+
+def _origin_coords(o: Origin) -> tuple[float, float] | None:
+    return CITY_COORDS.get(o.place)
+
+
+def _origin_color(o: Origin) -> str:
+    if o.is_claimed_ip:
+        return _C_OK
+    return _C_CRIT if o.hostile else _C_HOT
+
+
+def _origin_map(r: LogwatchReport, lay: _Layout) -> list[str]:
+    """The ASCII world map of this account's login origins (2026-09-20).
+
+    Markers are the origins' numbers (matching the legend below). Arcs join
+    consecutive clean logins in different cities — every travel pair, drawn
+    in ONE colour: the map shows where and the legend shows how long, but
+    telling a business trip from an impossible one is the player's call
+    (or the paid Analyst Notes'). Marker colour is only what the log already
+    says: green = the claimed IP, red = an origin that failed its way in,
+    amber = anywhere else.
+    """
+    from . import ascii_map
+    markers, index = [], {}
+    for i, o in enumerate(r.origins[:9]):
+        index[o.place] = i + 1
+        c = _origin_coords(o)
+        if c:
+            markers.append(ascii_map.Marker(str(i + 1), *c, _origin_color(o)))
+    arcs = []
+    for t in r.travel:
+        a, b = CITY_COORDS.get(t.place_a), CITY_COORDS.get(t.place_b)
+        if a and b:
+            arcs.append(ascii_map.Arc(a, b, _C_BAR))
+    width = min(lay.width, config.LW_MAP_MAX_WIDTH) - 2      # the 2-col indent
+    return ["  " + ln for ln in ascii_map.render(width, markers, arcs)]
+
+
 def _origins_and_resources(r: LogwatchReport, lay: _Layout) -> list[str]:
     full = lay.width >= config.LW_REPORT_WIDTH
-    sub = f"  [{_C_LABEL}]where this account logged in from[/]" if full else ""
+    show_map = (config.LW_MAP_ENABLED and lay.width >= config.LW_MAP_MIN_WIDTH
+                and any(_origin_coords(o) for o in r.origins))
+    sub = (f"  [{_C_LABEL}]ok = successful logins[/]" if show_map
+           else f"  [{_C_LABEL}]where this account logged in from[/]" if full else "")
     rows = [f"  [{_C_HEAD}][b]ORIGINS[/][/]{sub}"]
+    if show_map:
+        rows += _origin_map(r, lay)
     if not r.claimed_ip_seen:
         rows.append(f"  [{_C_WARN}]✗ claimed IP {_esc(r.claimed_ip)} never seen[/]")
-    for o in r.origins:
+    num = {o.place: i + 1 for i, o in enumerate(r.origins)}
+    for i, o in enumerate(r.origins):
         mark = f"[{_C_OK}]✓[/]" if o.is_claimed_ip else f"[{_C_WARN}]✗[/]"
-        detail = f"{o.logins} login{'s' if o.logins != 1 else ''}"
-        if o.failures_from:
-            detail += f" · {o.failures_from} fail"
-        ip_col = (f"[{_C_LABEL}]{o.ip:<16}[/] "
-                  if lay.width >= config.LW_REPORT_WIDTH else "")
-        rows.append(f"  {mark} [{_C_VALUE}]{_esc(o.place):<18}[/] "
+        if show_map:
+            detail = f"{o.logins} ok" + (f" · {o.failures_from} fail" if o.failures_from else "")
+            n = f"[b {_origin_color(o)}]{i + 1}[/] "
+        else:
+            detail = (f"{o.logins} login{'s' if o.logins != 1 else ''}"
+                      + (f" · {o.failures_from} fail" if o.failures_from else ""))
+            n = ""
+        ip_col = f"[{_C_LABEL}]{o.ip:<15}[/] " if full else ""
+        rows.append(f"  {n}{mark} [{_C_VALUE}]{_esc(o.place):<17}[/] "
                     f"{ip_col}[{_C_LABEL}]{detail}[/]")
+    # Travel: every pair, never classified here — distance and time only.
     for t in r.travel:
-        rows += _pair(f"[{_C_WARN}]Δ {t.minutes:>3} min[/] [{_C_LABEL}]@{fmt_hhmm(t.ts_a)}[/]",
-                      f"[{_C_VALUE}]{_esc(t.place_a)} → {_esc(t.place_b)}[/]", lay)
+        km = t.km
+        dist = f"≈{int(km):,} km" if km is not None else "distance ?"
+        if show_map and t.place_a in num and t.place_b in num:
+            rows.append(f"  [{_C_BAR}]{num[t.place_a]}→{num[t.place_b]}[/]  "
+                        f"[{_C_VALUE}]{dist}[/] [{_C_LABEL}]in[/] "
+                        f"[{_C_VALUE}]{_fmt_dur(t.minutes)}[/]  "
+                        f"[{_C_LABEL}]@{fmt_hhmm(t.ts_a)}[/]")
+        else:
+            rows += _pair(f"[{_C_BAR}]→[/] [{_C_VALUE}]{dist}[/] [{_C_LABEL}]in[/] "
+                          f"[{_C_VALUE}]{_fmt_dur(t.minutes)}[/]",
+                          f"[{_C_VALUE}]{_esc(t.place_a)} → {_esc(t.place_b)}[/]", lay)
     rows.append("")
     rows += _pair(
         f"[{_C_HEAD}][b]RESOURCES[/][/]",
         f"[{_C_LABEL}]routine[/] [{_C_VALUE}]{r.files_routine}[/] [{_C_LABEL}]·[/] "
         f"[{_C_LABEL}]sensitive[/] [{_C_VALUE}]{r.files_sensitive}[/] [{_C_LABEL}]·[/] "
-        f"[{_C_LABEL}]privileged[/] [{_C_VALUE}]{r.privileged}[/]", lay)
+        f"[{_C_LABEL}]{'privileged' if full else 'priv'}[/] [{_C_VALUE}]{r.privileged}[/]", lay)
     return rows
 
 
@@ -421,11 +527,16 @@ def _alerts(r: LogwatchReport, lay: _Layout) -> list[str]:
     if not r.claimed_ip_seen:
         out += _pair(f"[{_C_WARN}][b]⚠ SOURCE DISCREPANCY[/][/]",
                      f"[{_C_VALUE}]claimed {_esc(r.claimed_ip)} never seen[/]", lay)
-    if r.travel:
-        n = len(r.travel)
+    if r.impossible:
+        n = len(r.impossible)
         out += _pair(f"[{_C_WARN}][b]⚠ LOCATION SHIFT[/][/]",
                      f"[{_C_VALUE}]{n} city change{'s' if n != 1 else ''} "
-                     f"between clean logins[/]", lay)
+                     f"faster than any flight[/]", lay)
+    feasible = len(r.travel) - len(r.impossible)
+    if feasible:
+        out += _pair("[#7dd3c0]● travel[/]",
+                     f"[{_C_VALUE}]{feasible} trip{'s' if feasible != 1 else ''} "
+                     f"at a plausible flight time[/]", lay)
     if r.off_hours:
         out += _pair("[#ffd93d]● off-shift activity[/]",
                      f"[{_C_VALUE}]{r.off_hours} event{'s' if r.off_hours != 1 else ''} "
@@ -469,7 +580,7 @@ def filter_confirmations(entries, candidate: Candidate, r: LogwatchReport) -> li
                          f"{rows[0].ip} across {span // 3600}h {(span % 3600) // 60}m "
                          f"(each under the alert)")
     if K.IMPOSSIBLE_TRAVEL in kinds:
-        for t in r.travel:
+        for t in r.impossible:
             kmh = travel_kmh(t)
             spd = f" ≈ {kmh:,} km/h" if kmh else ""
             lines.append(f"  [{_C_WARN}][b]▲ IMPOSSIBLE_TRAVEL[/][/]  {_esc(t.place_a)} → "
@@ -494,6 +605,7 @@ def filter_confirmations(entries, candidate: Candidate, r: LogwatchReport) -> li
 
 
 def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = False,
+                  notes: bool = False,
                   confirmations: list[str] | tuple[str, ...] = (),
                   pull_cost: int | None = None,
                   width: int | None = None) -> tuple[str, ...]:
@@ -509,8 +621,8 @@ def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = F
         f"  [{L}]ACCOUNT[/]  [{_C_VALUE}]{_esc(r.email)}[/]",
         f"  [{L}]ROLE   [/]  [{_C_VALUE}]{_esc(r.role)}[/]",
         f"  [{L}]HOURS  [/]  [{_C_VALUE}]{s}–{e}[/]",
-        f"  [{L}]CLAIMS [/]  [{_C_VALUE}]{_esc(r.location)}[/]  [{L}]via[/] "
-        f"[#ffd93d]{_esc(r.claimed_ip)}[/]",
+        f"  [{L}]CLAIMS [/]  [{_C_VALUE}]{_esc(r.location)}[/]",
+        f"  [{L}]VIA IP [/]  [#ffd93d]{_esc(r.claimed_ip)}[/]",
         "",
         _rule("ACTIVITY PROFILE", lay),
         f"  [{L}]{'':<14}{'│ = normal ceiling':>{lay.bar + 4}}[/]",
@@ -521,7 +633,13 @@ def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = F
     lines += ["", _rule("LOCATIONS & ACCESS", lay)]
     lines += _origins_and_resources(r, lay)
     lines += ["", _rule("ANALYST NOTES", lay)]
-    lines += _alerts(r, lay)
+    if notes:
+        lines += _alerts(r, lay)
+    else:
+        # 2026-09-20 (Nick): the notes are the report's own conclusions, so
+        # they are paid for — Threat Triage HUD. Everything they summarise is
+        # still on the page above for a player who reads it themselves.
+        lines.append(f"  [{_C_LABEL}]▒ locked — Threat Triage HUD[/]")
     if log_state == "filtered":
         lines += ["", _rule("▲ FILTER — CONFIRMED", lay)]
         lines += list(confirmations)
