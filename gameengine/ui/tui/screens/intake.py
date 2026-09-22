@@ -525,6 +525,7 @@ class IntakeScreen(Screen):
         self.dossier.upgrades    = ups
         self.chat.upgrades       = ups
         self.image_st.tint_boost = config.UPGRADE_STEGO_TINT in ups
+        self.image_st.shape_detect_upgrade = config.UPGRADE_STEGO_SHAPE_DETECT in ups
         self._credit_revealed    = False   # fresh candidate — reveal unpaid (issue #25)
         self.dossier.cracked_password = None   # issue #29 — fresh password state
         self.dossier.set_candidate(c)
@@ -1183,6 +1184,7 @@ class IntakeScreen(Screen):
         except tools_bridge.InsufficientCompute as e:
             self.command_bar.set_response(str(e), error=True)
             return
+        had_shape_hint = self.image_st.shape_hint is not None
         res = self.image_st.do_stamp()
         if res is None:
             return
@@ -1191,6 +1193,9 @@ class IntakeScreen(Screen):
         img   = self.image_st.image
         lines = tools_bridge.stamp_log_lines(img, res, self.image_st.stamps_used, x, y,
                                              reveal_type=self._stego_filter)
+        # Glyph Detector: note it once, on the stamp that actually triggered it.
+        if not had_shape_hint and self.image_st.shape_hint is not None:
+            lines = lines + tools_bridge.stego_shape_hint_lines(self.image_st.shape_hint)
         if res.resolved and not self._stego_resolved:
             self._stego_resolved = True
             lines = lines + tools_bridge.stamp_signature_lines(

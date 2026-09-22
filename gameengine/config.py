@@ -610,11 +610,16 @@ CIPHER_DIAL_OVERAGE_COST  = 1    # ⏱ per block
 # CIPHER_ALIGN_SPAN is retuned to.
 #
 # Same stance as STEGO_HINT_BUFFER (#54): it narrows the search, it never
-# answers it, and the BASE TIER MARKS NOTHING. At 0.18 the box covers roughly
-# an eighth to a fifth of the pad — worth 35 HD$, still several steps of real
-# searching. Push it below about 0.05 and it becomes the answer; above about
-# 0.35 and it stops narrowing anything.
-CIPHER_HINT_FRACTION = 0.18
+# answers it, and the BASE TIER MARKS NOTHING. Push it below about 0.05 and it
+# becomes the answer; above about 0.35 and it stops narrowing anything.
+#
+# RETUNED 0.18 -> 0.28 (Nick): 0.18 read as too tight a "small range" — close
+# enough to the true point that it felt like a near-answer rather than a
+# region to search. 0.28 stays under the 0.35 ceiling above (it still leaves
+# real pad outside the box on both axes) while covering noticeably more of
+# the pad, which is the point — a broader region that narrows the shape of
+# the search rather than pointing at the cell.
+CIPHER_HINT_FRACTION = 0.28
 
 # ─── Day-cycle pacing ────────────────────────────────────────────────────────
 
@@ -1123,6 +1128,15 @@ UPGRADE_CRYPTO_ID        = "crypto_id_highlight"   # hashcrack: auto-label the c
 UPGRADE_BREACH_AUTO      = "breach_auto_detect"    # ghostscan: confirm BREACH_HIT on the free base run
 UPGRADE_HC_VERDICT       = "hashcrack_verdict_highlight"  # hashcrack: label a crack's strength verdict
 UPGRADE_STEGO_RGB_COLOR  = "stego_rgb_color"       # stegotool: colour-code channel entropy readout
+UPGRADE_HC_BREACH_LABEL  = "hc_breach_label"       # hashcrack: name LEAKED_PASSWORD /
+                                                   # CROSS_BREACH_REUSE and highlight the
+                                                   # corpus evidence — base tier shows the
+                                                   # corpus list unlabeled, judge it yourself
+UPGRADE_STEGO_SHAPE_DETECT = "stego_shape_detect"  # stegotool: first carrier hit flags
+                                                   # whether the payload has a special glyph
+                                                   # shape — never which one
+UPGRADE_LOG_MAP_TRAVEL   = "log_map_travel"        # logwatch: distance/time between origin-map
+                                                   # stops, needed to judge IMPOSSIBLE_TRAVEL
 
 # Economy upgrades -- reduce a tool's cost by TOOLCOST_REDUCTION (floor 1).
 # IDs follow "toolcost_<tool>" so _charge() can key off the tool name directly.
@@ -1152,6 +1166,9 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     30, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
     (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a recovered password's strength verdict, not just the plaintext"),
     (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",    25, "colour-code the RGB channel entropy readout by severity"),
+    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",    25, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
+    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",     25, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
+    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  30, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
 ]
 
 # Sub-category (by tool page) each upgrade belongs to, for shop-UI grouping.
@@ -1176,6 +1193,9 @@ UPGRADE_CATEGORY: dict[str, str] = {
     UPGRADE_BREACH_AUTO:         "Ghostscan",
     UPGRADE_HC_VERDICT:          "Hashcrack",
     UPGRADE_STEGO_RGB_COLOR:     "Stegotool",
+    UPGRADE_HC_BREACH_LABEL:     "Hashcrack",
+    UPGRADE_STEGO_SHAPE_DETECT:  "Stegotool",
+    UPGRADE_LOG_MAP_TRAVEL:      "Logwatch",
 }
 # Display order for the shop's per-tool sub-headers — mirrors the page/key
 # order (1-5, dossier/chat first) so the grouping reads the same way the

@@ -65,6 +65,11 @@ class StegoImagePanel(VerticalScroll):
         self._cur_y = 0
         self._stamps_used = 0
         self.tint_boost = False   # Spectral Lens upgrade (issue #23)
+        self.shape_detect_upgrade = False   # Glyph Detector upgrade
+        # None = not yet triggered. True/False = special/conventional, set
+        # once, the first stamp that lands on any carrier cell (not full
+        # zone coverage) — see do_stamp(). Persists until load_candidate().
+        self._shape_hint: bool | None = None
         self.on_stamp_click: Callable[[], None] | None = None
 
     def compose(self) -> ComposeResult:
@@ -87,11 +92,18 @@ class StegoImagePanel(VerticalScroll):
         return (self._cur_x, self._cur_y,
                 config.STEGO_STAMP_W, config.STEGO_STAMP_H)
 
+    @property
+    def shape_hint(self) -> bool | None:
+        """None until Glyph Detector's first carrier hit; then True (special
+        glyph) or False (conventional carrier) for the rest of this candidate."""
+        return self._shape_hint
+
     def load_candidate(self, candidate: Candidate, day: int = 1) -> None:
         self._img = tools_bridge.build_stego_image(candidate, day)
         self._revealed = set()
         self._stamp_mode = False
         self._stamps_used = 0
+        self._shape_hint = None
         self._cur_x = self._cur_y = 0
         img = self._img
         self.border_title = (f" Image Viewer — {img.filename} "
@@ -170,6 +182,14 @@ class StegoImagePanel(VerticalScroll):
         x, y, w, h = self.stamp_rect
         res = tools_bridge.evaluate_stamp(self._img, x, y, w, h, self._revealed)
         self._stamps_used += 1
+        # Glyph Detector: the first stamp that actually lands on a carrier
+        # cell settles the yes/no question for the rest of this candidate.
+        # Gated on the upgrade so an un-upgraded player accumulates the same
+        # _revealed history with no hint ever set.
+        if (self.shape_detect_upgrade and self._shape_hint is None
+                and res.anomalous_cells > 0 and self._img.kind is not None):
+            self._shape_hint = self._img.shape not in (
+                None, tools_bridge.StegoShape.CONVENTIONAL)
         self._rebuild_content()
         return res
 
@@ -191,6 +211,13 @@ class StegoImagePanel(VerticalScroll):
             lambda x, y, h=img.hint_region: h[0] <= x < h[0] + h[2] and h[1] <= y < h[1] + h[3])
 
         lines: list[str] = []
+        if self._shape_hint is not None:
+            if self._shape_hint:
+                lines.append("[#c084fc][b]◆ special glyph detected[/][/]  "
+                             "[dim]this carrier isn't a conventional block[/]")
+            else:
+                lines.append("[dim]◇ conventional carrier — no special glyph[/]")
+            lines.append("")
         for y in range(img.rows):
             row = ""
             for x in range(img.cols):

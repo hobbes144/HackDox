@@ -464,7 +464,8 @@ def _origin_map(r: LogwatchReport, lay: _Layout) -> list[str]:
     return ["  " + ln for ln in ascii_map.render(width, markers, arcs)]
 
 
-def _origins_and_resources(r: LogwatchReport, lay: _Layout) -> list[str]:
+def _origins_and_resources(r: LogwatchReport, lay: _Layout,
+                           travel: bool = False) -> list[str]:
     full = lay.width >= config.LW_REPORT_WIDTH
     show_map = (config.LW_MAP_ENABLED and lay.width >= config.LW_MAP_MIN_WIDTH
                 and any(_origin_coords(o) for o in r.origins))
@@ -489,18 +490,24 @@ def _origins_and_resources(r: LogwatchReport, lay: _Layout) -> list[str]:
         rows.append(f"  {n}{mark} [{_C_VALUE}]{_esc(o.place):<17}[/] "
                     f"{ip_col}[{_C_LABEL}]{detail}[/]")
     # Travel: every pair, never classified here — distance and time only.
-    for t in r.travel:
-        km = t.km
-        dist = f"≈{int(km):,} km" if km is not None else "distance ?"
-        if show_map and t.place_a in num and t.place_b in num:
-            rows.append(f"  [{_C_BAR}]{num[t.place_a]}→{num[t.place_b]}[/]  "
-                        f"[{_C_VALUE}]{dist}[/] [{_C_LABEL}]in[/] "
-                        f"[{_C_VALUE}]{_fmt_dur(t.minutes)}[/]  "
-                        f"[{_C_LABEL}]@{fmt_hhmm(t.ts_a)}[/]")
-        else:
-            rows += _pair(f"[{_C_BAR}]→[/] [{_C_VALUE}]{dist}[/] [{_C_LABEL}]in[/] "
-                          f"[{_C_VALUE}]{_fmt_dur(t.minutes)}[/]",
-                          f"[{_C_VALUE}]{_esc(t.place_a)} → {_esc(t.place_b)}[/]", lay)
+    # Gated behind Flight Time Analyzer (Nick's brief): free tier is the map
+    # and its numbered markers — including the arcs already drawn on it,
+    # connecting the same pairs — with nothing else. The distance/time
+    # annotation that actually lets IMPOSSIBLE_TRAVEL be judged (how far, how
+    # fast) is what the upgrade sells; the arcs alone don't answer that.
+    if travel:
+        for t in r.travel:
+            km = t.km
+            dist = f"≈{int(km):,} km" if km is not None else "distance ?"
+            if show_map and t.place_a in num and t.place_b in num:
+                rows.append(f"  [{_C_BAR}]{num[t.place_a]}→{num[t.place_b]}[/]  "
+                            f"[{_C_VALUE}]{dist}[/] [{_C_LABEL}]in[/] "
+                            f"[{_C_VALUE}]{_fmt_dur(t.minutes)}[/]  "
+                            f"[{_C_LABEL}]@{fmt_hhmm(t.ts_a)}[/]")
+            else:
+                rows += _pair(f"[{_C_BAR}]→[/] [{_C_VALUE}]{dist}[/] [{_C_LABEL}]in[/] "
+                              f"[{_C_VALUE}]{_fmt_dur(t.minutes)}[/]",
+                              f"[{_C_VALUE}]{_esc(t.place_a)} → {_esc(t.place_b)}[/]", lay)
     rows.append("")
     rows += _pair(
         f"[{_C_HEAD}][b]RESOURCES[/][/]",
@@ -605,7 +612,7 @@ def filter_confirmations(entries, candidate: Candidate, r: LogwatchReport) -> li
 
 
 def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = False,
-                  notes: bool = False,
+                  notes: bool = False, travel: bool = False,
                   confirmations: list[str] | tuple[str, ...] = (),
                   pull_cost: int | None = None,
                   width: int | None = None) -> tuple[str, ...]:
@@ -631,7 +638,7 @@ def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = F
     lines += ["", _rule("ACTIVITY TIMELINE", lay)]
     lines += _timeline(r, lay)
     lines += ["", _rule("LOCATIONS & ACCESS", lay)]
-    lines += _origins_and_resources(r, lay)
+    lines += _origins_and_resources(r, lay, travel)
     lines += ["", _rule("ANALYST NOTES", lay)]
     if notes:
         lines += _alerts(r, lay)

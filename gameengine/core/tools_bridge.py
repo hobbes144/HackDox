@@ -1620,11 +1620,13 @@ def _lw_report_lines(entries, candidate, state, log_state: str,
     ups = getattr(state, "upgrades", ()) or ()
     hud = hud or config.UPGRADE_LOG_HIGHLIGHT in ups
     notes = config.UPGRADE_LOG_TRIAGE in ups      # Threat Triage HUD (2026-09-20)
+    travel = config.UPGRADE_LOG_MAP_TRAVEL in ups  # Flight Time Analyzer
     conf = (_lr.filter_confirmations(entries, candidate, report)
             if log_state == "filtered" else ())
     cost = tool_cost(state, "logwatch") if state is not None else None
     return _lr.render_report(report, log_state=log_state, hud=hud, notes=notes,
-                             confirmations=conf, pull_cost=cost, width=width)
+                             travel=travel, confirmations=conf, pull_cost=cost,
+                             width=width)
 
 
 def get_logwatch_shared(entries: list[_LogEntry], candidate,
@@ -2847,6 +2849,27 @@ def stamp_log_lines(img: StegoImageData, res: StampResult,
     return lines
 
 
+def stego_shape_hint_lines(is_special: bool) -> list[str]:
+    """Glyph Detector's one-line note on the stamp that FIRST lands on any
+    carrier cell — boolean only, never which shape, never the kind.
+
+    Deliberately its own function rather than a stamp_log_lines() branch:
+    that function's shape silence is a considered design constraint (an 8x4
+    stamp window cannot show a glyph, so a per-stamp shape CLAIM would be the
+    tool reading ground truth rather than reporting what the stamp
+    uncovered). This upgrade doesn't ask stamp_log_lines to do that — it
+    answers a narrower question ("is there a glyph here at all, yes or no"),
+    once, the moment the player has actually touched the carrier, and says
+    nothing about the carrier's geometry or purpose. That's still short of
+    what stamp_signature_lines' unfiltered `glyph:` line gives at full zone
+    coverage — this just moves the yes/no half of that reveal earlier.
+    """
+    if is_special:
+        return ["  [#c084fc][b]◆ special glyph detected[/][/]  "
+                "[dim]— this carrier isn't a conventional block; keep digging[/]"]
+    return ["  [dim]◇ conventional carrier — no special glyph here[/]"]
+
+
 def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> list[str]:
     """Block printed once when coverage resolves.
 
@@ -3480,14 +3503,17 @@ def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
     Which violations get NAMED here, and which the player calls themselves, is
     the line this whole rework turns on:
 
-      OBSERVED, so named unconditionally — LEAKED_PASSWORD and
-      CROSS_BREACH_REUSE. "This plaintext is in LinkedIn (2016)" is a lookup,
-      not a judgement, and the player must be able to flag them on the evidence
-      board or the kinds are unplayable.
+      OBSERVED, always shown — the corpus list itself. "This plaintext is in
+      LinkedIn (2016)" is a lookup the player can always see, dim and
+      unlabeled at base tier.
 
-      JUDGED, so gated behind Crack Verdict Analyzer — WEAK_CREDENTIAL.
-      Whether `monkey123` is a bad password is exactly the call this rework
-      hands back to the player.
+      JUDGED, so gated behind an upgrade — the ▲ LEAKED_PASSWORD /
+      ▲ CROSS_BREACH_REUSE label, and WEAK_CREDENTIAL. Whether one corpus
+      reads as LEAKED_PASSWORD or two-plus as CROSS_BREACH_REUSE (Breach
+      Classifier), and whether `monkey123` is a bad password (Crack Verdict
+      Analyzer), are exactly the calls this rework hands back to the player —
+      the rules page already teaches the corpus-count rule, so the raw list is
+      enough to work from without the label.
 
     The corpus line is gated on the candidate actually carrying a credential
     corpus kind, NOT merely on breach_dbs_for_candidate() returning something.
@@ -3514,18 +3540,30 @@ def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
     has_wenc   = DiscrepancyKind.WEAK_ENCRYPTION in kinds
     has_unsalt = DiscrepancyKind.UNSALTED_STORAGE in kinds
 
+    has_breach_label = config.UPGRADE_HC_BREACH_LABEL in upgrades
+
     if has_leaked or has_reuse:
         corpora = breach_dbs_for_candidate(candidate, day_number)
         if corpora:
+            # Base tier: the collection list still shows — it is a lookup the
+            # tool has already done, not a judgement — but dim and unlabeled,
+            # so it reads as raw evidence rather than a call-out. Breach
+            # Classifier promotes it to the same orange accent the ▲ label
+            # lines use, so "highlighted" and "named" land together.
+            corpus_col = "#ff8c42" if has_breach_label else "#6b7785"
             lines.append("  [#6b7785]corpus:[/]     "
-                         + " · ".join(f"[#ff8c42]{c}[/]" for c in corpora))
+                         + " · ".join(f"[{corpus_col}]{c}[/]" for c in corpora))
 
-    if has_leaked:
-        lines.append("  [#ff8c42][b]▲ LEAKED_PASSWORD[/][/]  "
-                     "— plaintext confirmed in breach corpus")
-    if has_reuse:
-        lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
-                     "— this exact plaintext appears in more than one corpus")
+    if has_breach_label:
+        if has_leaked:
+            lines.append("  [#ff8c42][b]▲ LEAKED_PASSWORD[/][/]  "
+                         "— plaintext confirmed in breach corpus")
+        if has_reuse:
+            lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
+                         "— this exact plaintext appears in more than one corpus")
+    elif has_leaked or has_reuse:
+        lines.append("  [dim]classify it yourself — one corpus reads as "
+                     "LEAKED_PASSWORD, two or more as CROSS_BREACH_REUSE[/]")
     if has_unsalt:
         lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  "
                      "— stored without a salt; no decryption was required")

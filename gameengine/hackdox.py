@@ -242,7 +242,8 @@ def _lab_tool_output(candidate, tool: ToolName, day, seed: int) -> list[str]:
         block = tools_bridge.build_cipher_block(candidate, day.number)
         return list(tools_bridge.cipher_full_readout(
             block, candidate, day.number,
-            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT}))
+            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT,
+             config.UPGRADE_HC_BREACH_LABEL}))
     if tool == ToolName.LOGWATCH:
         entries = tools_bridge.generate_day_log(seed, day)
         return list(tools_bridge.run_logwatch_filtered_shared(entries, candidate, state).raw_lines)

@@ -1200,7 +1200,7 @@ def _filtered_output(candidate, kind, day, seed) -> str:
         block = tools_bridge.build_cipher_block(candidate, day.number)
         return "\n".join(tools_bridge.cipher_full_readout(
             block, candidate, day.number,
-            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT}))
+            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT, config.UPGRADE_HC_BREACH_LABEL}))
     if tool == ToolName.LOGWATCH:
         entries = tools_bridge.generate_day_log(seed, day)
         # 2026-09-19: the filter's output is the auth log panel AND the
@@ -1437,7 +1437,7 @@ def _all_tool_outputs(candidate, day, seed) -> dict[str, str]:
         "hashcrack": "\n".join(
             tools_bridge.cipher_full_readout(
                 block, candidate, day.number,
-                {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT})),
+                {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT, config.UPGRADE_HC_BREACH_LABEL})),
         "logwatch": "\n".join(
             (lambda r: r.raw_lines + r.report_lines)(
                 tools_bridge.run_logwatch_filtered_shared(
@@ -2287,6 +2287,102 @@ def test_shape_is_named_only_by_the_filter():
                 assert f"▲ {planted.value.upper()}" in named
                 others = set(_SHAPE_KIND_TO_NAME) - {planted}
                 assert not any(k.value.upper() in named for k in others)
+
+
+def test_glyph_detector_flags_special_vs_conventional_on_first_carrier_hit():
+    """Glyph Detector (Nick's brief): the FIRST stamp that lands on any
+    carrier cell -- not full zone coverage -- settles whether the payload
+    has a special glyph, boolean only, never which one and never the kind.
+    """
+    from gameengine.ui.tui.widgets import StegoImagePanel
+
+    class _Stub:
+        def update(self, markup):
+            self.text = markup
+
+    got = _shaped_images(per_shape=6)
+    checked = 0
+    for name, pairs in got.items():
+        for _c, img in pairs:
+            checked += 1
+            expect_special = name != "conventional"
+
+            panel = StegoImagePanel()
+            panel._content = _Stub()
+            panel.shape_detect_upgrade = True
+            panel._img = img
+            panel._revealed = set()
+            panel._shape_hint = None
+
+            assert panel.shape_hint is None, "hint set before any stamp"
+
+            zx, zy, zw, zh = img.zone
+            found = False
+            for yy in range(zy, zy + zh, config.STEGO_STAMP_H):
+                for xx in range(zx, zx + zw, config.STEGO_STAMP_W):
+                    panel._cur_x, panel._cur_y = panel._clamp_stamp(xx, yy)
+                    res = panel.do_stamp()
+                    if res.anomalous_cells > 0:
+                        found = True
+                        break
+                if found:
+                    break
+            assert found, f"{name}: swept the zone without ever hitting a carrier cell"
+            assert panel.shape_hint is expect_special, (
+                f"{name}: Glyph Detector said special={panel.shape_hint}, "
+                f"expected {expect_special}")
+
+            # Idempotent -- further stamps must not flip a hint once set.
+            locked = panel.shape_hint
+            for _ in range(3):
+                panel.do_stamp()
+            assert panel.shape_hint == locked, "the hint changed after it was set"
+    assert checked >= 4, "guard is inert"
+
+
+def test_glyph_detector_never_fires_without_the_upgrade():
+    """Base tier: shape_hint stays None no matter how much carrier is hit --
+    same stance as hint_band() for Credential HUD: the data can exist, the
+    render/state decision is the single place ownership is checked."""
+    from gameengine.ui.tui.widgets import StegoImagePanel
+
+    class _Stub:
+        def update(self, markup):
+            self.text = markup
+
+    got = _shaped_images(per_shape=3)
+    checked = 0
+    for name, pairs in got.items():
+        if name == "conventional":
+            continue
+        for _c, img in pairs:
+            checked += 1
+            panel = StegoImagePanel()
+            panel._content = _Stub()
+            panel.shape_detect_upgrade = False
+            panel._img = img
+            panel._revealed = set()
+            panel._shape_hint = None
+
+            zx, zy, zw, zh = img.zone
+            for yy in range(zy, zy + zh, config.STEGO_STAMP_H):
+                for xx in range(zx, zx + zw, config.STEGO_STAMP_W):
+                    panel._cur_x, panel._cur_y = panel._clamp_stamp(xx, yy)
+                    panel.do_stamp()
+            assert panel.shape_hint is None, (
+                f"{name}: Glyph Detector fired without the upgrade owned")
+    assert checked, "guard is inert"
+
+
+def test_stego_shape_hint_lines_never_name_the_shape_or_kind():
+    """The one-off log note is a yes/no, never a name."""
+    plain = "\n".join(tools_bridge.stego_shape_hint_lines(False))
+    special = "\n".join(tools_bridge.stego_shape_hint_lines(True))
+    assert plain != special
+    for name in ("cross", "enclosed", "slash", "CONVENTIONAL"):
+        assert name not in plain and name not in special
+    for k in _SHAPE_KIND_TO_NAME:
+        assert k.value.upper() not in plain and k.value.upper() not in special
 
 
 # ─── 2026-09-19 (round 2) — shapes on scripted slots, in the rulebook, ─────
@@ -3306,6 +3402,59 @@ def test_recovered_password_strength_verdict_gated_behind_crack_verdict_analyzer
         "Crack Verdict Analyzer did not name the credential verdict")
 
 
+def test_breach_corpus_label_gated_behind_breach_classifier():
+    """Naming LEAKED_PASSWORD / CROSS_BREACH_REUSE is the PLAYER's call unless
+    they buy Breach Classifier (Nick's brief) — the collection list itself is
+    a lookup the tool has already done and always shows; the ▲ label is the
+    judgement for sale.
+
+    Mirrors test_recovered_password_strength_verdict_gated_behind_crack_verdict_analyzer's
+    shape one section up.
+    """
+    from gameengine.core import tools_bridge
+
+    day = load_day(20)
+    cand = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        kinds = {d.kind for d in c.truth.discrepancies}
+        if ((DiscrepancyKind.LEAKED_PASSWORD in kinds
+             or DiscrepancyKind.CROSS_BREACH_REUSE in kinds)
+                and tools_bridge.crack_password(c)):
+            cand = c
+            break
+    assert cand is not None, (
+        "no leaked/reuse candidate with a crackable hash in 200 seeds")
+
+    block = tools_bridge.build_cipher_block(cand, day.number)
+    corpora = tools_bridge.breach_dbs_for_candidate(cand, day.number)
+    assert corpora, "test candidate carries no corpus to check against"
+
+    ungated = "\n".join(tools_bridge.cipher_resolve_lines(
+        block, cand, day.number, set()))
+    for corpus in corpora:
+        assert corpus in ungated, (
+            f"{corpus!r} missing from the base-tier readout — the collection "
+            f"list must always show, upgrade or not")
+    # Bare mentions of the kind name are fine unlabeled — the rules page
+    # already teaches "one corpus -> LEAKED_PASSWORD" in plain prose. It's the
+    # MARKED ▲ label that must stay gated.
+    assert "▲ LEAKED_PASSWORD" not in ungated and "▲ CROSS_BREACH_REUSE" not in ungated, (
+        "the ▲ violation label leaked without Breach Classifier")
+
+    gated = "\n".join(tools_bridge.cipher_resolve_lines(
+        block, cand, day.number, {config.UPGRADE_HC_BREACH_LABEL}))
+    for corpus in corpora:
+        assert corpus in gated, "Breach Classifier must not remove the corpus list"
+    kinds = {d.kind for d in cand.truth.discrepancies}
+    if DiscrepancyKind.LEAKED_PASSWORD in kinds:
+        assert "▲ LEAKED_PASSWORD" in gated, (
+            "Breach Classifier did not name LEAKED_PASSWORD")
+    if DiscrepancyKind.CROSS_BREACH_REUSE in kinds:
+        assert "▲ CROSS_BREACH_REUSE" in gated, (
+            "Breach Classifier did not name CROSS_BREACH_REUSE")
+
+
 def test_breach_auto_upgrade_confirms_hit_on_base_ghostscan_run():
     """Batch-3 task #4c: config.UPGRADE_BREACH_AUTO ("Breach Feed Sync")
     confirms BREACH_HIT on the free base run, not only the paid filter run.
@@ -3457,6 +3606,41 @@ def test_logwatch_highlighting_actually_gated_by_log_analyzer_hud():
         for phrase in naming:
             assert phrase.lower() not in low, (
                 f"the HUD (base run) names the attack: {phrase!r} in {ln!r}")
+
+
+def test_map_travel_annotation_gated_behind_flight_time_analyzer():
+    """Flight Time Analyzer (Nick's brief): the origin map's numbered markers
+    and connecting arcs are always free; the "N\u2192M \u2248... km in ...h
+    ...m" distance/time text that actually lets IMPOSSIBLE_TRAVEL be judged
+    is what the upgrade sells.
+    """
+    from gameengine.core import logwatch_report as lr
+    from gameengine.core import tools_bridge
+    import random as _random
+
+    day = load_day(20)
+    cand = entries = None
+    for seed in range(200):
+        c = candidate_gen.generate(seed, day, 0)
+        ents = tools_bridge._lw_candidate_entries(c, _random.Random(1), day.number)
+        rep = lr.build_logwatch_report(ents, c)
+        if rep.travel:
+            cand, entries = c, ents
+            break
+    assert cand is not None, "no candidate with a travel pair in 200 seeds"
+
+    plain_state = GameState(seed=SEED, current_day=20)
+    ungated = tools_bridge.get_logwatch_shared(
+        entries, cand, state=plain_state, width=config.LW_REPORT_WIDTH)
+    assert not any("km" in ln for ln in ungated), (
+        "distance/time text leaked without Flight Time Analyzer")
+
+    gated_state = GameState(seed=SEED, current_day=20)
+    gated_state.upgrades = {config.UPGRADE_LOG_MAP_TRAVEL}
+    gated = tools_bridge.get_logwatch_shared(
+        entries, cand, state=gated_state, width=config.LW_REPORT_WIDTH)
+    assert any("km" in ln for ln in gated), (
+        "Flight Time Analyzer added no distance/time annotation")
 
 
 def test_clean_credential_resolves_without_being_called_safe():
