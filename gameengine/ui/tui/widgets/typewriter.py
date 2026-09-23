@@ -263,6 +263,10 @@ class ChatPanel(TypewriterLog):
         "warm":           ("#7dd3c0", ""),
         "hostile":        ("#ff5470", "bold"),
         "hostile_flavor": ("#ff5470", "bold"),
+        # #78: the alt-pool register several archetypes now draw against
+        # their usual tone. Styled like neutral -- it isn't hostile-toned
+        # and carries no evidence weight, so it gets no special color.
+        "dismissive":     ("#c8d4e1", ""),
         "flippant":       ("#c084fc", "italic"),
         "earnest":        ("#7dd3c0", ""),
         "intro":          ("#c8d4e1", "italic"),

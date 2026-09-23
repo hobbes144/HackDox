@@ -228,6 +228,14 @@ class ArchetypeSpec:
     purpose_pool: str                       # "legit" | "suspect"
     tone: str                               # "warm" | "neutral" | "hostile" | "flippant" | "earnest"
     chat_pool: tuple[str, ...] = field(default_factory=tuple)
+    # #78: an archetype's tone/chat_pool was a fixed, deterministic pair, so
+    # its dialogue register was itself a tell for whatever the tone implied
+    # (loudest for Bad Actor, whose fixed "hostile" tone read hostile for
+    # every instance regardless of whether HOSTILE_CHAT was actually rolled).
+    # An optional (tag, pool) alternate that _build_chat randomly draws
+    # against the primary breaks that correlation -- see _build_chat's own
+    # comment for when the draw is skipped.
+    alt_chat_pool: tuple[str, tuple[str, ...]] | None = None
     hint_lines: dict[DiscrepancyKind, tuple[str, ...]] = field(default_factory=dict)
 
 
@@ -318,6 +326,19 @@ _CHAT_INCOMPATIBLE = (
     "I didn't want to use my work email for this.",
     "This is just a temp account — I prefer to keep things separate.",
     "Is there a problem? I filled everything out.",
+)
+
+# #78: the impartial/dismissive alternate — curt and unbothered, never
+# aggressive. Distinct from _CHAT_HOSTILE (no confrontation, no threat, no
+# rights-talk) and from the warmer pools (no friendliness either) so it reads
+# as its own register rather than a watered-down hostile line or a flat
+# neutral one.
+_CHAT_DISMISSIVE = (
+    "can we speed this up? I've got somewhere to be.",
+    "sure, whatever you need from me.",
+    "I don't really have an opinion on the process either way.",
+    "let me know when it's done. no rush on my end.",
+    "fine by me. do what you need to do.",
 )
 
 
@@ -447,6 +468,9 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         purpose_pool="suspect",
         tone="hostile",
         chat_pool=_CHAT_HOSTILE,
+        # #78: only drawn when this instance did NOT roll HOSTILE_CHAT — a
+        # genuine carrier always reads hostile throughout, see _build_chat.
+        alt_chat_pool=("dismissive", _CHAT_DISMISSIVE),
     ),
     Archetype.SNEAKY_BUGGER: ArchetypeSpec(
         archetype=Archetype.SNEAKY_BUGGER,
@@ -508,6 +532,9 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         purpose_pool="legit",
         tone="warm",                    # the camouflage
         chat_pool=_CHAT_PROFESSIONAL,   # borrows the professional tone for extra credibility
+        # #78: this archetype is never HOSTILE_CHAT-eligible, so the draw
+        # always applies — pure variety, no tell either way.
+        alt_chat_pool=("dismissive", _CHAT_DISMISSIVE),
     ),
     Archetype.WHITE_HAT: ArchetypeSpec(
         archetype=Archetype.WHITE_HAT,
@@ -581,6 +608,9 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         purpose_pool="legit",
         tone="neutral",
         chat_pool=_CHAT_PROFESSIONAL,
+        # #78: never HOSTILE_CHAT-eligible (eligible_kinds=() — always clean)
+        # — pure variety.
+        alt_chat_pool=("dismissive", _CHAT_DISMISSIVE),
     ),
     Archetype.THE_INCOMPATIBLE: ArchetypeSpec(
         archetype=Archetype.THE_INCOMPATIBLE,
@@ -593,6 +623,9 @@ ARCHETYPE_SPECS: dict[Archetype, ArchetypeSpec] = {
         purpose_pool="legit",           # probably not malicious — just incompatible
         tone="neutral",
         chat_pool=_CHAT_INCOMPATIBLE,
+        # #78: never HOSTILE_CHAT-eligible (only DISPOSABLE_EMAIL) — pure
+        # variety.
+        alt_chat_pool=("dismissive", _CHAT_DISMISSIVE),
     ),
 }
 
@@ -1506,36 +1539,49 @@ def _build_chat(
     count, tone) rather than just the one line that matters.
     """
     lines: list[ChatLine] = []
+
+    has_hostile = any(d.kind == DiscrepancyKind.HOSTILE_CHAT for d in discrepancies)
+
     base = list(
         _dark_web_chat_pool(day_number) if spec.archetype == Archetype.DARK_WEB
         else spec.chat_pool
     )
+    line_tag = spec.tone
+
+    # #78: an archetype's tone/pool was a fixed, deterministic pair, so the
+    # REGISTER a candidate talked in was itself a tell for whatever that
+    # tone implied. #77 fixed the EVIDENCE half of this for Bad Actor
+    # (the tag), but the dialogue itself still read hostile for every Bad
+    # Actor regardless of ground truth — a careful player could learn to
+    # read tone alone and skip the tool entirely.
+    #
+    # An archetype with an alt_chat_pool now draws between its two
+    # registers at random, independent of this candidate's own
+    # discrepancies, so pool choice carries no signal either. The one
+    # exception is a genuine HOSTILE_CHAT carrier: Bad Actor is the only
+    # alt_chat_pool archetype that can roll it, and forcing the draw there
+    # would blur the one deterministic tell Sentiment Scanner is supposed
+    # to price — a real carrier always reads hostile throughout, same as
+    # before #78.
+    if spec.alt_chat_pool is not None and not (spec.tone == "hostile" and has_hostile):
+        if rng.random() < 0.5:
+            line_tag, base = spec.alt_chat_pool[0], list(spec.alt_chat_pool[1])
+
     rng.shuffle(base)
     n = rng.randint(3, min(5, max(3, len(base))))
     minute = rng.randint(0, 30)
 
     # #77: VOICE is not EVIDENCE, and the tag has to tell them apart.
     #
-    # An archetype's `tone` is its dialogue register — how it always talks.
     # HOSTILE_CHAT is a violation this particular candidate either rolled or
-    # did not. Bad Actor is the one archetype where those two collide: its
-    # tone is literally the string "hostile", every pool line was tagged with
-    # it, and typewriter.set_candidate gates the Sentiment Scanner's red ⚠ on
-    # `tag == "hostile"`. So every Bad Actor was marked as carrying a violation
-    # 58.1% of them did not have — and on the hard band (days 13-20), where the
-    # tool-biased sort pushes the only DOSSIER-tier kind in their eligible set
-    # to the back of the queue, 100% of them were marked and 0% carried it. A
-    # 20 HD$ upgrade that reports a violation which is absent more often than
-    # present is worse than not owning it.
-    #
-    # The fix is one tag, not one flag: an archetype whose voice is hostile but
-    # whose ground truth is not gets "hostile_flavor", which the widget styles
-    # identically (the dialogue must still READ hostile — that is the
-    # archetype) but which no evidence check looks at. Only a candidate who
-    # actually rolled HOSTILE_CHAT gets the evidence-bearing "hostile".
-    has_hostile = any(d.kind == DiscrepancyKind.HOSTILE_CHAT for d in discrepancies)
-    line_tag = spec.tone
-    if spec.tone == "hostile" and not has_hostile:
+    # did not. When the primary hostile pool is in play (line_tag is still
+    # spec.tone here — the #78 draw above either kept it or replaced it with
+    # an alt tag that is never "hostile"), a candidate who talks hostile but
+    # did not roll the violation gets "hostile_flavor", which the widget
+    # styles identically (the dialogue must still READ hostile) but which no
+    # evidence check looks at. Only a genuine carrier gets the
+    # evidence-bearing "hostile".
+    if spec.tone == "hostile" and not has_hostile and line_tag == spec.tone:
         line_tag = "hostile_flavor"
 
     for i, text in enumerate(base[:n]):

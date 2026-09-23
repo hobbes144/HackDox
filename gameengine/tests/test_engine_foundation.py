@@ -3021,6 +3021,66 @@ def test_ghostscan_identity_verdicts_gated_behind_matching_hud_upgrades():
     assert "known threat actor community" not in identity(prohibited_affil, {config.UPGRADE_AFFIL_APPROVED})
 
 
+def test_chat_register_draws_between_two_pools_uncorrelated_with_ground_truth():
+    """#78: Bad Actor's tone/chat_pool was a fixed pair, so the dialogue
+    itself was a tell -- every Bad Actor talked hostile whether or not it
+    actually carried HOSTILE_CHAT (the thing #77 gated was the evidence TAG,
+    not the words). An archetype with alt_chat_pool now draws randomly
+    between its two registers, independent of ground truth, so seeing which
+    register a candidate talks in is no longer informative -- except a
+    genuine HOSTILE_CHAT carrier, which must still read hostile throughout
+    (that IS the one deterministic tell Sentiment Scanner prices).
+    """
+    from collections import Counter
+
+    seen: dict[tuple[str, bool], Counter] = {}
+    for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        day = load_day(day_n)
+        for seed in range(60):
+            for slot in range(day.candidate_count):
+                c = candidate_gen.generate(seed, day, slot)
+                spec = candidate_gen.ARCHETYPE_SPECS[c.archetype]
+                if spec.alt_chat_pool is None:
+                    continue
+                has_hostile = any(d.kind == DiscrepancyKind.HOSTILE_CHAT
+                                  for d in c.truth.discrepancies)
+                tags = frozenset(ln.tag for ln in c.chat_script)
+                key = (c.archetype.value, has_hostile)
+                seen.setdefault(key, Counter())[tags] += 1
+
+    # Bad Actor without HOSTILE_CHAT: both registers actually occur.
+    bad_actor_clean = seen.get(("bad_actor", False), Counter())
+    assert any("dismissive" in tags for tags in bad_actor_clean), (
+        "a non-carrier Bad Actor never drew the dismissive register — the "
+        "draw looks broken or the guard is inert")
+    assert any("hostile_flavor" in tags for tags in bad_actor_clean), (
+        "a non-carrier Bad Actor never drew its own hostile-flavored "
+        "register — the draw looks skewed to one side")
+    # Real evidence tag never appears on a non-carrier, whichever it drew.
+    assert not any("hostile" in tags for tags in bad_actor_clean), (
+        "a non-carrier Bad Actor's chat carried the real evidence tag")
+
+    # Bad Actor WITH HOSTILE_CHAT: no variety, always fully hostile-tagged --
+    # this is the one case #78 must not touch.
+    bad_actor_carrier = seen.get(("bad_actor", True), Counter())
+    assert bad_actor_carrier, "no HOSTILE_CHAT-carrying Bad Actor found"
+    assert set(bad_actor_carrier) == {frozenset({"hostile"})}, (
+        f"a genuine HOSTILE_CHAT carrier drew a non-hostile register: "
+        f"{dict(bad_actor_carrier)}")
+
+    # The other three alt_chat_pool archetypes can never carry HOSTILE_CHAT,
+    # so only the False key should ever appear, and both registers occur.
+    for name in ("sneaky_bugger", "the_professional", "the_incompatible"):
+        assert (name, True) not in seen, (
+            f"{name} carried HOSTILE_CHAT, which its eligible_kinds forbids")
+        counts = seen.get((name, False), Counter())
+        assert counts, f"no {name} candidate found — test is inert"
+        assert any("dismissive" in tags for tags in counts), (
+            f"{name} never drew the dismissive register")
+        assert any("dismissive" not in tags for tags in counts), (
+            f"{name} never drew its own primary register")
+
+
 # ─── Issue #56 — the four affiliation violations are distinct ───────────────
 
 
