@@ -3502,6 +3502,82 @@ def test_breach_auto_upgrade_confirms_hit_on_base_ghostscan_run():
                   for ln in result_auto.raw_lines)
 
 
+def test_sock_and_forum_auto_upgrades_confirm_independently_on_base_ghostscan_run():
+    """#75: config.UPGRADE_SOCK_AUTO ("Sockpuppet Tracer") and
+    config.UPGRADE_FORUM_AUTO ("Forum Watch") each confirm their own kind
+    (SOCK_PUPPET_ACCOUNTS / THREAT_FORUM_MATCH) on the free base Ghostscan
+    run, mirroring what Breach Feed Sync already does for BREACH_HIT --
+    per Nick's call on Open Question #1 (per-kind gating), owning one of
+    these upgrades must NOT also reveal the other kind's row.
+    """
+    from gameengine.core import tools_bridge
+
+    sock_cand = forum_cand = None
+    for day_n in range(1, config.CAMPAIGN_LAST_DAY + 1):
+        day = load_day(day_n)
+        for seed in range(150):
+            for slot in range(day.candidate_count):
+                c = candidate_gen.generate(seed, day, slot)
+                kinds = {d.kind for d in c.truth.discrepancies}
+                has_s = DiscrepancyKind.SOCK_PUPPET_ACCOUNTS in kinds
+                has_f = DiscrepancyKind.THREAT_FORUM_MATCH in kinds
+                if has_s and not has_f and sock_cand is None:
+                    sock_cand = c
+                if has_f and not has_s and forum_cand is None:
+                    forum_cand = c
+            if sock_cand and forum_cand:
+                break
+        if sock_cand and forum_cand:
+            break
+    assert sock_cand is not None, "no SOCK_PUPPET_ACCOUNTS-only candidate found"
+    assert forum_cand is not None, "no THREAT_FORUM_MATCH-only candidate found"
+
+    # Neither kind confirms on the base run with no upgrades.
+    plain_state = GameState(seed=SEED, current_day=1)
+    result_sock_plain = tools_bridge.run_ghostscan_shared(sock_cand, plain_state)
+    assert not any("SOCK_PUPPET_ACCOUNTS" in ln or "[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_sock_plain.raw_lines)
+    result_forum_plain = tools_bridge.run_ghostscan_shared(forum_cand, plain_state)
+    assert not any("THREAT_FORUM_MATCH" in ln or "[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_forum_plain.raw_lines)
+
+    # Sockpuppet Tracer confirms SOCK_PUPPET_ACCOUNTS...
+    sock_state = GameState(seed=SEED, current_day=1)
+    sock_state.upgrades = {config.UPGRADE_SOCK_AUTO}
+    result_sock_auto = tools_bridge.run_ghostscan_shared(sock_cand, sock_state)
+    assert any("SOCK_PUPPET_ACCOUNTS" in ln for ln in result_sock_auto.raw_lines), (
+        "SOCK_PUPPET_ACCOUNTS was not confirmed on the base run with Sockpuppet Tracer")
+    # ...but does not also confirm a THREAT_FORUM_MATCH-only candidate's row.
+    result_forum_with_sock_upgrade = tools_bridge.run_ghostscan_shared(forum_cand, sock_state)
+    assert not any("THREAT_FORUM_MATCH" in ln or "[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_forum_with_sock_upgrade.raw_lines), (
+        "Sockpuppet Tracer must not auto-confirm a different candidate's "
+        "THREAT_FORUM_MATCH row")
+
+    # Forum Watch confirms THREAT_FORUM_MATCH...
+    forum_state = GameState(seed=SEED, current_day=1)
+    forum_state.upgrades = {config.UPGRADE_FORUM_AUTO}
+    result_forum_auto = tools_bridge.run_ghostscan_shared(forum_cand, forum_state)
+    assert any("THREAT_FORUM_MATCH" in ln for ln in result_forum_auto.raw_lines), (
+        "THREAT_FORUM_MATCH was not confirmed on the base run with Forum Watch")
+    # ...but does not also confirm a SOCK_PUPPET_ACCOUNTS-only candidate's row.
+    result_sock_with_forum_upgrade = tools_bridge.run_ghostscan_shared(sock_cand, forum_state)
+    assert not any("SOCK_PUPPET_ACCOUNTS" in ln or "[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_sock_with_forum_upgrade.raw_lines), (
+        "Forum Watch must not auto-confirm a different candidate's "
+        "SOCK_PUPPET_ACCOUNTS row")
+
+    # Breach Feed Sync, owned alone, must not confirm either of these kinds.
+    breach_state = GameState(seed=SEED, current_day=1)
+    breach_state.upgrades = {config.UPGRADE_BREACH_AUTO}
+    result_sock_with_breach_upgrade = tools_bridge.run_ghostscan_shared(sock_cand, breach_state)
+    assert not any("SOCK_PUPPET_ACCOUNTS" in ln or "[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_sock_with_breach_upgrade.raw_lines)
+    result_forum_with_breach_upgrade = tools_bridge.run_ghostscan_shared(forum_cand, breach_state)
+    assert not any("THREAT_FORUM_MATCH" in ln or "[CRITICAL]" in ln or "[ADVISORY]" in ln
+                  for ln in result_forum_with_breach_upgrade.raw_lines)
+
+
 def test_credential_hud_band_narrows_without_answering():
     """Credential HUD points at a REGION of the pad, never at the key.
 

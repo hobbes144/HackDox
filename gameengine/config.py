@@ -1126,6 +1126,8 @@ UPGRADE_CHAT_HOSTILE     = "chat_hostile_highlight"      # chat: mark hostile li
 UPGRADE_CRYPTO_ID        = "crypto_id_highlight"   # hashcrack: auto-label the cipher
                                                    # block's tier (MD5/SHA256/bcrypt)
 UPGRADE_BREACH_AUTO      = "breach_auto_detect"    # ghostscan: confirm BREACH_HIT on the free base run
+UPGRADE_SOCK_AUTO        = "sock_auto_detect"      # ghostscan: confirm SOCK_PUPPET_ACCOUNTS on the free base run
+UPGRADE_FORUM_AUTO       = "forum_auto_detect"     # ghostscan: confirm THREAT_FORUM_MATCH on the free base run
 UPGRADE_HC_VERDICT       = "hashcrack_verdict_highlight"  # hashcrack: label a crack's strength verdict
 UPGRADE_STEGO_RGB_COLOR  = "stego_rgb_color"       # stegotool: colour-code channel entropy readout
 UPGRADE_HC_BREACH_LABEL  = "hc_breach_label"       # hashcrack: name LEAKED_PASSWORD /
@@ -1164,6 +1166,8 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     30, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
     (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     30, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    30, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_FORUM_AUTO,       "Forum Watch",          30, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
     (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a recovered password's strength verdict, not just the plaintext"),
     (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",    25, "colour-code the RGB channel entropy readout by severity"),
     (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",    25, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
@@ -1191,6 +1195,8 @@ UPGRADE_CATEGORY: dict[str, str] = {
     UPGRADE_TOOLCOST_STEGOTOOL:  "Stegotool",
     UPGRADE_CRYPTO_ID:           "Candidate",
     UPGRADE_BREACH_AUTO:         "Ghostscan",
+    UPGRADE_SOCK_AUTO:           "Ghostscan",
+    UPGRADE_FORUM_AUTO:          "Ghostscan",
     UPGRADE_HC_VERDICT:          "Hashcrack",
     UPGRADE_STEGO_RGB_COLOR:     "Stegotool",
     UPGRADE_HC_BREACH_LABEL:     "Hashcrack",

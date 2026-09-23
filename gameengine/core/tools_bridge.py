@@ -444,6 +444,8 @@ def _ghostscan_sweep_lines(
     show_forums: bool = False,
     day_number: int = 1,
     show_breach: bool | None = None,
+    show_sock: bool | None = None,
+    show_forum_match: bool | None = None,
 ) -> list[str]:
     """Render the fixed platform sweep for one candidate.
 
@@ -485,6 +487,14 @@ def _ghostscan_sweep_lines(
     has_breach   = any(d.kind == DiscrepancyKind.BREACH_HIT             for d in candidate.truth.discrepancies)
     has_forum    = any(d.kind == DiscrepancyKind.THREAT_FORUM_MATCH     for d in candidate.truth.discrepancies)  # v2
     has_burner   = any(d.kind == DiscrepancyKind.BURNER_IDENTITY        for d in candidate.truth.discrepancies)  # v2
+
+    # #75: SOCK_PUPPET_ACCOUNTS and THREAT_FORUM_MATCH auto-confirm on the free
+    # base run when their own upgrade is owned -- config.UPGRADE_SOCK_AUTO /
+    # UPGRADE_FORUM_AUTO, same shape as show_breach/UPGRADE_BREACH_AUTO above.
+    # Default to show_forums when not given, so every existing caller keeps
+    # the old show_forums-gated behavior.
+    _show_sock = show_forums if show_sock is None else show_sock
+    _show_forum_match = show_forums if show_forum_match is None else show_forum_match
 
     claimed_affil  = candidate.claimed_affiliation
     claimed_handle = candidate.handle
@@ -649,7 +659,15 @@ def _ghostscan_sweep_lines(
         noise_h = rng.choice(_GS_NOISE_HANDLES)
         lines.append(f"[#2e3d4f]  {forum:<20}  {noise_h}[/]")
         if has_sock or has_forum:
-            if show_forums:
+            # #75: each kind's own upgrade governs whether ITS row auto-reveals
+            # here, independent of the other. A candidate carrying both kinds
+            # can have one revealed and the other still blended.
+            _reveal_row = (
+                show_forums
+                or (has_forum and _show_forum_match)
+                or (has_sock and _show_sock)
+            )
+            if _reveal_row:
                 lines.append(f"[#ff5470]  {forum:<20}  {claimed_handle}  [CRITICAL][/]")
                 if first_crit_ann:
                     lines.append("  [#ff8c42]▲ handle on known threat actor forum[/]")
@@ -664,7 +682,7 @@ def _ghostscan_sweep_lines(
         noise_h = rng.choice(_GS_NOISE_HANDLES)
         lines.append(f"[#2e3d4f]  {forum:<20}  {noise_h}[/]")
         if has_sock and forum == advisory_hit:
-            if show_forums:
+            if show_forums or _show_sock:
                 lines.append(f"[#ff8c42]  {forum:<20}  {claimed_handle}  [ADVISORY][/]")
             else:
                 lines.append(f"[#2e3d4f]  {forum:<20}  {claimed_handle}[/]")
@@ -775,11 +793,20 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
     rng = _random.Random(int(candidate.id, 16) ^ 0x6057CAD1)
     # Batch-3 task #4c: config.UPGRADE_BREACH_AUTO ("Breach Feed Sync") makes
     # breach-corpus confirmation fire on the free base run too — "the lists
-    # are static, so it makes sense to have this automated" (Nick). Threat
-    # forums stay gated behind the real filter run; only the breach section
-    # is affected.
+    # are static, so it makes sense to have this automated" (Nick).
+    # #75: UPGRADE_SOCK_AUTO ("Sockpuppet Tracer") and UPGRADE_FORUM_AUTO
+    # ("Forum Watch") do the same for SOCK_PUPPET_ACCOUNTS and
+    # THREAT_FORUM_MATCH, each independently of the other and of the breach
+    # upgrade — owning one doesn't auto-confirm a different kind. Without any
+    # of the three, threat forums stay gated behind the real filter run.
     _breach_auto = config.UPGRADE_BREACH_AUTO in getattr(state, "upgrades", ())
+    _sock_auto   = config.UPGRADE_SOCK_AUTO   in getattr(state, "upgrades", ())
+    _forum_auto  = config.UPGRADE_FORUM_AUTO  in getattr(state, "upgrades", ())
     has_breach = any(d.kind == DiscrepancyKind.BREACH_HIT
+                     for d in candidate.truth.discrepancies)
+    has_sock   = any(d.kind == DiscrepancyKind.SOCK_PUPPET_ACCOUNTS
+                     for d in candidate.truth.discrepancies)
+    has_forum  = any(d.kind == DiscrepancyKind.THREAT_FORUM_MATCH
                      for d in candidate.truth.discrepancies)
     # Issue #28: the report REPLACES the terminal content (no stacked
     # reports), so the free identity block is folded in at the top.
@@ -789,13 +816,27 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
         # #61: day drives which breach corpora exist today.
         + _ghostscan_sweep_lines(candidate, rng, show_forums=False,
                                  day_number=getattr(state, 'current_day', 1),
-                                 show_breach=_breach_auto)
+                                 show_breach=_breach_auto,
+                                 show_sock=_sock_auto,
+                                 show_forum_match=_forum_auto)
     )
     if _breach_auto and has_breach:
         raw_lines += [
             "",
             "[#c084fc]── [AUTO] Breach Feed Sync ─────────────────────────────[/]",
             "  [#ff5470][b]▲ BREACH_HIT[/][/]  — email confirmed in breach corpus",
+        ]
+    if _sock_auto and has_sock:
+        raw_lines += [
+            "",
+            "[#c084fc]── [AUTO] Sockpuppet Tracer ────────────────────────────[/]",
+            "  [#ff5470][b]▲ SOCK_PUPPET_ACCOUNTS[/][/]  — handle confirmed across sock-puppet cluster",
+        ]
+    if _forum_auto and has_forum:
+        raw_lines += [
+            "",
+            "[#c084fc]── [AUTO] Forum Watch ──────────────────────────────────[/]",
+            "  [#ff5470][b]▲ THREAT_FORUM_MATCH[/][/]  — handle confirmed on known threat-actor forum",
         ]
     n_findings = len(_findings_from(candidate, ToolName.GHOSTSCAN))
     summary = (
