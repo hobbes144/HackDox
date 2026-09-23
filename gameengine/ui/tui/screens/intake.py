@@ -548,7 +548,8 @@ class IntakeScreen(Screen):
             b.reset_cursor()
         # All tool terminals cleared via set_initial_content
         # Ghostscan: passive identity check (free) + breach list pre-population
-        self.term_gs.set_initial_content(tools_bridge.get_ghostscan_identity(c))
+        self.term_gs.set_initial_content(
+            tools_bridge.get_ghostscan_identity(c, upgrades=ups))
         self.ref_gs.update_content(build_ref_ghostscan(self._state))
         self.breach_lists.load_candidate(c, self._state.seed, self._day)
         # Hashcrack: the cipher block is the page. The findings terminal gets

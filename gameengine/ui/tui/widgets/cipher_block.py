@@ -216,8 +216,14 @@ class CipherBlockPanel(VerticalScroll):
             return []
 
         if blk.pre_revealed:
-            return ["[#ff5470][b]⚠ UNSALTED — stored in the clear[/][/]",
-                    "[dim]no window, no dial, nothing to spend[/]"]
+            # #76: the ⚠ UNSALTED label is Cipher ID HUD's call, same as on
+            # the dossier (_password_markup) -- the block itself still
+            # resolves to plaintext with no upgrade needed (there's genuinely
+            # nothing to crack), only the label naming WHY was unconditional.
+            lines = ["[dim]no window, no dial, nothing to spend[/]"]
+            if self.label_tier:
+                lines.insert(0, "[#ff5470][b]⚠ UNSALTED — stored in the clear[/][/]")
+            return lines
 
         if self._state == self.SELECTING:
             chips = []

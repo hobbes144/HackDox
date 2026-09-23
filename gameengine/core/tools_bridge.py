@@ -367,16 +367,32 @@ def _gs_band(title: str, accent: str, note: str = "") -> list[str]:
     return out
 
 
-def get_ghostscan_identity(candidate: Candidate) -> tuple[str, ...]:
-    """Free passive identity check — always visible in the ghostscan terminal."""
-    return tuple(_ghostscan_identity_lines(candidate))
+def get_ghostscan_identity(candidate: Candidate,
+                           upgrades: set | None = None) -> tuple[str, ...]:
+    """Free passive identity check — always visible in the ghostscan terminal.
+
+    #76: "free" means no ⏱ tool run, not "every verdict on it is free" — the
+    approved/prohibited verdict lines are upgrade-gated, see below.
+    """
+    return tuple(_ghostscan_identity_lines(candidate, upgrades=upgrades))
 
 
-def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[str]:
+def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True,
+                              upgrades: set | None = None) -> list[str]:
+    # #76: the approved/prohibited verdict here is the SAME classify_email_
+    # domain/classify_affiliation call the dossier's _hl_email/_hl_affil use,
+    # gated on the dossier behind Domain Whitelist/Blacklist HUD and Org
+    # Whitelist/Blacklist HUD -- but this panel showed the identical verdict
+    # unconditionally, for free, on the Ghostscan page. Same upgrades now gate
+    # it here too. Without the matching upgrade this falls back to the same
+    # neutral "verify via sweep" copy already used for domains/orgs the game
+    # genuinely doesn't recognise -- the tell disappears, not the underlying
+    # info (the sweep itself still confirms it once run).
+    upgrades = upgrades or ()
     d = candidate.dossier
     email_domain = candidate.email.split("@")[-1].lower() if "@" in candidate.email else ""
 
-    if email_domain in _GS_SUSPICIOUS_DOMAINS:
+    if email_domain in _GS_SUSPICIOUS_DOMAINS and config.UPGRADE_EMAIL_PROHIBITED in upgrades:
         email_flag = "[#ff5470]✗  disposable provider — flag immediately[/]"
     elif email_domain in _GS_PRIVACY_DOMAINS:
         # #58: was "privacy provider — flag if other issues present", which told
@@ -385,23 +401,30 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[s
         # board_accuracy_bonus counts that as a false positive — so the UI was
         # instructing an action the scoring model punishes. Context, not an
         # instruction: it is real corroboration, it is not itself a violation.
+        # Not upgrade-gated: it isn't an approved/prohibited verdict at all.
         email_flag = ("[#ffd93d]?  anonymous mail provider — legitimate, but "
                       "offers no identity trail[/]")
-    elif email_domain in _GS_TRUSTED_DOMAINS or email_domain.endswith((".edu", ".ac.uk")):
+    elif (email_domain in _GS_TRUSTED_DOMAINS or email_domain.endswith((".edu", ".ac.uk")))             and config.UPGRADE_EMAIL_APPROVED in upgrades:
         email_flag = "[#00ff9f]✓  recognised provider[/]"
     else:
         email_flag = "[#6b7785]-  unknown domain — verify affiliation[/]"
 
     affil_lower = candidate.claimed_affiliation.lower()
-    if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW):
+    if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW) and config.UPGRADE_AFFIL_PROHIBITED in upgrades:
         affil_flag = "[#ff5470]✗  known threat actor community[/]"
-    elif any(kw in affil_lower for kw in _GS_TRUSTED_AFFIL_KW):
+    elif any(kw in affil_lower for kw in _GS_TRUSTED_AFFIL_KW) and config.UPGRADE_AFFIL_APPROVED in upgrades:
         # #56: this is a GUARANTEE now, not a hint. A trusted organisation cannot
         # be faked on a dossier - the generator refuses to plant an affiliation
         # violation on a candidate claiming one - so the sweep will always
         # confirm it. Worded as the guarantee it is, because that is the
         # player's reward: a trusted domain plus a trusted org means the
         # ghostscan step can be skipped entirely.
+        #
+        # #76: that reward is now Org Whitelist HUD's to hand out, same as the
+        # dossier's equivalent highlight. Without the upgrade the guarantee
+        # still HOLDS (the generator still won't fake it) -- the player just
+        # isn't told about it for free, and falls through to the same
+        # "verify via sweep" prompt an unrecognised org gets.
         affil_flag = ("[#00ff9f]✓  trusted organisation — cannot be faked, "
                       "sweep will confirm[/]")
     elif affil_lower in ("independent", "freelance", "self-employed", ""):
@@ -811,7 +834,8 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
     # Issue #28: the report REPLACES the terminal content (no stacked
     # reports), so the free identity block is folded in at the top.
     raw_lines  = list(
-        _ghostscan_identity_lines(candidate, hint=False)
+        _ghostscan_identity_lines(candidate, hint=False,
+                                  upgrades=getattr(state, "upgrades", ()))
         + [""]
         # #61: day drives which breach corpora exist today.
         + _ghostscan_sweep_lines(candidate, rng, show_forums=False,
@@ -855,7 +879,8 @@ def run_ghostscan_filtered_shared(candidate: Candidate, state) -> ToolResult:
     # Issue #28: the filtered report REPLACES the base report in-place —
     # same layout, annotations lit — rather than printing a second copy.
     raw_lines = tuple(
-        _ghostscan_identity_lines(candidate, hint=False)
+        _ghostscan_identity_lines(candidate, hint=False,
+                                  upgrades=getattr(state, "upgrades", ()))
         + [""]
         + _ghostscan_sweep_lines(candidate, rng, show_forums=True,
                                  day_number=getattr(state, 'current_day', 1))

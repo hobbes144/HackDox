@@ -893,7 +893,6 @@ def test_panel_does_not_bill_steps_it_did_not_take():
     assert p.move_cursor(-1, 0) == 0, "stepping off the left edge counted"
     assert p.move_cursor(0, -1) == 0, "stepping off the top edge counted"
     assert p.steps == at_corner
-
     assert p.move_cursor(1, 0) == 1
     assert p.steps == at_corner + 1
     # A move partly clamped counts only the part that happened.
@@ -901,6 +900,29 @@ def test_panel_does_not_bill_steps_it_did_not_take():
     at_edge = p.steps
     assert p.move_cursor(5, 0) == 0
     assert p.steps == at_edge
+
+
+def test_unsalted_status_tag_gated_behind_cipher_id_hud():
+    """#76: the Hashcrack page's own ⚠ UNSALTED status line was left
+    unconditional when #74 gated the same tag on the dossier -- same bug,
+    different panel. The block still resolves to plaintext glyphs with no
+    upgrade (there is genuinely nothing to crack), only the label naming WHY
+    is Cipher ID HUD's call, same as everywhere else it labels a tier.
+    """
+    cand, _block = _first_block(8, pre_revealed=True)
+
+    p = _panel(cand, label_tier=False)
+    status = "\n".join(p._status_lines())
+    assert "UNSALTED" not in status, (
+        "the UNSALTED tag showed on the Hashcrack page without Cipher ID HUD")
+    assert "no window, no dial, nothing to spend" in status, (
+        "the plaintext-resolved status line must still explain there's "
+        "nothing to buy here, tag or no tag")
+
+    p2 = _panel(cand, label_tier=True)
+    status2 = "\n".join(p2._status_lines())
+    assert "UNSALTED" in status2, (
+        "Cipher ID HUD did not restore the UNSALTED tag on the Hashcrack page")
 
 
 def test_panel_keeps_an_engaged_block_when_the_player_leaves():

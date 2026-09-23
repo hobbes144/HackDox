@@ -2956,6 +2956,71 @@ def test_no_hint_text_tells_the_player_to_flag_a_nonexistent_violation():
     assert seen_privacy, "no privacy-domain candidate generated — test is inert"
 
 
+def test_ghostscan_identity_verdicts_gated_behind_matching_hud_upgrades():
+    """#76: the free Ghostscan IDENTITY CHECK panel showed the SAME approved/
+    prohibited verdict the dossier's _hl_email/_hl_affil gate behind Domain
+    Whitelist/Blacklist HUD and Org Whitelist/Blacklist HUD -- but showed it
+    unconditionally, for free, regardless of upgrade ownership. Each verdict
+    is now gated behind its own matching upgrade, independent of the others,
+    falling back to the same neutral "verify via sweep" copy an unrecognised
+    domain/org already gets.
+    """
+    import dataclasses
+    from dataclasses import replace
+
+    from gameengine.core import tools_bridge
+
+    approved_email = prohibited_email = approved_affil = None
+    base = unconstrained_day()
+    for archetype in candidate_gen.ARCHETYPE_SPECS:
+        day = replace(base, number=8,
+                      forced_includes={0: archetype},
+                      archetype_mix={**base.archetype_mix, archetype: 1})
+        for seed in range(40):
+            c = candidate_gen.generate(seed, day, 0)
+            if approved_email is None and tools_bridge.classify_email_domain(c.email) == "approved":
+                approved_email = c
+            if prohibited_email is None and tools_bridge.classify_email_domain(c.email) == "prohibited":
+                prohibited_email = c
+            if approved_affil is None and tools_bridge.classify_affiliation(c.claimed_affiliation) == "approved":
+                approved_affil = c
+        if all((approved_email, prohibited_email, approved_affil)):
+            break
+    assert approved_email is not None, "no approved-domain candidate found"
+    assert prohibited_email is not None, "no prohibited-domain candidate found"
+    assert approved_affil is not None, "no approved-affiliation candidate found"
+
+    # A "prohibited" claimed_affiliation (matching _GS_SUSPECT_AFFIL_KW, e.g.
+    # a threat-forum name) is not something the generator ever produces as a
+    # CLAIMED affiliation -- nobody's dossier says "BreachForums Crew" as
+    # their employer. Built synthetically so this branch of the gate is still
+    # covered even though it's unreachable via real generation.
+    prohibited_affil = dataclasses.replace(
+        approved_affil, claimed_affiliation="BreachForums Crew")
+    assert tools_bridge.classify_affiliation(prohibited_affil.claimed_affiliation) == "prohibited"
+
+    def identity(c, upgrades=()):
+        return " ".join(tools_bridge._ghostscan_identity_lines(c, hint=False, upgrades=set(upgrades)))
+
+    # No upgrades: none of the four verdicts show, all fall back to neutral.
+    assert "recognised provider" not in identity(approved_email)
+    assert "disposable provider" not in identity(prohibited_email)
+    assert "trusted organisation" not in identity(approved_affil)
+    assert "known threat actor community" not in identity(prohibited_affil)
+
+    # Each upgrade restores its own verdict...
+    assert "recognised provider" in identity(approved_email, {config.UPGRADE_EMAIL_APPROVED})
+    assert "disposable provider" in identity(prohibited_email, {config.UPGRADE_EMAIL_PROHIBITED})
+    assert "trusted organisation" in identity(approved_affil, {config.UPGRADE_AFFIL_APPROVED})
+    assert "known threat actor community" in identity(prohibited_affil, {config.UPGRADE_AFFIL_PROHIBITED})
+
+    # ...and only its own: the wrong upgrade must not also restore it.
+    assert "recognised provider" not in identity(approved_email, {config.UPGRADE_EMAIL_PROHIBITED})
+    assert "disposable provider" not in identity(prohibited_email, {config.UPGRADE_EMAIL_APPROVED})
+    assert "trusted organisation" not in identity(approved_affil, {config.UPGRADE_AFFIL_PROHIBITED})
+    assert "known threat actor community" not in identity(prohibited_affil, {config.UPGRADE_AFFIL_APPROVED})
+
+
 # ─── Issue #56 — the four affiliation violations are distinct ───────────────
 
 
