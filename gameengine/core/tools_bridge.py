@@ -1137,6 +1137,16 @@ _LW_NOISE_USERS   = ["j.morris", "r.chen", "s.patel", "admin", "k.okonkwo",
 _LW_NOISE_DOMAINS = ["corp.net", "internal.io", "hackdox.local", "company.org"]
 _LW_NOISE_IPS     = ["10.0.1.15", "10.0.1.42", "10.0.2.7", "10.0.3.88",
                       "192.168.0.55", "192.168.1.200", "172.16.0.14"]
+
+# Home/VPN/mobile prefixes for the second-routine-IP noise source
+# (config.LW_SECOND_IP_CHANCE, 2026-09-23) — plausible residential/ISP-style
+# ranges, deliberately disjoint from _LW_CITIES (the attack/travel city pool)
+# and _LW_NOISE_IPS (other users' internal IPs) so this noise can never read
+# as either of those. Not resolved through _LW_CITY_MAP — the row is tagged
+# with the candidate's own city directly (same place as their claimed IP),
+# which is the point: a second source, zero city change.
+_LW_HOME_ISP_PREFIXES = ["24.5.", "71.192.", "98.14.", "173.230.", "76.102.", "67.161."]
+
 _LW_SENSITIVE_PATHS = ["/etc/passwd", "/etc/shadow", "/root/.ssh/id_rsa", "/proc/keys"]
 _LW_NORMAL_PATHS    = ["/var/log/auth.log", "/home/user/.bash_history",
                         "/etc/cron.d/tasks", "/opt/app/config.json"]
@@ -1368,6 +1378,36 @@ def _lw_candidate_entries(candidate, rng: _random.Random,
                 city=(login_city if evt == "AUTH_OK" else None),
             ))
             t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
+
+    # ── Honest noise: a second routine IP, same city (2026-09-23) ─────────
+    # Cheaper and more common than the trip below: NOT travel, no flight-time
+    # math needed — the candidate additionally logs in once or twice from an
+    # ordinary second source (home network / VPN / mobile) tagged with the
+    # SAME city as their claimed login, so it can never form a travel pair
+    # (build_logwatch_report skips consecutive-clean pairs with place_a ==
+    # place_b). Own RNG stream, independent of the trip roll and of any
+    # planted discrepancy, so this doesn't perturb anything else and can
+    # stack with a trip on the same candidate.
+    _second_rng = _random.Random(_stable_hash(candidate.id, "lw_second_ip") & 0xFFFFFFFF)
+    if _second_rng.random() < _cfg.LW_SECOND_IP_CHANCE:
+        # login_city is None whenever the login IP is internal (the normal
+        # case — claimed_ip is always an internal address, and _lw_city maps
+        # 10./172.16./192.168. to None). The report only ever prints the
+        # dossier's claimed_location for the claimed-IP origin itself, so
+        # matching THAT here (falling back to login_city for the ipmis case,
+        # where login_ip is already external) is what keeps this row from
+        # accidentally pairing into `travel` against the real login.
+        _home_place = login_city or getattr(candidate.dossier, "claimed_location", None) or "On-site"
+        _prefix2 = _second_rng.choice(_LW_HOME_ISP_PREFIXES)
+        _ip2 = _prefix2 + f"{_second_rng.randint(1,254)}.{_second_rng.randint(1,254)}"
+        for _ in range(_second_rng.randint(*_cfg.LW_SECOND_IP_LOGINS)):
+            entries.append(_LogEntry(
+                ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
+                ip=_ip2, account=account, extra="",
+                owner_id=candidate.id, is_suspicious=False,
+                violation_kind="second_ip", city=_home_place,
+            ))
+            t += _second_rng.randint(*_cfg.LW_SECOND_IP_GAP)
 
     # ── Honest noise: a real business trip (2026-09-20) ───────────────────
     # Without this, a second login city ALWAYS meant "deny": impossible travel

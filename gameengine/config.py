@@ -995,6 +995,7 @@ LW_SLOW_GAP              = (9000, 16000)    # gap between each scattered attempt
 #   "a failed login is too telling"    -> LW_BENIGN_TYPO_CHANCE
 #   "the report wraps on my terminal"  -> LW_REPORT_WIDTH / *_COMPACT layout knobs
 #   "honest travel too rare / common"  -> LW_LEGIT_TRIP_CHANCE (a roll, ~half land)
+#   "not enough second-IP noise"       -> LW_SECOND_IP_CHANCE (same-city, no travel math)
 #   "when is travel impossible"        -> LW_MAX_FEASIBLE_KMH (+ LW_TRAVEL_MIN_KM)
 #   "turn the origin map off / resize" -> LW_MAP_ENABLED / LW_MAP_MIN_WIDTH / _MAX_WIDTH
 
@@ -1023,8 +1024,10 @@ LW_MAX_FEASIBLE_KMH      = 900              # airliner cruise + a little slack
 # least LW_TRIP_TIME_MARGIN x the flight time it needs.
 # NOTE: this is the ROLL, not the realised rate — a candidate whose day is
 # already full (or who works after hours, see the generator) can't fit a trip.
-# 0.30 here lands at roughly 15% of all candidates actually travelling.
-LW_LEGIT_TRIP_CHANCE     = 0.30
+# 2026-09-23 (Nick): raised 0.30 -> 0.55 — the report needed more Location
+# noise than a single honest trip in ~15% of candidates gave it. ~0.55 here
+# lands at roughly 28% of all candidates actually travelling.
+LW_LEGIT_TRIP_CHANCE     = 0.55
 LW_TRIP_CRUISE_KMH       = 750              # how fast the flight itself is
 LW_TRIP_OVERHEAD_H       = 1.5              # airports, boarding, transfers
 LW_TRIP_TIME_MARGIN      = 1.3
@@ -1032,6 +1035,19 @@ LW_TRIP_ARRIVAL_LOGINS   = (1, 2)           # logins from the destination city
 LW_TRIP_ARRIVAL_GAP      = (600, 3600)      # seconds between those logins
 LW_TRIP_MAX_KM           = 6000             # a day trip's realistic reach (the
                                             # flight has to fit inside the shift)
+
+# Second routine IP (2026-09-23): a cheaper, more common noise source than
+# the trip above — NOT travel. This share of candidates additionally log in
+# once or twice from a second, ordinary source (home network / VPN / mobile
+# hotspot) that resolves to the SAME city as their claimed login, so it never
+# forms a travel pair (build_logwatch_report skips same-place pairs) and
+# needs no flight-time feasibility math. Independent of LW_LEGIT_TRIP_CHANCE
+# and of any planted discrepancy — this is meant to make "more than one
+# origin row" the common case, not a rare one, so origin *count* alone stops
+# being a tell.
+LW_SECOND_IP_CHANCE      = 0.40
+LW_SECOND_IP_LOGINS      = (1, 2)           # logins from that second IP
+LW_SECOND_IP_GAP         = (300, 1800)      # seconds between those logins
 
 # Planted IMPOSSIBLE_TRAVEL picks two cities at least this far apart, so the
 # LW_TRAVEL_GAP between them is always well past LW_MAX_FEASIBLE_KMH — the
