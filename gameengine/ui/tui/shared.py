@@ -473,7 +473,13 @@ def _password_markup(dossier, cracked_password: str | None,
         # looking hash at all here — that reads as "still needs cracking"
         # and papers over the actual finding. ⚠ UNSALTED tags it as the
         # UNSALTED_STORAGE evidence rather than a recovered result.
-        head = f"[b #e8f0f8]{dossier.password_plain}[/]  [#ff5470][b]⚠ UNSALTED[/][/]"
+        head = f"[b #e8f0f8]{dossier.password_plain}[/]"
+        if config.UPGRADE_CRYPTO_ID in upgrades:
+            # #74: the ⚠ UNSALTED tag is Cipher ID HUD's call to make, same as
+            # every other algorithm/tier label it gates elsewhere. Without the
+            # upgrade the plaintext still shows (there's genuinely no hash to
+            # crack), but the finding isn't named for the player for free.
+            head += "  [#ff5470][b]⚠ UNSALTED[/][/]"
         return head, ""
     if not dossier.submitted_hash:
         return "[dim](none)[/]", ""

@@ -3358,8 +3358,22 @@ def test_unsalted_password_shows_plaintext_directly_no_crack_prompt():
     assert "run hashcrack" not in state.lower()
     assert "encrypted" not in head.lower()
     assert "encrypted" not in state.lower()
-    # Still tagged as UNSALTED_STORAGE evidence, not silently indistinguishable
-    # from a cracked result.
+    # #74: without Cipher ID HUD, the plaintext shows but the UNSALTED_STORAGE
+    # finding isn't named for the player for free -- same gate as every other
+    # kind Cipher ID HUD governs.
+    assert "UNSALTED" not in head
+
+
+def test_unsalted_password_tag_shown_with_cipher_id_hud():
+    """#74: owning Cipher ID HUD is what turns the bare plaintext into a
+    named UNSALTED_STORAGE finding on the dossier -- mirrors
+    test_dossier_never_labels_the_encryption_tier's upgrade-set shape."""
+    from gameengine.ui.tui.app import _password_markup
+
+    d = Dossier(submitted_hash="5f4dcc3b5aa765d61d8327deb882cf99",
+                password_plain="monkey123", credential_unsalted=True)
+    head, state = _password_markup(d, None, upgrades={config.UPGRADE_CRYPTO_ID})
+    assert "monkey123" in head, "the Password entry itself must still be the plaintext"
     assert "UNSALTED" in head
 
 
@@ -7183,10 +7197,20 @@ def _free_surface(candidate) -> tuple[str, frozenset[str]]:
 
     The rendered dossier panel plus the chat script's tags. DossierPanel.render
     is a pure function of the candidate, so this needs no Textual app.
+
+    #74: the ⚠ UNSALTED tag is now gated behind owning Cipher ID HUD
+    (UPGRADE_CRYPTO_ID), same as every other upgrade-conditional label this
+    panel prints. That's a purchase, not a ⏱ tool run, so it doesn't break
+    the "free surface" premise this guard is built on -- but the panel has
+    to be built as if that upgrade is owned, or the UNSALTED_STORAGE
+    predicate below can never observe its own evidence. Render with every
+    dossier-visible upgrade "owned" so this sweep tests whether the
+    evidence CAN appear at all, not one specific upgrade loadout.
     """
     from gameengine.ui.tui.widgets.dossier import DossierPanel
 
     panel = DossierPanel()
+    panel.upgrades = {config.UPGRADE_CRYPTO_ID}
     panel.set_candidate(candidate)
     return panel.render(), frozenset(ln.tag for ln in candidate.chat_script)
 
