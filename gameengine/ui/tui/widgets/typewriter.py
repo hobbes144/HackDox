@@ -253,14 +253,30 @@ class ChatPanel(TypewriterLog):
         self.border_title = " Chat "
         self.upgrades: set = set()   # Sentiment Scanner upgrade (issue #23)
 
+    # #77: "hostile" and "hostile_flavor" style IDENTICALLY and mean opposite
+    # things. The first is EVIDENCE — this candidate rolled HOSTILE_CHAT. The
+    # second is VOICE — this archetype always talks like that. They must look
+    # the same, or the styling itself becomes the free tell that the ⚠ marker
+    # is supposed to be sold for. Only the evidence tag goes near the ⚠ check.
     _TAG_STYLE: ClassVar[dict[str, tuple[str, str]]] = {
-        "neutral":  ("#c8d4e1", ""),
-        "warm":     ("#7dd3c0", ""),
-        "hostile":  ("#ff5470", "bold"),
-        "flippant": ("#c084fc", "italic"),
-        "earnest":  ("#7dd3c0", ""),
-        "intro":    ("#c8d4e1", "italic"),
+        "neutral":        ("#c8d4e1", ""),
+        "warm":           ("#7dd3c0", ""),
+        "hostile":        ("#ff5470", "bold"),
+        "hostile_flavor": ("#ff5470", "bold"),
+        # #78: the alt-pool register several archetypes now draw against
+        # their usual tone. Styled like neutral -- it isn't hostile-toned
+        # and carries no evidence weight, so it gets no special color.
+        "dismissive":     ("#c8d4e1", ""),
+        "flippant":       ("#c084fc", "italic"),
+        "earnest":        ("#7dd3c0", ""),
+        "intro":          ("#c8d4e1", "italic"),
     }
+
+    # The tag that means "this line IS the HOSTILE_CHAT evidence", and the pair
+    # that share its look. Named so the three checks below cannot drift apart
+    # from each other or from what candidate_gen._build_chat writes.
+    _EVIDENCE_TAG:  ClassVar[str] = "hostile"
+    _HOSTILE_TAGS: ClassVar[frozenset[str]] = frozenset({"hostile", "hostile_flavor"})
 
     def set_candidate(self, candidate: Candidate) -> None:
         self.clear_log()
@@ -270,14 +286,25 @@ class ChatPanel(TypewriterLog):
             tag = line.tag
             if tag.startswith("hint:"):
                 col, sty = "#ff8c42", "italic"
-            elif tag == "hostile" and not _has_sentiment:
+            elif tag in self._HOSTILE_TAGS and not _has_sentiment:
                 # Sentiment Scanner upgrade (issue #23) gates the red/bold
                 # marking itself, not just the ⚠ icon (batch-3 task #4) —
                 # without it, hostile lines read the same as neutral chat.
+                #
+                # BOTH hostile tags are gated here, and that is the whole point
+                # (#77). Styling flavour red while evidence stayed neutral for
+                # an unupgraded player would invert the tell: the candidates
+                # WITHOUT the violation would be the ones glowing red. Gated
+                # together, an unupgraded player sees no colour difference
+                # between them at all — which is what they have not paid for.
                 col, sty = self._TAG_STYLE["neutral"]
             else:
                 col, sty = self._TAG_STYLE.get(tag, ("#c8d4e1", ""))
-            warn = "[#ff5470][b]⚠ [/][/]" if tag == "hostile" and _has_sentiment else ""
+            # ⚠ is the evidence marker, so it keys on the evidence tag ALONE.
+            # This is the line the issue was about: it used to fire for every
+            # Bad Actor, 58.1% of whom carried no HOSTILE_CHAT at all.
+            warn = ("[#ff5470][b]⚠ [/][/]"
+                    if tag == self._EVIDENCE_TAG and _has_sentiment else "")
             prefix = f"[#6b7785]{line.timestamp}[/]  [b]{first}:[/]  {warn}"
             # Each chat line is its own message: the timestamp/name go in the
             # verbatim prefix, the plain line text is what types out (wrapped in

@@ -288,6 +288,70 @@ ContentSwitcher {
     width: 100%;
 }
 
+/* ── Logwatch page — 3-column override (2026-09-19) ─────────────────── */
+/* sidebar (24%) | Activity Report (40%) | auth log (36%)                */
+/* The report is the free tier; the auth log is sealed until L. Log rows */
+/* never wrap (one row = one line, so [ / ] can jump to a row exactly);  */
+/* the panel scrolls horizontally for long rows instead.                 */
+
+#page-logwatch #lw-left {
+    width: 24%;
+}
+
+#page-logwatch #terminal-lw {
+    width: 40%;
+}
+
+#log-list-panel {
+    width: 36%;
+    border: tall #3a4a58;
+    border-title-color: #ffb454;
+    border-title-style: bold;
+    border-subtitle-color: #6b7785;
+    background: #080c10;
+    padding: 0 1;
+    overflow-x: auto;
+    overflow-y: auto;
+    scrollbar-size-horizontal: 1;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #3a4a58;
+}
+
+#log-list-content {
+    width: auto;
+    min-width: 100%;
+    text-wrap: nowrap;
+}
+
+/* ── Hashcrack page — 3-column override ─────────────────────────────── */
+/* sidebar (26%) | cipher block (40%) | findings terminal (34%)          */
+/* The cipher block takes the centre — it is the aperture-minigame        */
+/* canvas, not a report panel, and the terminal beside it is the running  */
+/* log of what each aperture came back with.                             */
+
+#page-hashcrack #hc-left {
+    width: 26%;
+}
+
+#cipher-block-panel {
+    width: 40%;
+    border: tall #3a4a58;
+    border-title-color: #c084fc;
+    border-title-style: bold;
+    background: #05080c;
+    padding: 0 1;
+    content-align: center middle;
+}
+
+#cipher-block-content {
+    width: 100%;
+    content-align: center middle;
+}
+
+#page-hashcrack #terminal-hc {
+    width: 34%;
+}
+
 /* ── Stegotool page — 3-column override ─────────────────────────────── */
 /* sidebar (26%) | findings terminal (34%) | image viewer (40%)          */
 /* The image viewer dominates the right side — it is the stamp-minigame  */
@@ -448,7 +512,7 @@ ContentSwitcher {
 }
 
 #splash .title    { color: #00ff9f; text-style: bold; }
-#splash .subtitle { color: #7dd3c0; }
+#splash .subtitle { color: #7dd3c0; margin: 0 0 1 0; max-width: 80; }
 #splash .hint     { color: #6b7785; margin: 2 0 0 0; }
 
 .screen-title {

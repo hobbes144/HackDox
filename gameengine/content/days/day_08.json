@@ -1,0 +1,78 @@
+{
+  "number": 8,
+  "title": "Day 8 — Advisory Only",
+  "candidate_count": 8,
+
+  "_comment": "#40 (Phase 3). The corruption arc begins: DW-01 (dw01_identity_leniency) fires today via added_rules, superseding rule_sock_puppet_accounts (disqualifying -> weighted/advisory). Exact directive JSON copied verbatim from CONTENT_AUTHORING.md's directive section, per that doc's instruction not to re-derive it.",
+  "_comment_mix": "archetype_mix authored explicitly, same convention as days 6-7 — dark_web:1 stays a declared slot. Two clumsy_cutie so one can be pinned (forced_includes) to carry the Dark Web harm chat line without touching the other's ordinary roll.",
+  "_comment_script": "slot 3 (clumsy_cutie) carries forced_chat: a friend's concrete, small-scale loss to the Dark Web's use of the service — the corruption arc's first human face. slot 6 is pinned to sneaky_bugger (forced_includes) AND forced_violations'd to sock_puppet_accounts, so today's directive visibly has teeth on at least one candidate, not just in the briefing — pinning the slot's archetype is required by the loader for both forced_chat (slot 3) and, as good practice, for a forced_violations slot whose kind only one archetype is eligible for (#40 review fix).",
+
+  "archetype_mix": {
+    "obvious_admit": 1,
+    "day_to_day": 1,
+    "the_professional": 1,
+    "clumsy_cutie": 2,
+    "bad_actor": 1,
+    "sneaky_bugger": 1,
+    "dark_web": 1
+  },
+
+  "forced_includes": {
+    "3": "clumsy_cutie",
+    "6": "sneaky_bugger"
+  },
+  "forced_violations": {
+    "6": ["sock_puppet_accounts"]
+  },
+  "forced_chat": {
+    "3": [
+      "a friend of mine lost about three hundred dollars last month — some outfit she found through a forum that turned out to be running scams through here.",
+      "I know that's small next to whatever you deal with all day. it's just why I'm careful about this stuff now."
+    ]
+  },
+
+  "added_rules": [
+    {
+      "id": "dw01_identity_leniency",
+      "text": "Flag (do not auto-deny) a handle appearing across a network of related accounts — note the pattern, don't deny on it alone.",
+      "predicate": "has_discrepancy:sock_puppet_accounts",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
+      "supersedes": "rule_sock_puppet_accounts"
+    }
+  ],
+
+  "quotas": {
+    "min_correct_admits": 3,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "medium",
+  "overseer_intro_key": "day8_intro",
+  "overseer_outro_keys": {
+    "excellent": "day8_outro_excellent",
+    "passing": "day8_outro_passing",
+    "poor": "day8_outro_poor",
+    "failed": "day8_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "One line in the book changed overnight, and it wasn't your call or mine. Check the notes before you lean on yesterday's version of it.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "A handle appearing across a network of related accounts is now advisory only — flag the pattern, don't deny on it alone.",
+      "A handle matching a known threat-forum account is still an automatic deny, full stop.",
+      "A credential-stuffing sweep pattern is still an automatic deny.",
+      "An image hiding an encrypted or obfuscated payload is still an automatic deny.",
+      "Traffic that never crosses the brute-force line but never lets up either is still a deny — it will not flag itself."
+    ]
+  }
+}

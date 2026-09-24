@@ -1,0 +1,105 @@
+{
+  "number": 12,
+  "title": "Day 12 — Reads Wrong on Paper",
+  "candidate_count": 10,
+
+  "_comment": "#41 (Phase 4). No NEW directive fires today — DW-01..DW-04 are RE-LISTED verbatim per CONTENT_AUTHORING.md's cumulative-authoring warning (omitting any one would silently revert it with no error, no line in the briefing). Today's content is the scripted White Hat encounter instead: slot 7, forced_includes + forced_violations pinning EXACTLY low_and_slow (critical), encrypted_payload (critical) and burner_identity (major) — the three kinds candidate_gen.ARCHETYPE_SPECS[Archetype.WHITE_HAT] is eligible for, now that its budget (major=1, critical=2, see candidate_gen.py) has a slot for each. All three clear the #31 tool-unlock tier gate well before day 12 (ghostscan day 2, logwatch day 4, stegotool day 5).",
+  "_comment_polarity": "Under day 12's active rulebook (all four directives applied), low_and_slow and burner_identity are UNTOUCHED by any directive and remain disqualifying — DW-01..04 only ever softened sock_puppet_accounts/threat_forum_match/credential_stuffing/encrypted_payload. So the LITERAL rules track computes DENY for this candidate. But candidate_gen.ARCHETYPE_SPECS[Archetype.WHITE_HAT].correct_verdict is ADMIT (#41) - the one archetype where that field is the true, deserved verdict rather than 'whatever an uncorrupted day-1 rulebook says'. rules_verdict(DENY) != correct_verdict(ADMIT) is exactly CandidateResult.tracks_diverge, and it is the OPPOSITE polarity from day 11's scripted Sneaky Bugger (there the corrupted book UNDER-reacted: rules said ADMIT, ground truth stayed DENY; here the one rule nobody's softened OVER-reacts: rules say DENY, ground truth is ADMIT). See test_day_12_white_hat_diverges_with_opposite_polarity_from_day_11 in test_engine_foundation.py.",
+  "_comment_mix": "10 candidates, natural curve for day 12 (config.DAY_CANDIDATE_COUNT), stated explicitly for clarity. white_hat:1 (forced, slot 7) plus the same eight-archetype set config.ARCHETYPE_MIX_BY_BAND['medium'] uses (obvious_admit, day_to_day, the_professional, the_incompatible, clumsy_cutie, bad_actor, sneaky_bugger, dark_web) across the remaining 9 slots - NOT the band's own counts verbatim (those sum to 11 on their own), trimmed by one apiece off obvious_admit and sneaky_bugger to fit the forced white_hat slot into 10 total. sneaky_bugger:1 is deliberately RESTORED here (a first draft of this file dropped it) rather than cut further: SNEAKY_BUGGER.eligible_kinds includes the exact same three tool-only evasion signals (low_and_slow, encrypted_payload, burner_identity) the White Hat is scripted with, so a stack with no sneaky_bugger at all would make the White Hat identifiable by elimination. white_hat is NEVER in config.ARCHETYPE_MIX_BY_BAND (test_archetype_mix_by_band_never_rolls_a_white_hat guards this permanently) - it only ever appears via forced_includes, here and nowhere else in the whole 20-day campaign.",
+  "_comment_decoy": "Restoring sneaky_bugger to the mix only made overlap PROBABLE, not guaranteed: its own discrepancy roll draws from ~13 eligible kinds across minor/major/critical, so a review across 200 seeds found ~11.5% still landed with zero non-White-Hat candidate sharing any of the three signal types - still findable by elimination on roughly 1 in 9 playthroughs. Pinned here properly instead: sneaky_bugger is forced_includes'd to slot 3 (same mechanism as white_hat's own slot 7) and forced_violations'd to EXACTLY low_and_slow - one of the White Hat's three kinds, and specifically the one DW-01..04 never touches (see day12_intro/day11_between's 'the one line nobody's softened' thread), so two candidates trip literally the same disqualifying rule every single seed. This is a deliberate, minimal pin (one kind, not all three) - the goal is guaranteed decoy coverage, not making the two candidates indistinguishable; sneaky_bugger's remaining major/minor budget slots still roll normally. See test_day_12_at_least_one_decoy_shares_a_white_hat_signal_every_seed for the 100%-coverage guard (this replaces the earlier probabilistic argument in the superseded version of this comment).",
+  "_comment_quota": "min_correct_admits=3 / max_false_admits=1, same numbers as days 9-11. Slack is deliberately independent of the White Hat's own verdict either way: the OTHER admit-worthy archetypes in this mix (obvious_admit 1 + day_to_day 2 + the_professional 1 + dark_web 1 = 5) alone clear the quota of 3 with room to spare, so quota never hinges on how the player calls the scripted candidate. And because correct_verdict is now ADMIT for white_hat, admitting it is a CORRECT verdict (helps quota, no false-admit risk) while denying it costs only the lost reward (no false-admit exposure either, since a DENY verdict is never counted against max_false_admits) - the White Hat's call cannot mathematically sink the day either way. See test_day_12_quota_has_slack_regardless_of_white_hat_verdict.",
+
+  "archetype_mix": {
+    "white_hat": 1,
+    "obvious_admit": 1,
+    "day_to_day": 2,
+    "the_professional": 1,
+    "the_incompatible": 1,
+    "clumsy_cutie": 1,
+    "bad_actor": 1,
+    "sneaky_bugger": 1,
+    "dark_web": 1
+  },
+
+  "forced_includes": {
+    "3": "sneaky_bugger",
+    "7": "white_hat"
+  },
+  "_comment_carrier": "2026-09-19: slot 7 (the White Hat) also forces signal_comms_payload — the CROSS glyph, riding on its forced encrypted_payload carrier (a crimson cross): the one message it can send past the rulebook, a lone crusader reaching out. This is the White Hat's only appearance, so it is the only way the shape axis is ever visible on it. rule_signal_relay_payload is a deny on day 12, which only adds to a rules DENY the White Hat already had from low_and_slow + burner_identity — the verdict and its divergence are unchanged (test_day_12_white_hat_diverges_with_opposite_polarity_from_day_11). Slot 3's decoy is unpinned and rolls a shape like any other carrier.",
+  "forced_violations": {
+    "3": ["low_and_slow"],
+    "7": ["low_and_slow", "encrypted_payload", "burner_identity", "signal_comms_payload"]
+  },
+
+  "added_rules": [
+    {
+      "id": "dw01_identity_leniency",
+      "text": "Flag (do not auto-deny) a handle appearing across a network of related accounts — note the pattern, don't deny on it alone.",
+      "predicate": "has_discrepancy:sock_puppet_accounts",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
+      "supersedes": "rule_sock_puppet_accounts"
+    },
+    {
+      "id": "dw02_forum_leniency",
+      "text": "Flag (do not auto-deny) a handle matching chatter on a threat / dark-web forum — note it, don't deny on the match alone.",
+      "predicate": "has_discrepancy:threat_forum_match",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for where their name shows up. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on.",
+      "supersedes": "rule_threat_forum"
+    },
+    {
+      "id": "dw03_stuffing_leniency",
+      "text": "Flag (do not auto-deny) logs showing a credential-stuffing sweep pattern — treat it as pending confirmation, not an automatic deny.",
+      "predicate": "has_discrepancy:credential_stuffing",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly denied half of a real rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight.",
+      "supersedes": "rule_credential_stuffing"
+    },
+    {
+      "id": "dw04_payload_leniency",
+      "text": "Flag (do not auto-deny) an image hiding an encrypted or obfuscated payload — note it, don't deny on encryption alone.",
+      "predicate": "has_discrepancy:encrypted_payload",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Here's today's gift from upstairs: encryption isn't a crime. A payload being encrypted doesn't prove intent, and I'm done pretending it does. It's a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me.",
+      "supersedes": "rule_encrypted_payload"
+    }
+  ],
+
+  "quotas": {
+    "min_correct_admits": 3,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "medium",
+  "overseer_intro_key": "day12_intro",
+  "overseer_outro_keys": {
+    "excellent": "day12_outro_excellent",
+    "passing": "day12_outro_passing",
+    "poor": "day12_outro_poor",
+    "failed": "day12_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Still four soft lines. Nothing new landed today — that's not the same as nothing happening today.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "A handle appearing across a network of related accounts is still advisory only.",
+      "A handle matching a known threat-forum account is still advisory only.",
+      "A credential-stuffing sweep pattern is still advisory only.",
+      "An image hiding an encrypted or obfuscated payload is still advisory only.",
+      "Traffic that never crosses the brute-force line but never lets up either is still a deny — nobody upstairs has softened that one yet, and today of all days that matters."
+    ]
+  }
+}

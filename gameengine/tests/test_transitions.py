@@ -34,6 +34,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from gameengine import config
+from gameengine.core import overseer
 from gameengine.core.audio import SFX_REGISTRY
 from gameengine.ui.tui import app as app_module
 from gameengine.ui.tui.app import HackDoxApp
@@ -44,7 +45,11 @@ from gameengine.ui.tui.glitch import (
     build_frame,
     coverage_for,
 )
+from gameengine.ui.tui.screens.between_day import BetweenDayScreen
 from gameengine.ui.tui.screens.briefing import BriefingScreen
+from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
+from gameengine.ui.tui.screens.eod import EODScreen
+from gameengine.ui.tui.screens.intake import IntakeScreen
 from gameengine.ui.tui.screens.intro import IntroScreen
 from gameengine.ui.tui.screens.transition import TransitionScreen
 
@@ -437,6 +442,110 @@ def test_the_whole_day_loop_transitions_and_rebalances():
                 assert len(app.screen_stack) == 2, (
                     name, [type(s).__name__ for s in app.screen_stack])
             assert app._state.current_day == 2, "the day never advanced"
+
+    asyncio.run(go())
+
+
+def test_advance_day_past_campaign_last_day_triggers_the_explicit_ending():
+    """Issue #42: `advance_day`'s `current_day > CAMPAIGN_LAST_DAY` check is
+    now the PRIMARY path to `CampaignEndScreen`, checked before `load_day`
+    is even attempted — not a side effect of catching `FileNotFoundError`.
+    Driving `current_day` to `CAMPAIGN_LAST_DAY` and calling `advance_day()`
+    once must land on `CampaignEndScreen` carrying the incremented (past-
+    ceiling) state, through the normal transition machinery like every other
+    step in the day loop.
+    """
+    async def go():
+        app = HackDoxApp(seed=SEED)
+        async with app.run_test(size=(150, 46)) as pilot:
+            await pilot.pause()
+            app.start_new_game()
+            await _settle(app)
+            app._state.current_day = config.CAMPAIGN_LAST_DAY
+            app.advance_day()
+            assert isinstance(app.screen, TransitionScreen)
+            await _settle(app)
+            assert isinstance(app.screen, CampaignEndScreen)
+            assert app._state.current_day == config.CAMPAIGN_LAST_DAY + 1
+
+    asyncio.run(go())
+
+
+def test_all_five_narrative_call_sites_route_through_the_alignment_band(monkeypatch):
+    """Issue #42 review fix: `resolve_aligned_narrative` existed and was
+    correct in isolation, but nothing in `app.py` actually called it — every
+    one of the five real narrative-resolution call sites
+    (`start_new_game`/`begin_intake`/`finish_day`/`show_between_day`/
+    `advance_day`) still called plain `resolve_narrative`. A day author
+    writing `day14_whitehat_intro` would have had it silently ignored
+    forever — exactly the silent-drop failure class this project keeps
+    guarding against elsewhere.
+
+    `test_alignment_band_keys_dont_change_days_1_through_12`
+    (test_engine_foundation.py) already proves these call sites fall back
+    correctly when NO band key is authored. This is the mirror image: drive
+    the real day loop with a whitehat-band alignment and a band-specific key
+    injected for each site's exact narrative key, and assert the screen that
+    comes out the other end actually carries the BANDED text.
+    """
+    from gameengine.core.content_loader import load_day
+    from gameengine.core.models import Performance
+
+    monkeypatch.setattr(
+        config, "STARTING_ALIGNMENT", config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD)
+
+    async def go():
+        app = HackDoxApp(seed=SEED)
+        async with app.run_test(size=(150, 46)) as pilot:
+            await pilot.pause()   # on_mount has run; app._narratives is loaded
+
+            def band(key: str) -> str:
+                return overseer.banded_key(key, overseer.BAND_WHITE_HAT)
+
+            day1 = load_day(1)
+
+            # 1) start_new_game
+            app._narratives[band(day1.overseer_intro_key)] = "BANDED START"
+            app.start_new_game()
+            await _settle(app)
+            assert isinstance(app.screen, BriefingScreen)
+            assert app._state.alignment == config.ALIGNMENT_BAND_WHITE_HAT_THRESHOLD
+            assert app.screen._narrative == "BANDED START", app.screen._narrative
+
+            # 2) begin_intake
+            app._narratives[band(day1.overseer_intro_key)] = "BANDED INTAKE"
+            app.begin_intake()
+            await _settle(app)
+            assert isinstance(app.screen, IntakeScreen)
+            assert app.screen.overseer._intro == "BANDED INTAKE"
+
+            # 3) finish_day — inject every performance's outro key, since
+            # which one actually fires depends on evaluation logic this test
+            # isn't exercising (zero candidates processed).
+            for perf in Performance:
+                key = band(day1.overseer_outro_keys[perf])
+                app._narratives[key] = f"BANDED OUTRO {perf.value}"
+            app.finish_day()
+            await _settle(app)
+            assert isinstance(app.screen, EODScreen)
+            assert app.screen._narrative.startswith("BANDED OUTRO "), (
+                app.screen._narrative)
+
+            # 4) show_between_day
+            app._narratives[band(f"day{day1.number}_between")] = "BANDED BETWEEN"
+            app.show_between_day()
+            await _settle(app)
+            assert isinstance(app.screen, BetweenDayScreen)
+            assert app.screen._narrative == "BANDED BETWEEN"
+
+            # 5) advance_day — loads day 2, resolves day 2's intro key.
+            day2 = load_day(2)
+            app._narratives[band(day2.overseer_intro_key)] = "BANDED ADVANCE"
+            app.advance_day()
+            await _settle(app)
+            assert isinstance(app.screen, BriefingScreen)
+            assert app.screen._narrative == "BANDED ADVANCE"
+            assert app._state.current_day == 2
 
     asyncio.run(go())
 

@@ -11,7 +11,9 @@ import json
 from dataclasses import replace
 
 from .. import config
-from .candidate_gen import stable_hash
+from functools import lru_cache
+
+from .candidate_gen import kinds_the_day_can_plant, stable_hash, stepped_rule_severity
 from .models import (
     RULE_MUTABILITIES,
     Archetype,
@@ -46,6 +48,18 @@ def _parse_rule(raw_rule: dict) -> Rule:
         predicate=raw_rule["predicate"],
         severity=raw_rule.get("severity", "disqualifying"),
         mutability=mutability,
+        # Issue #37 — optional, defaults to None so every rule authored before
+        # Dark Web directives existed loads unchanged. Validated (dark_web
+        # requires a justification) where the rule is actually PLACED into a
+        # book — see `_apply_rule_overrides` — not here, because a rule dict
+        # parsed in isolation doesn't yet know it's being added as a directive.
+        justification=raw_rule.get("justification"),
+        # Issue #37 — the id of the rule this one replaces, when authored in
+        # `added_rules`. Drives both the automatic removal of that id (see
+        # `_apply_rule_overrides`) and the narration fold in `rule_change_lines`
+        # (a superseded rule doesn't get its own generic "that clause is gone"
+        # line — it's folded into this rule's own justification).
+        supersedes=raw_rule.get("supersedes"),
     )
 
 
@@ -89,6 +103,42 @@ def _parse_rule_sheet(raw: dict | None) -> RuleSheet | None:
     return None if sheet.is_empty() else sheet
 
 
+def _validate_slot(slot: int, day_number: int, candidate_count: int,
+                    field: str) -> None:
+    """Fail loudly if a slot-keyed day-file field names a slot outside the
+    day's actual shift (#40 review fix).
+
+    Shared by `forced_includes`/`forced_violations`/`forced_chat` so all
+    three slot-scripting mechanisms fail the exact same way on the exact same
+    mistake — a typo'd slot index that would otherwise silently script a
+    candidate who never gets generated, with the day still loading and
+    playing fine.
+    """
+    if not 0 <= slot < candidate_count:
+        raise ValueError(
+            f"day {day_number}: {field} names slot {slot}, but the day only "
+            f"has {candidate_count} slots (0-{candidate_count - 1})")
+
+
+def _parse_forced_includes(
+    raw: dict, day_number: int, candidate_count: int,
+) -> dict[int, Archetype]:
+    """Parse and validate the day's pinned-archetype slots (#32).
+
+    JSON shape: {"<slot index>": "<archetype value>"}. Bounds-validated the
+    same way as `forced_violations`/`forced_chat` (#40 review fix) — this was
+    previously the one slot-keyed mechanism of the three with NO bounds check
+    at all, so a typo'd slot index here silently pinned a candidate who would
+    never actually be generated, with no error to say so.
+    """
+    out: dict[int, Archetype] = {}
+    for slot_raw, arch in (raw or {}).items():
+        slot = int(slot_raw)
+        _validate_slot(slot, day_number, candidate_count, "forced_includes")
+        out[slot] = Archetype(arch)
+    return out
+
+
 def _parse_forced_violations(
     raw: dict, day_number: int, candidate_count: int,
     allowed_violations: tuple[DiscrepancyKind, ...],
@@ -115,11 +165,7 @@ def _parse_forced_violations(
     out: dict[int, tuple[DiscrepancyKind, ...]] = {}
     for slot_raw, kinds_raw in (raw or {}).items():
         slot = int(slot_raw)
-        if not 0 <= slot < candidate_count:
-            raise ValueError(
-                f"day {day_number}: forced_violations names slot {slot}, but "
-                f"the day only has {candidate_count} slots (0-"
-                f"{candidate_count - 1})")
+        _validate_slot(slot, day_number, candidate_count, "forced_violations")
         kinds: list[DiscrepancyKind] = []
         for value in kinds_raw:
             kind = DiscrepancyKind(value)
@@ -141,6 +187,134 @@ def _parse_forced_violations(
                     f"whitelist excludes — the two would contradict each other")
             kinds.append(kind)
         out[slot] = tuple(kinds)
+    return out
+
+
+def _parse_carrier_shapes(
+    raw: dict, day_number: int, candidate_count: int,
+) -> frozenset[int]:
+    """Parse the day's pinned carrier shapes (2026-09-19).
+
+    JSON shape: {"<slot index>": "conventional"}. The only pin is
+    "conventional": a SPECIAL shape is authored the way any other scripted
+    violation is, by naming its kind in forced_violations — two spellings for
+    one fact would be two places to drift.
+    """
+    out: set[int] = set()
+    for slot_raw, value in (raw or {}).items():
+        slot = int(slot_raw)
+        _validate_slot(slot, day_number, candidate_count, "carrier_shape")
+        if value != "conventional":
+            raise ValueError(
+                f"day {day_number}: carrier_shape slot {slot} is {value!r} — "
+                f"the only pin is \"conventional\"; author a special shape "
+                f"by naming its kind (signal_comms_payload / "
+                f"recursive_payload / hostile_payload) in forced_violations")
+        out.add(slot)
+    return frozenset(out)
+
+
+def _validate_forced_shapes(
+    forced_violations: dict[int, tuple[DiscrepancyKind, ...]],
+    forced_includes: dict[int, Archetype],
+    conventional_slots: frozenset[int],
+    day_number: int,
+) -> None:
+    """A scripted carrier shape must be able to land — fail loudly if not.
+
+    A shape kind is a free rider on a stego COLOUR kind (see
+    candidate_gen._STEGO_SHAPE_KINDS): with no carrier there is no glyph, and
+    the generator would drop the shape without a word — the silent-drop this
+    module's validators exist to prevent. So a slot that forces a shape must:
+      • force exactly one shape kind;
+      • also force a stego colour kind — not merely be able to roll one, which
+        would make the scripted shape land on some seeds and not others;
+      • pin (forced_includes) a shape-eligible archetype that lists that
+        colour kind in its eligible_kinds;
+      • not also be pinned conventional.
+    """
+    from .candidate_gen import (
+        _SHAPE_ELIGIBLE_ARCHETYPES,
+        _STEGO_ARTIFACT_KINDS,
+        _STEGO_SHAPE_KINDS,
+        ARCHETYPE_SPECS,
+    )
+
+    for slot, kinds in forced_violations.items():
+        shapes = [k for k in kinds if k in _STEGO_SHAPE_KINDS]
+        if not shapes:
+            continue
+        where = f"day {day_number}: forced_violations slot {slot}"
+        if len(shapes) > 1:
+            raise ValueError(
+                f"{where} forces {[k.name for k in shapes]} — one image, one "
+                f"glyph: at most one carrier-shape kind per slot")
+        colours = [k for k in kinds if k in _STEGO_ARTIFACT_KINDS]
+        if not colours:
+            raise ValueError(
+                f"{where} forces {shapes[0].name} but no stego colour kind "
+                f"(stego_payload_present / encrypted_payload / "
+                f"covert_c2_channel) — a carrier shape needs a carrier")
+        archetype = forced_includes.get(slot)
+        if archetype is None or archetype not in _SHAPE_ELIGIBLE_ARCHETYPES:
+            raise ValueError(
+                f"{where} forces {shapes[0].name}, but the slot is not pinned "
+                f"(forced_includes) to a shape-eligible archetype "
+                f"({sorted(a.value for a in _SHAPE_ELIGIBLE_ARCHETYPES)})")
+        if not any(c in ARCHETYPE_SPECS[archetype].eligible_kinds
+                   for c in colours):
+            raise ValueError(
+                f"{where}: {archetype.value} cannot carry "
+                f"{[c.name for c in colours]}, so {shapes[0].name} would have "
+                f"no carrier")
+        if slot in conventional_slots:
+            raise ValueError(
+                f"{where} forces {shapes[0].name} but carrier_shape pins the "
+                f"same slot conventional — the two contradict each other")
+
+
+def _parse_forced_chat(
+    raw: dict, day_number: int, candidate_count: int,
+    forced_includes: dict[int, Archetype],
+) -> dict[int, tuple[str, ...]]:
+    """Parse the day's scripted extra chat lines (Batch 5 Phase 3, #40).
+
+    JSON shape: {"<slot index>": ["<line>", ...]} — the same slot-keyed shape
+    as `forced_violations`/`forced_includes`. Unlike a scripted violation kind,
+    a line of dialogue has no tool-tier gate or expressibility question to
+    fail, so bounds-checking the slot (shared with the other two mechanisms
+    via `_validate_slot`) is not the only thing worth validating loudly here.
+
+    A scripted line landing on the WRONG archetype is arguably worse than one
+    that never lands at all: `forced_chat` alone says nothing about which
+    archetype occupies the slot, so an unpinned slot's archetype is whatever
+    the day's shuffled bag happens to put there — seed-dependent, and liable
+    to change the moment the day's archetype_mix is edited (#40 review fix:
+    exactly this happened when day 9's mix grew a the_professional slot).
+    A sympathetic "a friend of mine lost money" line landing on a Bad Actor or
+    the Dark Web candidate would read as actively incoherent, with nothing in
+    the loader to say why. So every scripted slot here MUST also be pinned in
+    `forced_includes` — see CONTENT_AUTHORING.md's forced_chat recipe.
+    """
+    out: dict[int, tuple[str, ...]] = {}
+    for slot_raw, lines_raw in (raw or {}).items():
+        slot = int(slot_raw)
+        _validate_slot(slot, day_number, candidate_count, "forced_chat")
+        if slot not in forced_includes:
+            raise ValueError(
+                f"day {day_number}: forced_chat names slot {slot}, but that "
+                f"slot has no forced_includes entry — a scripted chat line "
+                f"needs a PINNED archetype, or it can land on a seed-"
+                f"dependent (and possibly incoherent) candidate")
+        lines: list[str] = []
+        for line in lines_raw:
+            if not isinstance(line, str):
+                raise ValueError(
+                    f"day {day_number}: forced_chat slot {slot} has a "
+                    f"non-string line {line!r} — every forced_chat entry "
+                    f"must be a plain string")
+            lines.append(line)
+        out[slot] = tuple(lines)
     return out
 
 
@@ -235,7 +409,65 @@ def mutate_variable_rules(
         strict = stable_hash(rule.id, epoch) % 2 == 0
         out.append(replace(
             rule, severity="disqualifying" if strict else "weighted"))
+    # 2026-09-19: the day's scheduled severity steps are part of "day N's book
+    # from the day-1 template" too, so every caller that derives a day's rules
+    # this way (load_day's inherit branch, synthesize_day, the tests) gets them.
+    return apply_severity_steps(tuple(out), day_number)
+
+
+def _rule_kind(rule: Rule) -> DiscrepancyKind | None:
+    if not rule.predicate.startswith("has_discrepancy:"):
+        return None
+    try:
+        return DiscrepancyKind(rule.predicate.split(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def apply_severity_steps(
+    rules: tuple[Rule, ...],
+    day_number: int,
+) -> tuple[Rule, ...]:
+    """Make a `fixed` rule follow its kind's scheduled severity step.
+
+    candidate_gen._SEVERITY_BY_DAY steps a few kinds up on a set day (today:
+    UNSALTED_STORAGE, minor until Hashcrack arrives, major from then). The
+    violation's rule has to move with it or the book and the evidence board
+    disagree — which is exactly what day_01.json did before 2026-09-19: the
+    kind filed as a minor note on days 1-2 while its rule said "deny".
+
+    Derived, not authored per day, for the same reason the step itself is
+    derived from config.TOOL_UNLOCK_DAY: move the tool and the rule follows.
+    Only `fixed` rules are stepped — an overseer_variable or dark_web rule on
+    such a kind already has its own authored way of moving, and letting two
+    mechanisms fight over one rule's severity would make it unpredictable.
+    """
+    out: list[Rule] = []
+    for rule in rules:
+        kind = _rule_kind(rule)
+        stepped = (stepped_rule_severity(kind, day_number)
+                   if kind is not None and rule.mutability == "fixed" else None)
+        out.append(rule if stepped is None or stepped == rule.severity
+                   else replace(rule, severity=stepped))
     return tuple(out)
+
+
+def _reject_duplicate_rule_ids(rules: tuple[Rule, ...], day_number: int) -> None:
+    """Two rules with one id is always a content bug (2026-09-19).
+
+    day_01.json shipped two `rule_unsalted_storage` and two
+    `rule_cross_breach_reuse` entries — older and newer wordings of the same
+    rule, both live. Every consumer keys rules by id (diff_rulesets, the
+    supersedes/removed_rules machinery), so one copy silently shadowed the
+    other there, while the rules tab printed both.
+    """
+    seen: set[str] = set()
+    for rule in rules:
+        if rule.id in seen:
+            raise ValueError(
+                f"day {day_number}: rule id {rule.id!r} appears more than "
+                f"once in the rulebook")
+        seen.add(rule.id)
 
 
 def synthesize_day(day_number: int) -> Day:
@@ -294,8 +526,150 @@ def synthesize_day(day_number: int) -> Day:
         # days ago, and its rule sheet describes a rulebook that has since
         # moved. Note this is NOT inherited from `template` for that reason.
         forced_violations={},
+        forced_chat={},
         rule_sheet=None,
     )
+
+
+def _apply_rule_overrides(
+    rules: tuple[Rule, ...], added_raw: object, removed_raw: object,
+    day_number: int,
+) -> tuple[tuple[Rule, ...], frozenset[str]]:
+    """Apply `added_rules` and `removed_rules` on top of a day's base rulebook.
+
+    Issue #37 — lets a Dark Web directive ADD a new, laxer rule while
+    REMOVING the rule it supersedes, without restating the whole ~28-entry
+    book. Both inputs are optional (pass `[]` for an absent key) and
+    absent-safe, so every pre-#37 day file loads byte-identically.
+
+    A rule is removed if its id is in `removed_raw`, OR it is named by an
+    added rule's own `supersedes` field — the latter is what lets
+    `rule_change_lines` fold the removal into the new rule's justification
+    instead of emitting a second, contradicting generic line (see that
+    function). `supersedes` on an `added_rules` entry must name either an id
+    already in the inherited book, OR an id introduced STRICTLY EARLIER in
+    this SAME `added_rules` batch (issue #42/Phase 5b-1: this is what lets
+    one directive supersede a PREVIOUS directive directly, e.g. day 13's
+    `dw05_payload_crackdown` naming `dw04_payload_leniency` in its own
+    `supersedes` field, rather than only ever being able to re-target the
+    original day-1 rule a whole chain of directives eventually traces back
+    to — `load_day` always rebuilds a day's book fresh from Day 1, so
+    `dw04_payload_leniency` only exists at all on a day that re-lists it in
+    that same day's `added_rules`). The "strictly earlier" part is load-time
+    enforced, not just documented: each entry's `supersedes` is checked
+    against only the ids already seen at that point in the array, before
+    that entry's own id is added to the seen set — so self-supersession
+    (an entry naming its own id) and mutual supersession (two entries each
+    naming the other) both fail loudly instead of both silently vanishing
+    from the book with no error and no briefing line. `removed_rules`, by
+    contrast, may only name an id already in the inherited book — naming an
+    id this same file's own `added_rules` just introduced has no legitimate
+    meaning (there's nothing to "remove" that this file didn't also just
+    add) and is rejected rather than silently netting out to a no-op.
+    An `added_rules` entry that is itself named by a later entry's
+    `supersedes` is silently dropped from the final book — it was only
+    re-listed so there was something for the new entry to supersede,
+    mirroring how an inherited rule named by `supersedes` never survives
+    into the final book either. Every `added_rules` id must NOT already be
+    in the inherited book (same-id "replace" is rejected: `diff_rulesets`
+    compares severity only, so a same-id swap could silently vanish from
+    the briefing). Duplicate ids within `added_rules` itself are also
+    rejected. A `dark_web`-mutability added rule must carry a
+    `justification` — this check is scoped to `added_rules` specifically,
+    not the whole rulebook (a `dark_web` rule hand-authored directly in a
+    full `rules` restatement predates this and is not held to it; see
+    `test_rule_mutability_survives_a_day_json_round_trip`).
+
+    IMPORTANT — this does not itself make directives cumulative across days.
+    `load_day`'s inherit branch always inherits from Day 1, not from the
+    previous day, so a directive's `added_rules`/`removed_rules` must be
+    RE-AUTHORED on every later day that should still carry it. See
+    CONTENT_AUTHORING.md's Dark Web directives section.
+
+    Returns `(final_rules, directive_removed_rule_ids)` — the second element
+    is threaded onto `Day.directive_removed_rule_ids` so `diff_rulesets` can
+    report a deliberately-retired `fixed` rule instead of staying silent as
+    it does for an accidental gap between two day files.
+    """
+    if not isinstance(added_raw, list):
+        raise ValueError(
+            f"day {day_number}: added_rules must be a list of rule objects, "
+            f"got {type(added_raw).__name__}")
+    if not isinstance(removed_raw, list):
+        raise ValueError(
+            f"day {day_number}: removed_rules must be a list of rule ids, "
+            f"got {type(removed_raw).__name__}")
+
+    inherited_ids = {r.id for r in rules}
+    # The set of ids a `removed_rules`/`supersedes` reference is legal
+    # against — only the inherited book plus whatever `added_rules` entries
+    # have already been validated and appended SO FAR in the loop below.
+    # Grown incrementally (not unioned in wholesale after the loop) so that
+    # `supersedes` is checked positionally: an entry may only name an id
+    # that came strictly before it in this same batch, never itself or a
+    # later one (see the docstring above — this is what makes self- and
+    # mutual-supersession load-time errors instead of silent rule drops).
+    removable_ids = set(inherited_ids)
+
+    added_rules: list[Rule] = []
+    seen_added_ids: set[str] = set()
+    for r in added_raw:
+        rule = _parse_rule(r)
+        if rule.id in seen_added_ids:
+            raise ValueError(
+                f"day {day_number}: added_rules lists {rule.id!r} more than "
+                f"once")
+        if rule.id in inherited_ids:
+            raise ValueError(
+                f"day {day_number}: added_rules id {rule.id!r} collides "
+                f"with a rule already in the inherited rulebook — same-id "
+                f"replacement isn't supported (diff_rulesets compares "
+                f"severity only, so a same-id swap could silently vanish "
+                f"from the Overseer's briefing); give the new rule its own "
+                f"id and use removed_rules/supersedes to retire the old one")
+        if rule.mutability == "dark_web" and not rule.justification:
+            raise ValueError(
+                f"day {day_number}: added_rules {rule.id!r} is "
+                f"mutability=dark_web but has no justification — a Dark "
+                f"Web directive must always carry in-fiction "
+                f"justification text (see Rule.justification)")
+        if rule.supersedes and rule.supersedes not in removable_ids:
+            raise ValueError(
+                f"day {day_number}: added_rules {rule.id!r} supersedes "
+                f"{rule.supersedes!r}, which is neither in this day's "
+                f"inherited rulebook nor introduced earlier in this same "
+                f"added_rules batch — self- or mutual-supersession (an "
+                f"entry naming its own id, or two entries naming each "
+                f"other) is not supported, and a forward reference to a "
+                f"later entry would make the ordering meaningless")
+        seen_added_ids.add(rule.id)
+        added_rules.append(rule)
+        removable_ids.add(rule.id)
+
+    # `removed_rules` may only name an id already in the INHERITED book —
+    # naming an id this same file's `added_rules` just introduced has no
+    # legitimate meaning (there is nothing to retire that this file didn't
+    # also just add in the same breath) and is rejected rather than
+    # silently netting out to a no-op that drops the new rule.
+    for rid in removed_raw:
+        if rid not in inherited_ids:
+            raise ValueError(
+                f"day {day_number}: removed_rules names {rid!r}, which is "
+                f"not in this day's inherited rulebook")
+
+    removed_ids = set(removed_raw) | {
+        r.supersedes for r in added_rules if r.supersedes
+    }
+
+    rules = (
+        tuple(r for r in rules if r.id not in removed_ids)
+        # An added_rules entry named by another added entry's `supersedes`
+        # (chained supersession, above) is dropped here too — it was only
+        # re-listed to give the new entry something to retire, and must not
+        # survive into the final book alongside its own replacement.
+        + tuple(r for r in added_rules if r.id not in removed_ids)
+    )
+    return rules, frozenset(removed_ids)
 
 
 def load_day(day_number: int) -> Day:
@@ -330,6 +704,20 @@ def load_day(day_number: int) -> Day:
                          "inherits from it")
     else:
         rules = mutate_variable_rules(load_day(1).rules, raw["number"])
+    _reject_duplicate_rule_ids(rules, raw["number"])
+    # 2026-09-19: kinds with a scheduled severity step carry the step into
+    # their fixed rule (weighted while minor, disqualifying once major). The
+    # inherit branch already got it from mutate_variable_rules; a day that
+    # restates its whole `rules` array (day 1) gets it here. Idempotent.
+    rules = apply_severity_steps(rules, raw["number"])
+    # Issue #37 — Dark Web directives (and any other future content that needs
+    # to add/retire one rule without restating the whole book) layer on top of
+    # whichever base the two branches above produced. NOTE: this does NOT make
+    # a directive persist to the next day on its own — see the warning in
+    # `_apply_rule_overrides`'s docstring and CONTENT_AUTHORING.md.
+    rules, directive_removed_rule_ids = _apply_rule_overrides(
+        rules, raw.get("added_rules", []), raw.get("removed_rules", []),
+        raw["number"])
     archetype_mix = {
         Archetype(key): count for key, count in raw["archetype_mix"].items()
     }
@@ -358,15 +746,22 @@ def load_day(day_number: int) -> Day:
     )
     difficulty_band = raw.get(
         "difficulty_band", config.difficulty_band_for_day(raw["number"]))
-    # forced_includes JSON: {"<slot index>": "<archetype value>"}.
-    forced_includes = {
-        int(slot): Archetype(arch)
-        for slot, arch in raw.get("forced_includes", {}).items()
-    }
+    forced_includes = _parse_forced_includes(
+        raw.get("forced_includes", {}), raw["number"], candidate_count)
     # #15/#49 — both optional, so every pre-Batch-4 day file loads unchanged.
     forced_violations = _parse_forced_violations(
         raw.get("forced_violations", {}), raw["number"], candidate_count,
         allowed_violations)
+    # forced_chat requires forced_includes to already be resolved, so a
+    # scripted slot with no pinned archetype fails loudly (#40 review fix).
+    forced_chat = _parse_forced_chat(
+        raw.get("forced_chat", {}), raw["number"], candidate_count,
+        forced_includes)
+    # 2026-09-19 — carrier-shape scripting (see _validate_forced_shapes).
+    conventional_carrier_slots = _parse_carrier_shapes(
+        raw.get("carrier_shape", {}), raw["number"], candidate_count)
+    _validate_forced_shapes(forced_violations, forced_includes,
+                            conventional_carrier_slots, raw["number"])
     rule_sheet = _parse_rule_sheet(raw.get("rule_sheet"))
     return Day(
         number=raw["number"],
@@ -381,8 +776,49 @@ def load_day(day_number: int) -> Day:
         difficulty_band=difficulty_band,
         forced_includes=forced_includes,
         forced_violations=forced_violations,
+        forced_chat=forced_chat,
         rule_sheet=rule_sheet,
+        directive_removed_rule_ids=directive_removed_rule_ids,
+        conventional_carrier_slots=conventional_carrier_slots,
     )
+
+
+@lru_cache(maxsize=None)
+def kinds_discovered_through(day_number: int) -> frozenset[DiscrepancyKind]:
+    """Every DiscrepancyKind reachable on ANY day from 1 through `day_number`,
+    unioned — the cumulative, monotonic answer, as opposed to
+    `candidate_gen.kinds_the_day_can_plant(day)`'s single-day one.
+
+    Progression-unlock fix (2026-09): the Evidence Board and Rules page used
+    to gate on the single-day question alone, so a kind whose only eligible
+    archetype simply wasn't scheduled in *today's* `archetype_mix` would
+    vanish from the board even though an earlier day's candidates could (and
+    did) carry it — e.g. Day 3's scripted mix drops DISPOSABLE_EMAIL and
+    UNSALTED_STORAGE, which Day 1 and Day 2 both taught. That reads as the
+    Overseer erasing evidence, not as a difficulty gate, and it breaks the
+    board's whole premise: once something is a thing to check for, it should
+    stay a thing to check for.
+
+    So this walks every day from 1 to `day_number` and unions what each one
+    could plant — a kind that was ever reachable stays reachable for the rest
+    of the campaign, even on a later day whose own script wouldn't roll it.
+    The whitelist and tool-unlock floors still apply per kind (via
+    `kinds_the_day_can_plant`'s own gates) — this only makes the
+    archetype-mix/whitelist combination monotonic across days, it does not
+    loosen either gate on the day a kind first becomes reachable.
+
+    Cached: day content (`load_day`/`synthesize_day`) is a pure function of
+    `day_number` alone, so the union for a given `day_number` never changes
+    within a process, and re-walking days 1..N on every catalog render would
+    be wasted work — this is called from every Evidence Board repaint and
+    every Rules-page tab switch.
+    """
+    if day_number < 1:
+        return frozenset()
+    discovered: set[DiscrepancyKind] = set()
+    for n in range(1, day_number + 1):
+        discovered |= kinds_the_day_can_plant(load_day(n))
+    return frozenset(discovered)
 
 
 def load_narratives() -> dict[str, str]:

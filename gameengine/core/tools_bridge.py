@@ -19,8 +19,10 @@ Live-data implementations will land in v1.1 once the loop is proven.
 
 from __future__ import annotations
 
+import math as _math
 import random as _random
 from dataclasses import dataclass
+from enum import Enum
 
 from .. import config
 from .candidate_gen import _ELITE_ORG_HANDLE as _ORG_HANDLE
@@ -47,6 +49,9 @@ class ToolResult:
     summary: str
     raw_lines: tuple[str, ...] = ()   # verbatim terminal output lines (pre-analysis)
     filtered: bool = False            # True if a filter was applied
+    # Logwatch only (2026-09-19): the Activity Report for the centre column,
+    # re-rendered for this tier. raw_lines is then the auth log panel.
+    report_lines: tuple[str, ...] = ()
 
 
 # #53: the canonical org handles a typosquat imitates, so the filter can show
@@ -215,7 +220,7 @@ _GS_ADVISORY_FORUMS  = ["nulled.to", "CrackingKing", "Dread", "CrackingPro"]
 
 # ── Unified breach database table ─────────────────────────────────────────────
 # Single source of truth used by BOTH the GhostScan breach list panel AND the
-# Hashcrack shared log BREACH_MATCH entries.  canonical_name is what appears in
+# Hashcrack cipher block's corpus readout.  canonical_name is what appears in
 # both UIs so the player can cross-reference them visually.
 #
 #   (canonical_name,          year,   record_count_label)
@@ -362,16 +367,32 @@ def _gs_band(title: str, accent: str, note: str = "") -> list[str]:
     return out
 
 
-def get_ghostscan_identity(candidate: Candidate) -> tuple[str, ...]:
-    """Free passive identity check — always visible in the ghostscan terminal."""
-    return tuple(_ghostscan_identity_lines(candidate))
+def get_ghostscan_identity(candidate: Candidate,
+                           upgrades: set | None = None) -> tuple[str, ...]:
+    """Free passive identity check — always visible in the ghostscan terminal.
+
+    #76: "free" means no ⏱ tool run, not "every verdict on it is free" — the
+    approved/prohibited verdict lines are upgrade-gated, see below.
+    """
+    return tuple(_ghostscan_identity_lines(candidate, upgrades=upgrades))
 
 
-def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[str]:
+def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True,
+                              upgrades: set | None = None) -> list[str]:
+    # #76: the approved/prohibited verdict here is the SAME classify_email_
+    # domain/classify_affiliation call the dossier's _hl_email/_hl_affil use,
+    # gated on the dossier behind Domain Whitelist/Blacklist HUD and Org
+    # Whitelist/Blacklist HUD -- but this panel showed the identical verdict
+    # unconditionally, for free, on the Ghostscan page. Same upgrades now gate
+    # it here too. Without the matching upgrade this falls back to the same
+    # neutral "verify via sweep" copy already used for domains/orgs the game
+    # genuinely doesn't recognise -- the tell disappears, not the underlying
+    # info (the sweep itself still confirms it once run).
+    upgrades = upgrades or ()
     d = candidate.dossier
     email_domain = candidate.email.split("@")[-1].lower() if "@" in candidate.email else ""
 
-    if email_domain in _GS_SUSPICIOUS_DOMAINS:
+    if email_domain in _GS_SUSPICIOUS_DOMAINS and config.UPGRADE_EMAIL_PROHIBITED in upgrades:
         email_flag = "[#ff5470]✗  disposable provider — flag immediately[/]"
     elif email_domain in _GS_PRIVACY_DOMAINS:
         # #58: was "privacy provider — flag if other issues present", which told
@@ -380,23 +401,30 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True) -> list[s
         # board_accuracy_bonus counts that as a false positive — so the UI was
         # instructing an action the scoring model punishes. Context, not an
         # instruction: it is real corroboration, it is not itself a violation.
+        # Not upgrade-gated: it isn't an approved/prohibited verdict at all.
         email_flag = ("[#ffd93d]?  anonymous mail provider — legitimate, but "
                       "offers no identity trail[/]")
-    elif email_domain in _GS_TRUSTED_DOMAINS or email_domain.endswith((".edu", ".ac.uk")):
+    elif (email_domain in _GS_TRUSTED_DOMAINS or email_domain.endswith((".edu", ".ac.uk")))             and config.UPGRADE_EMAIL_APPROVED in upgrades:
         email_flag = "[#00ff9f]✓  recognised provider[/]"
     else:
         email_flag = "[#6b7785]-  unknown domain — verify affiliation[/]"
 
     affil_lower = candidate.claimed_affiliation.lower()
-    if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW):
+    if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW) and config.UPGRADE_AFFIL_PROHIBITED in upgrades:
         affil_flag = "[#ff5470]✗  known threat actor community[/]"
-    elif any(kw in affil_lower for kw in _GS_TRUSTED_AFFIL_KW):
+    elif any(kw in affil_lower for kw in _GS_TRUSTED_AFFIL_KW) and config.UPGRADE_AFFIL_APPROVED in upgrades:
         # #56: this is a GUARANTEE now, not a hint. A trusted organisation cannot
         # be faked on a dossier - the generator refuses to plant an affiliation
         # violation on a candidate claiming one - so the sweep will always
         # confirm it. Worded as the guarantee it is, because that is the
         # player's reward: a trusted domain plus a trusted org means the
         # ghostscan step can be skipped entirely.
+        #
+        # #76: that reward is now Org Whitelist HUD's to hand out, same as the
+        # dossier's equivalent highlight. Without the upgrade the guarantee
+        # still HOLDS (the generator still won't fake it) -- the player just
+        # isn't told about it for free, and falls through to the same
+        # "verify via sweep" prompt an unrecognised org gets.
         affil_flag = ("[#00ff9f]✓  trusted organisation — cannot be faked, "
                       "sweep will confirm[/]")
     elif affil_lower in ("independent", "freelance", "self-employed", ""):
@@ -439,6 +467,8 @@ def _ghostscan_sweep_lines(
     show_forums: bool = False,
     day_number: int = 1,
     show_breach: bool | None = None,
+    show_sock: bool | None = None,
+    show_forum_match: bool | None = None,
 ) -> list[str]:
     """Render the fixed platform sweep for one candidate.
 
@@ -480,6 +510,14 @@ def _ghostscan_sweep_lines(
     has_breach   = any(d.kind == DiscrepancyKind.BREACH_HIT             for d in candidate.truth.discrepancies)
     has_forum    = any(d.kind == DiscrepancyKind.THREAT_FORUM_MATCH     for d in candidate.truth.discrepancies)  # v2
     has_burner   = any(d.kind == DiscrepancyKind.BURNER_IDENTITY        for d in candidate.truth.discrepancies)  # v2
+
+    # #75: SOCK_PUPPET_ACCOUNTS and THREAT_FORUM_MATCH auto-confirm on the free
+    # base run when their own upgrade is owned -- config.UPGRADE_SOCK_AUTO /
+    # UPGRADE_FORUM_AUTO, same shape as show_breach/UPGRADE_BREACH_AUTO above.
+    # Default to show_forums when not given, so every existing caller keeps
+    # the old show_forums-gated behavior.
+    _show_sock = show_forums if show_sock is None else show_sock
+    _show_forum_match = show_forums if show_forum_match is None else show_forum_match
 
     claimed_affil  = candidate.claimed_affiliation
     claimed_handle = candidate.handle
@@ -644,7 +682,15 @@ def _ghostscan_sweep_lines(
         noise_h = rng.choice(_GS_NOISE_HANDLES)
         lines.append(f"[#2e3d4f]  {forum:<20}  {noise_h}[/]")
         if has_sock or has_forum:
-            if show_forums:
+            # #75: each kind's own upgrade governs whether ITS row auto-reveals
+            # here, independent of the other. A candidate carrying both kinds
+            # can have one revealed and the other still blended.
+            _reveal_row = (
+                show_forums
+                or (has_forum and _show_forum_match)
+                or (has_sock and _show_sock)
+            )
+            if _reveal_row:
                 lines.append(f"[#ff5470]  {forum:<20}  {claimed_handle}  [CRITICAL][/]")
                 if first_crit_ann:
                     lines.append("  [#ff8c42]▲ handle on known threat actor forum[/]")
@@ -659,7 +705,7 @@ def _ghostscan_sweep_lines(
         noise_h = rng.choice(_GS_NOISE_HANDLES)
         lines.append(f"[#2e3d4f]  {forum:<20}  {noise_h}[/]")
         if has_sock and forum == advisory_hit:
-            if show_forums:
+            if show_forums or _show_sock:
                 lines.append(f"[#ff8c42]  {forum:<20}  {claimed_handle}  [ADVISORY][/]")
             else:
                 lines.append(f"[#2e3d4f]  {forum:<20}  {claimed_handle}[/]")
@@ -695,7 +741,7 @@ def _ghostscan_sweep_lines(
                 lines.append(f"  [#ff8c42]▲ email in {len(_dbs)} breach corpora — "
                              f"check Hashcrack for password reuse[/]")
             else:
-                lines.append(f"  [#ff8c42]▲ email in breach corpus[/]")
+                lines.append("  [#ff8c42]▲ email in breach corpus[/]")
 
 
     return lines
@@ -770,27 +816,51 @@ def run_ghostscan_shared(candidate: Candidate, state) -> ToolResult:
     rng = _random.Random(int(candidate.id, 16) ^ 0x6057CAD1)
     # Batch-3 task #4c: config.UPGRADE_BREACH_AUTO ("Breach Feed Sync") makes
     # breach-corpus confirmation fire on the free base run too — "the lists
-    # are static, so it makes sense to have this automated" (Nick). Threat
-    # forums stay gated behind the real filter run; only the breach section
-    # is affected.
+    # are static, so it makes sense to have this automated" (Nick).
+    # #75: UPGRADE_SOCK_AUTO ("Sockpuppet Tracer") and UPGRADE_FORUM_AUTO
+    # ("Forum Watch") do the same for SOCK_PUPPET_ACCOUNTS and
+    # THREAT_FORUM_MATCH, each independently of the other and of the breach
+    # upgrade — owning one doesn't auto-confirm a different kind. Without any
+    # of the three, threat forums stay gated behind the real filter run.
     _breach_auto = config.UPGRADE_BREACH_AUTO in getattr(state, "upgrades", ())
+    _sock_auto   = config.UPGRADE_SOCK_AUTO   in getattr(state, "upgrades", ())
+    _forum_auto  = config.UPGRADE_FORUM_AUTO  in getattr(state, "upgrades", ())
     has_breach = any(d.kind == DiscrepancyKind.BREACH_HIT
+                     for d in candidate.truth.discrepancies)
+    has_sock   = any(d.kind == DiscrepancyKind.SOCK_PUPPET_ACCOUNTS
+                     for d in candidate.truth.discrepancies)
+    has_forum  = any(d.kind == DiscrepancyKind.THREAT_FORUM_MATCH
                      for d in candidate.truth.discrepancies)
     # Issue #28: the report REPLACES the terminal content (no stacked
     # reports), so the free identity block is folded in at the top.
     raw_lines  = list(
-        _ghostscan_identity_lines(candidate, hint=False)
+        _ghostscan_identity_lines(candidate, hint=False,
+                                  upgrades=getattr(state, "upgrades", ()))
         + [""]
         # #61: day drives which breach corpora exist today.
         + _ghostscan_sweep_lines(candidate, rng, show_forums=False,
                                  day_number=getattr(state, 'current_day', 1),
-                                 show_breach=_breach_auto)
+                                 show_breach=_breach_auto,
+                                 show_sock=_sock_auto,
+                                 show_forum_match=_forum_auto)
     )
     if _breach_auto and has_breach:
         raw_lines += [
             "",
             "[#c084fc]── [AUTO] Breach Feed Sync ─────────────────────────────[/]",
             "  [#ff5470][b]▲ BREACH_HIT[/][/]  — email confirmed in breach corpus",
+        ]
+    if _sock_auto and has_sock:
+        raw_lines += [
+            "",
+            "[#c084fc]── [AUTO] Sockpuppet Tracer ────────────────────────────[/]",
+            "  [#ff5470][b]▲ SOCK_PUPPET_ACCOUNTS[/][/]  — handle confirmed across sock-puppet cluster",
+        ]
+    if _forum_auto and has_forum:
+        raw_lines += [
+            "",
+            "[#c084fc]── [AUTO] Forum Watch ──────────────────────────────────[/]",
+            "  [#ff5470][b]▲ THREAT_FORUM_MATCH[/][/]  — handle confirmed on known threat-actor forum",
         ]
     n_findings = len(_findings_from(candidate, ToolName.GHOSTSCAN))
     summary = (
@@ -809,7 +879,8 @@ def run_ghostscan_filtered_shared(candidate: Candidate, state) -> ToolResult:
     # Issue #28: the filtered report REPLACES the base report in-place —
     # same layout, annotations lit — rather than printing a second copy.
     raw_lines = tuple(
-        _ghostscan_identity_lines(candidate, hint=False)
+        _ghostscan_identity_lines(candidate, hint=False,
+                                  upgrades=getattr(state, "upgrades", ()))
         + [""]
         + _ghostscan_sweep_lines(candidate, rng, show_forums=True,
                                  day_number=getattr(state, 'current_day', 1))
@@ -973,48 +1044,33 @@ def get_breach_lists_for_day(
     return result
 
 
-# ─── Hashcrack — shared credential audit log ────────────────────────────────
+# ─── Credential-event helpers ───────────────────────────────────────────────
 #
-# Shared day log of credential events: AUTH_FAIL/OK (stuffing patterns),
-# HASH_SUBMIT (hash type + truncated value), BREACH_MATCH (corpus entries).
-# Generated once per day. Player scrolls to find their candidate's email,
-# then runs crack (H) to highlight + crack inline, filter (F) for labels.
+# 2026-09-14 — what used to be here was the Hashcrack page's own shared
+# credential audit log: ~440 lines spanning _hc_candidate_entries,
+# _hc_noise_entries, generate_hashcrack_day_log, _render_hc_log,
+# get_hashcrack_shared, run_hashcrack_shared and run_hashcrack_filtered_shared.
+# The cipher-block rework removed all of it.
+#
+# The Hashcrack page has no log to render any more — it IS the aperture
+# minigame now (see "HASHCRACK — the cipher block" at the end of this module).
+# The two row types that carried real evidence and had nowhere else to live,
+# HASH_SUBMIT and BREACH_MATCH, were relocated into the Logwatch day log, which
+# is already an audit log (BREACH_MATCH was removed again 2026-09-19 — breach
+# hits belong to Ghostscan/Hashcrack only); see the credential-rows block at the end of
+# _lw_candidate_entries below. The AUTH_OK/AUTH_FAIL bursts did NOT move —
+# Logwatch has always generated its own for the kinds it owns, and merging
+# would have printed every burst twice.
+#
+# Deleted rather than parked as dead code deliberately. A renderer nothing
+# calls, still computing violation labels from ground truth, is exactly the
+# surface this module keeps drifting on — #48 and #57 were each two copies of
+# one list that fell out of step, and this would have been a third.
+#
+# What survives is the small amount still in use: the algorithm label for the
+# relocated HASH_SUBMIT rows.
 
-_HC_DATE          = "2024-01-15"
-_HC_NOISE_USERS   = ["j.morris", "r.chen", "s.patel", "admin", "k.okonkwo",
-                      "t.nakamura", "l.vasquez", "d.kowalski", "m.ibrahim",
-                      "a.petrov", "b.silva", "c.johannsen", "n.reyes", "p.walsh"]
-_HC_NOISE_DOMAINS = ["corp.net", "internal.io", "hackdox.local", "company.org"]
-_HC_NOISE_IPS     = ["10.0.1.15", "10.0.1.42", "10.0.2.7", "10.0.3.88",
-                      "192.168.0.55", "192.168.1.200", "172.16.0.14"]
-_HC_BREACH_NAMES  = [db[0] for db in _BREACH_DATABASES]  # keep in sync with _BREACH_DATABASES
 _HC_ALGO_LABEL_MAP = {32: "MD5", 40: "SHA1", 64: "SHA256"}
-
-_HC_WEAK_PASSWORDS   = ["password", "123456", "password123", "letmein", "qwerty",
-                         "admin", "welcome1", "monkey", "dragon", "sunshine",
-                         "iloveyou", "princess", "1234567890", "abc123"]
-_HC_LEAKED_PASSWORDS = ["letmein2019", "summer2021!", "dragon2020", "welcome@corp",
-                         "monkey123!", "sunshine2018", "iloveyou01", "admin2022"]
-
-
-@dataclass
-class _HCLogEntry:
-    ts_secs:        int
-    ts_str:         str
-    event:          str          # AUTH_FAIL | AUTH_OK | HASH_SUBMIT | BREACH_MATCH
-    ip:             str          # source IP (or "--" for BREACH_MATCH)
-    account:        str          # email / username
-    detail:         str          # hash snippet for HASH_SUBMIT, breach name for BREACH_MATCH
-    owner_id:       str | None
-    is_suspicious:  bool
-    violation_kind: str | None   # "stuffing" | "brute" | "weak" | "leaked"
-                                 # | "reuse" | "unsalted" | None
-
-
-def _hc_ts_str(secs: int) -> str:
-    h, r = divmod(secs % 86400, 3600)
-    m, s = divmod(r, 60)
-    return f"{_HC_DATE} {h:02d}:{m:02d}:{s:02d}"
 
 
 def _hc_algo(h: str | None) -> str:
@@ -1025,448 +1081,6 @@ def _hc_algo(h: str | None) -> str:
     return _HC_ALGO_LABEL_MAP.get(len(h), "?")
 
 
-def _hc_candidate_entries(candidate, rng: _random.Random, day_number: int) -> list[_HCLogEntry]:
-    from .. import config as _cfg
-
-    _kinds = {d.kind for d in candidate.truth.discrepancies}
-    has_leaked = DiscrepancyKind.LEAKED_PASSWORD in _kinds
-    has_weak = DiscrepancyKind.WEAK_CREDENTIAL in _kinds
-    has_reuse = DiscrepancyKind.CROSS_BREACH_REUSE in _kinds
-    has_unsalt = DiscrepancyKind.UNSALTED_STORAGE in _kinds
-
-    has_hashbad = has_leaked or has_weak or has_reuse or has_unsalt
-    # #62: the burst below used to fire on `has_cred`, so EVERY weak- or
-    # leaked-credential candidate got an AUTH_FAIL storm annotated "credential
-    # stuffing pattern" — measured at 91 of 91, none of which carried
-    # CREDENTIAL_STUFFING. Because that kind is LOGWATCH-tier
-    # (candidate_gen._SEVERITY_REVEAL), it can never appear on the Hashcrack
-    # evidence board either, so the player had no way to reconcile the claim
-    # against anything. This is the inverted form of the recurring bug class:
-    # not ground truth with no artifact, but an artifact with no ground truth.
-    # The burst is now derived from the violation instead of asserted alongside
-    # a different one.
-    has_stuffing = any(d.kind == DiscrepancyKind.CREDENTIAL_STUFFING
-                       for d in candidate.truth.discrepancies)
-
-    # The login burst is gated on the LOG kinds, never on the credential kinds.
-    # A weak or leaked password says nothing about how the account was logged
-    # into — planting a burst for it invented evidence the ground truth did not
-    # contain, and labelled a single-account attack as "credential stuffing".
-    #
-    #   BRUTE_FORCE_IN_LOG   one account, many tries   -> "brute"
-    #   CREDENTIAL_STUFFING  one IP, many accounts,
-    #                        1-2 tries each            -> "stuffing"
-    has_brute    = DiscrepancyKind.BRUTE_FORCE_IN_LOG  in _kinds
-    has_stuffing = DiscrepancyKind.CREDENTIAL_STUFFING in _kinds
-
-    account    = candidate.email
-    claimed_ip = candidate.dossier.claimed_ip or "10.0.0.1"
-    ext_ip     = f"185.{rng.randint(100,220)}.{rng.randint(1,254)}.{rng.randint(1,254)}"
-    t          = rng.randint(*_cfg.HC_WORKDAY_WINDOW)
-
-    entries: list[_HCLogEntry] = []
-
-    if has_stuffing:
-        # Credential-stuffing burst from external IP. Gated on the violation
-        # itself (#62) — a bad password is not an attack pattern, and rendering
-        # one as the other taught the player a tell that meant nothing.
-        #
-        # Batch-3/merge note: this used to build a victims[] sweep across up to
-        # 6 OTHER accounts (rng.sample(_HC_NOISE_USERS, min(6, ...))) with 1-2
-        # tries each — leftover pre-batch-3 code that a merge resolution
-        # brought back over this branch's own simplification. That hard 6-cap
-        # silently ignored HC_STUFFING_BURST_SIZE above 6 (config extracted the
-        # literal but the surrounding shape never actually read it past that
-        # cap), which is what test_hashcrack_stuffing_burst_size_is_configurable
-        # caught. Restored to the batch-3 version: burst straight-line AUTH_FAILs
-        # against the candidate's own account, same shape as the brute-force
-        # branch below and as Logwatch's LW_BRUTE_BURST_SIZE — burst actually
-        # drives the count now, at any size.
-        burst = rng.randint(*_cfg.HC_STUFFING_BURST_SIZE)
-        for i in range(burst):
-            entries.append(_HCLogEntry(
-                ts_secs=t+i, ts_str=_hc_ts_str(t+i),
-                event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
-                owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
-            ))
-        t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="AUTH_OK", ip=ext_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=True, violation_kind="stuffing",
-        ))
-        t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
-    elif has_brute:
-        # Brute force: many tries against the SINGLE target account.
-        burst = rng.randint(5, 9)
-
-        for i in range(burst):
-            entries.append(_HCLogEntry(
-                ts_secs=t+i, ts_str=_hc_ts_str(t+i),
-                event="AUTH_FAIL", ip=ext_ip, account=account, detail="",
-                owner_id=candidate.id, is_suspicious=True, violation_kind="brute",
-            ))
-        t += burst + rng.randint(*_cfg.HC_STUFFING_COOLDOWN)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="AUTH_OK", ip=ext_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=True, violation_kind="brute",
-        ))
-        t += rng.randint(*_cfg.HC_STUFFING_POST_GAP)
-    else:
-        # Normal login
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="AUTH_OK", ip=claimed_ip, account=account, detail="",
-            owner_id=candidate.id, is_suspicious=False, violation_kind=None,
-        ))
-        t += rng.randint(*_cfg.HC_NORMAL_LOGIN_GAP)
-
-    # Hash submission
-    h_val = candidate.dossier.submitted_hash or ""
-    if h_val:
-        algo    = _hc_algo(h_val)
-        snippet = h_val[:16] + ".."
-        vk      = ("weak" if has_weak else "leaked" if has_leaked
-                   else "reuse" if has_reuse else "unsalted" if has_unsalt else None)
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event="HASH_SUBMIT", ip=ext_ip if (has_stuffing or has_brute) else claimed_ip,
-
-            account=account, detail=f"{algo}:{snippet}",
-            owner_id=candidate.id, is_suspicious=has_hashbad,
-            violation_kind=vk,
-        ))
-        t += rng.randint(*_cfg.HC_HASH_SUBMIT_GAP)
-
-    # Breach match rows. #61: both the first and the second corpus now come
-    # from breach_dbs_for_candidate(), which is the SAME function the Ghostscan
-    # breach panel seeds from — so the databases Hashcrack names are exactly
-    # the databases the player can find the email in. The second corpus used to
-    # be picked by `(int(id,16) >> 8) % len(_HC_BREACH_NAMES)` with a decrement
-    # to dodge collisions, which knew nothing about the Ghostscan side and
-    # could name a corpus that isn't unlocked yet.
-    if has_leaked or has_reuse:
-        corpora = breach_dbs_for_candidate(candidate, day_number)
-        for i, corpus in enumerate(corpora):
-            if i:
-                t += rng.randint(*_cfg.HC_BREACH_ROW_GAP)
-            entries.append(_HCLogEntry(
-                ts_secs=t, ts_str=_hc_ts_str(t),
-                event="BREACH_MATCH", ip="--", account=account, detail=corpus,
-                owner_id=candidate.id, is_suspicious=True,
-                violation_kind=("leaked" if has_leaked and not i else "reuse"),
-            ))
-            t += rng.randint(5, 20)
-
-    return entries
-
-
-def _hc_noise_entries(rng: _random.Random, count: int) -> list[_HCLogEntry]:
-    from .. import config as _cfg
-
-    entries: list[_HCLogEntry] = []
-    for _ in range(count):
-        user   = rng.choice(_HC_NOISE_USERS)
-        domain = rng.choice(_HC_NOISE_DOMAINS)
-        ip     = rng.choice(_HC_NOISE_IPS)
-        t      = rng.randint(*_cfg.HC_NOISE_TIME_WINDOW)
-        acct   = f"{user}@{domain}"
-        evt    = rng.choice(_cfg.HC_NOISE_EVENT_WEIGHTS)
-        detail = ""
-        if evt == "HASH_SUBMIT":
-            algo    = rng.choice(["MD5", "SHA256", "SHA256", "SHA1"])
-            snippet = "".join(rng.choice("0123456789abcdef") for _ in range(16)) + ".."
-            detail  = f"{algo}:{snippet}"
-        elif evt == "BREACH_MATCH":
-            detail = rng.choice(_HC_BREACH_NAMES)
-            ip     = "--"
-        entries.append(_HCLogEntry(
-            ts_secs=t, ts_str=_hc_ts_str(t),
-            event=evt, ip=ip, account=acct, detail=detail,
-            owner_id=None, is_suspicious=False, violation_kind=None,
-        ))
-    return entries
-
-
-def generate_hashcrack_day_log(game_seed: int, day) -> list[_HCLogEntry]:
-    """Shared credential audit log for the full day. Volume scales with day
-    number per config (batch-3 task #4d/#7 — was a flat max(80, 160-n))."""
-    from .. import config as _cfg
-    from .candidate_gen import generate as _gen_candidate
-
-    rng     = _random.Random(_stable_hash(game_seed, day.number, "hc_day") & 0xFFFFFFFF)
-    entries: list[_HCLogEntry] = []
-
-    for slot in range(day.candidate_count):
-        cand  = _gen_candidate(game_seed, day, slot)
-        crng  = _random.Random(_stable_hash(game_seed, day.number, slot, "hc_entries") & 0xFFFFFFFF)
-        entries.extend(_hc_candidate_entries(cand, crng, day.number))
-
-    base_noise = _cfg.HC_ENTRIES_BY_DAY.get(day.number, _cfg.HC_ENTRIES_DEFAULT)
-    last_key   = max(_cfg.HC_ENTRIES_BY_DAY.keys()) if _cfg.HC_ENTRIES_BY_DAY else 1
-    if day.number > last_key:
-        extra_days = day.number - last_key
-        base_noise = int(_cfg.HC_ENTRIES_BY_DAY.get(last_key, _cfg.HC_ENTRIES_DEFAULT)
-                         * (_cfg.HC_ENTRIES_SCALE_FACTOR ** extra_days))
-    n_noise = max(_cfg.HC_ENTRIES_MIN, base_noise - len(entries))
-    entries.extend(_hc_noise_entries(rng, n_noise))
-    entries.sort(key=lambda e: e.ts_secs)
-    return entries
-
-
-def _render_hc_log(
-    entries:       list[_HCLogEntry],
-    target_id:     str | None,
-    candidate,
-    annotate:      bool = False,
-    explicit_tags: bool = False,
-    upgrade_highlight: bool = False,   # hash_highlight upgrade ("Credential
-                                       # HUD"): colours the candidate's own
-                                       # suspicious lines + the "why" annotations
-    upgrade_verdict:   bool = False,   # hashcrack_verdict_highlight upgrade
-                                       # ("Crack Verdict Analyzer"): labels a
-                                       # crack's STRENGTH VERDICT ("no concern" /
-                                       # "always safe") — the plaintext itself
-                                       # reveals on any run either way (#6a)
-) -> tuple[str, ...]:
-    """Render the credential audit log to Rich markup lines.
-
-    Batch-3 tasks #4d/#6a: `annotate` alone used to be enough to turn on both
-    line-highlighting AND the inline "▲ why" annotations, which meant owning
-    hash_highlight never actually gated anything once the tool was run (any
-    base run already had annotate=True). Highlighting/annotation now key off
-    `highlight_active` (explicit_tags — the paid filter — OR upgrade_highlight)
-    instead. Cracking a password (revealing the plaintext) is NOT part of that
-    gate: it only needs `annotate` (the tool was actually run) — Nick's
-    instruction was that the crack must always work, only the "why is this
-    suspicious"/"this is a safe verdict" commentary is paywalled.
-    """
-    lines: list[str] = [
-        "[#3d6478]── credential audit log ──────────────────────────────────────[/]",
-        f"[dim]{_HC_DATE}  (all accounts — locate your target email below)[/]",
-        "",
-    ]
-
-    # Derive crack result for annotation. Issue #29: the plaintext is the
-    # generator's ground truth (dossier.password_plain), so the crack always
-    # matches the dossier hash. bcrypt (strong tier) never cracks.
-    crack_plaintext: str | None = None
-    neutral_crack = False   # clean candidate — crack succeeds, no violation
-    has_credkind = False
-    if annotate and target_id and candidate is not None:
-        has_credkind = any(d.kind in (
-            DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
-            DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE,
-        ) for d in candidate.truth.discrepancies)
-        crack_plaintext = crack_password(candidate)
-        neutral_crack = crack_plaintext is not None and not has_credkind
-
-    highlight_active = explicit_tags or upgrade_highlight
-    verdict_active    = explicit_tags or upgrade_verdict
-
-    evt_col = {
-        "AUTH_OK":      "#00ff9f",
-        "AUTH_FAIL":    "#ff5470",
-        "HASH_SUBMIT":  "#7dd3c0",
-        "BREACH_MATCH": "#ff8c42",
-    }
-
-    prev_vk: str | None = None
-    emitted_crack = False
-    breach_seen   = 0        # how many BREACH_MATCH rows we've annotated
-
-    for e in entries:
-        is_mine = (e.owner_id == target_id)
-        ec      = evt_col.get(e.event, "#6b7785")
-        det_str = f"  {e.detail}" if e.detail else ""
-        raw     = f"{e.ts_str}  [{ec}]{e.event:<12}[/]  {e.ip:<18}  {e.account}{det_str}"
-
-        if is_mine and e.is_suspicious and highlight_active:
-            col = "#ff5470" if explicit_tags else "#ff8c42"
-            lines.append(f"[{col}]{raw}[/]")
-
-            # Inline annotations — only the free-tier highlight styling here;
-            # explicit_tags (filter) has its own block below.
-            if upgrade_highlight and not explicit_tags:
-                if e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                    lines.append("  [#ff8c42]▲ this IP is failing against several "
-                                 "other accounts too[/]")
-                elif e.violation_kind == "brute" and prev_vk != "brute":
-                    lines.append("  [#ff8c42]▲ repeated failures against this one "
-                                 "account from a single IP[/]")
-                elif e.violation_kind in ("weak", "leaked") and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        attempts = "1" if e.violation_kind == "weak" else "found in corpus"
-                        lines.append(f"  [#ff8c42]▲ crack result  →  [b]{crack_plaintext}[/]  ({attempts})[/]")
-                        emitted_crack = True
-                elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
-                    lines.append("  [#ff8c42]▲ email confirmed in breach corpus[/]")
-                elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        _note = "reused across breaches" if e.violation_kind == "reuse" else "unsalted -- cracks instantly"
-                        lines.append(f"  [#ff8c42]▲ crack result  ->  [b]{crack_plaintext}[/]  ({_note})[/]")
-                        emitted_crack = True
-                elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    breach_seen += 1
-                    if breach_seen == 1:
-                        lines.append("  [#ff8c42]▲ email found in this breach corpus[/]")
-                    else:
-                        lines.append("  [#ff8c42]▲ the SAME password appears here too — reused across corpora[/]")
-
-
-            if explicit_tags:
-                if e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                    lines.append("  [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]  "
-                                 "— one source IP, many accounts, few tries each")
-                elif e.violation_kind == "brute" and prev_vk != "brute":
-                    lines.append("  [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]  "
-                                 "— one account, sustained failures")
-                elif e.violation_kind == "weak" and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        lines.append(f"  [#ff5470]▲ crack result  →  [b]{crack_plaintext}[/][/]")
-                        emitted_crack = True
-                elif e.violation_kind == "leaked" and e.event == "BREACH_MATCH":
-                    lines.append(f"  [#ff5470]▲ breach corpus confirmed: {e.detail}[/]")
-                elif e.violation_kind in ("reuse", "unsalted") and e.event == "HASH_SUBMIT" and not emitted_crack:
-                    if crack_plaintext:
-                        lines.append(f"  [#ff5470]▲ crack result  ->  [b]{crack_plaintext}[/][/]")
-                        emitted_crack = True
-                elif e.violation_kind == "reuse" and e.event == "BREACH_MATCH":
-                    breach_seen += 1
-                    if breach_seen == 1:
-                        lines.append(f"  [#ff5470][b]▲ BREACH_HIT[/][/]  — {e.detail}")
-                    else:
-                        lines.append(f"  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
-                                     f"— same plaintext also in {e.detail}")
-
-            prev_vk = e.violation_kind
-
-        elif is_mine:
-            lines.append(f"[#ffd93d]{raw}[/]")
-            # Issue #29 — the crack still runs on any base run (annotate=True)
-            # regardless of upgrades; only the WORDING differs. #4d: without
-            # Credential HUD, a violator's own HASH_SUBMIT line lands here
-            # (not the highlighted branch above) — reveal the plaintext
-            # plainly, with none of the "▲ why" framing that branch adds.
-            if (annotate and e.event == "HASH_SUBMIT" and not emitted_crack
-                    and candidate is not None):
-                _strength = password_strength(candidate.dossier.submitted_hash)
-                if _strength == "strong":
-                    if verdict_active:
-                        lines.append("  [#00ff9f]✓ crack abandoned — bcrypt "
-                                     "(~100 H/s) · strong encryption, always safe[/]")
-                    else:
-                        lines.append("  [dim]✓ crack abandoned — bcrypt "
-                                     "(~100 H/s) · no plaintext recovered[/]")
-                    emitted_crack = True
-                elif neutral_crack and crack_plaintext:
-                    if verdict_active:
-                        lines.append(f"  [#00ff9f]✓ crack result  →  "
-                                     f"[b]{crack_plaintext}[/]  "
-                                     f"(strong password — no concern)[/]")
-                    else:
-                        lines.append(f"  [#c8d4e1]crack result  →  "
-                                     f"[b]{crack_plaintext}[/][/]")
-                    emitted_crack = True
-                elif has_credkind and crack_plaintext:
-                    # A real violation, but Credential HUD isn't owned (or
-                    # this line simply wasn't the one the highlight branch
-                    # picked) — still reveal the plaintext, just without any
-                    # "▲ this is why it's suspicious" call-out.
-                    lines.append(f"  [#c8d4e1]crack result  →  "
-                                 f"[b]{crack_plaintext}[/][/]")
-                    emitted_crack = True
-            prev_vk = None
-        else:
-            lines.append(f"[#2e3d4f]{raw}[/]")
-            prev_vk = None
-
-    lines.append("")
-
-    if explicit_tags and target_id and candidate is not None:
-        has_leaked = any(d.kind == DiscrepancyKind.LEAKED_PASSWORD for d in candidate.truth.discrepancies)
-        has_weak   = any(d.kind == DiscrepancyKind.WEAK_CREDENTIAL  for d in candidate.truth.discrepancies)
-        has_reuse  = any(d.kind == DiscrepancyKind.CROSS_BREACH_REUSE for d in candidate.truth.discrepancies)
-        has_unsalt = any(d.kind == DiscrepancyKind.UNSALTED_STORAGE   for d in candidate.truth.discrepancies)
-        lines += [
-            "[#c084fc]── [FILTER] credential analysis ─────────────────────────────[/]",
-        ]
-        _any = False
-        if has_leaked:
-            lines.append("  [#ff5470][b]▲ LEAKED_PASSWORD[/][/]  -- plaintext confirmed in breach corpus"); _any = True
-        if has_weak:
-            lines.append("  [#ff5470][b]▲ WEAK_CREDENTIAL[/][/]  -- hash cracked in < 100 attempts"); _any = True
-        if has_reuse:
-            lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  -- reused password recurs across breach corpora"); _any = True
-        if has_unsalt:
-            lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  -- unsalted hash cracked instantly"); _any = True
-        if not _any:
-            lines.append("  [#00ff9f]✓ credential appears secure[/]")
-
-    lines.append(f"[dim]{len(entries)} entries  ·  highlighted = current target account[/]")
-    return tuple(lines)
-
-
-def get_hashcrack_shared(entries: list[_HCLogEntry], candidate,
-                         upgrade_highlight: bool = False) -> tuple[str, ...]:
-    """Free shared log — always visible on hashcrack page, no cost.
-    With the hash_highlight upgrade, suspicious lines are pre-coloured."""
-    return _render_hc_log(entries, target_id=candidate.id, candidate=candidate,
-                          upgrade_highlight=upgrade_highlight)
-
-
-def run_hashcrack_shared(entries: list[_HCLogEntry], candidate, state) -> ToolResult:
-    """Base run: highlights candidate + shows crack result inline.
-
-    Batch-3 task #4d: this used to call _render_hc_log with only
-    annotate=True and no upgrade flags — meaning hash_highlight ("Credential
-    HUD") never actually gated anything once the tool was run, since
-    annotate alone used to turn highlighting on. Now threads both upgrades
-    from state, same as the filtered run below.
-    """
-    _charge(state, "hashcrack")
-    _ups = getattr(state, "upgrades", ())
-    raw_lines = _render_hc_log(
-        entries, target_id=candidate.id, candidate=candidate, annotate=True,
-        upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in _ups,
-        upgrade_verdict=config.UPGRADE_HC_VERDICT in _ups)
-    strength = password_strength(candidate.dossier.submitted_hash)
-    cracked = any(d.kind in (
-        DiscrepancyKind.LEAKED_PASSWORD, DiscrepancyKind.WEAK_CREDENTIAL,
-        DiscrepancyKind.CROSS_BREACH_REUSE, DiscrepancyKind.UNSALTED_STORAGE,
-    ) for d in candidate.truth.discrepancies)
-    if cracked:
-        summary = "Hash cracked — review inline result. Run filter (F) to name the violation."
-    elif strength == "strong":
-        summary = "bcrypt credential — attempt abandoned. Strong encryption is always safe."
-    elif crack_password(candidate):
-        summary = "Hash cracked — plaintext revealed inline. Assess its strength yourself."
-    else:
-        summary = "No match found in common wordlist."
-    return ToolResult(tool=ToolName.HASHCRACK, findings=(), raw_lines=raw_lines, summary=summary)
-
-
-def run_hashcrack_filtered_shared(entries: list[_HCLogEntry], candidate, state) -> ToolResult:
-    """Filter: explicit violation labels."""
-    _charge(state, "hashcrack", filter=True)
-    findings  = _findings_from(candidate, ToolName.HASHCRACK)
-    _ups = getattr(state, "upgrades", ())
-    raw_lines = _render_hc_log(
-        entries, target_id=candidate.id, candidate=candidate, annotate=True,
-        explicit_tags=True,
-        upgrade_highlight=config.UPGRADE_HASH_HIGHLIGHT in _ups,
-        upgrade_verdict=config.UPGRADE_HC_VERDICT in _ups)
-    summary = (
-        f"[FILTERED] {len(findings)} credential finding(s) confirmed."
-        if findings else
-        "[FILTERED] Credential clean — no breach match, complexity threshold passed."
-    )
-    return ToolResult(
-        tool=ToolName.HASHCRACK, findings=findings,
-        raw_lines=raw_lines, summary=summary, filtered=True,
-    )
-
 
 
 # ─── Logwatch — shared day log ───────────────────────────────────────────────
@@ -1474,19 +1088,20 @@ def run_hashcrack_filtered_shared(entries: list[_HCLogEntry], candidate, state) 
 # One combined auth log for the full day, generated once from the game seed.
 # Candidate entries are interleaved with noise, sorted chronologically.
 #
-# Violations planted in the log:
-#   BRUTE_FORCE_IN_LOG — rapid AUTH_FAIL cluster on the same account (brute force)
-#                        OR AUTH_FAIL on multiple accounts from same IP (stuffing)
-#   IMPOSSIBLE_TRAVEL  — AUTH_OK from two geographically impossible IPs
-#   INSIDER_BEHAVIOR   — FILE_READ on sensitive path + SUDO_EXEC after 22:00
+# Violations planted in the log: brute force (burst on one account), credential
+# stuffing (one IP failing across many accounts, then logging in), impossible
+# travel, insider (sensitive reads + sudo off-shift), after-hours, low-and-slow
+# (scattered sub-threshold failures), claimed-IP mismatch (logins never from
+# the claimed IP). Plus honest noise: a benign single typo for ~30% of
+# candidates. Daytime activity is kept inside the LW_SHIFT window.
 #
-# All AUTH_OK entries carry a city tag (None for internal IPs).
-# Claimed IP mismatch is surfaced in the free tier as a subtle colour signal.
-#
-# Render modes:
-#   get_logwatch_shared(entries, candidate)                     — free, full log
-#   run_logwatch_shared(entries, candidate, state)              — ▲ inline markers
-#   run_logwatch_filtered_shared(entries, candidate, state)     — explicit labels
+# 2026-09-19 overhaul — the page has two surfaces over this one log:
+#   get_logwatch_shared(entries, candidate, state=)   — FREE: the Activity Report
+#                                                       (core/logwatch_report.py)
+#   run_logwatch_shared(entries, candidate, state)    — L: unseals the auth log panel
+#                                                       (raw_lines) + report (report_lines)
+#   run_logwatch_filtered_shared(...)                 — F: ▲ labels in both
+#   get_logwatch_log_lines(...)                       — the panel's lines on their own
 
 _LW_DATE = "2024-01-15"
 
@@ -1547,6 +1162,16 @@ _LW_NOISE_USERS   = ["j.morris", "r.chen", "s.patel", "admin", "k.okonkwo",
 _LW_NOISE_DOMAINS = ["corp.net", "internal.io", "hackdox.local", "company.org"]
 _LW_NOISE_IPS     = ["10.0.1.15", "10.0.1.42", "10.0.2.7", "10.0.3.88",
                       "192.168.0.55", "192.168.1.200", "172.16.0.14"]
+
+# Home/VPN/mobile prefixes for the second-routine-IP noise source
+# (config.LW_SECOND_IP_CHANCE, 2026-09-23) — plausible residential/ISP-style
+# ranges, deliberately disjoint from _LW_CITIES (the attack/travel city pool)
+# and _LW_NOISE_IPS (other users' internal IPs) so this noise can never read
+# as either of those. Not resolved through _LW_CITY_MAP — the row is tagged
+# with the candidate's own city directly (same place as their claimed IP),
+# which is the point: a second source, zero city change.
+_LW_HOME_ISP_PREFIXES = ["24.5.", "71.192.", "98.14.", "173.230.", "76.102.", "67.161."]
+
 _LW_SENSITIVE_PATHS = ["/etc/passwd", "/etc/shadow", "/root/.ssh/id_rsa", "/proc/keys"]
 _LW_NORMAL_PATHS    = ["/var/log/auth.log", "/home/user/.bash_history",
                         "/etc/cron.d/tasks", "/opt/app/config.json"]
@@ -1590,7 +1215,12 @@ class _LogEntry:
     city:           str | None = None   # populated on AUTH_OK for external IPs
 
 
-def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
+def _lw_candidate_entries(candidate, rng: _random.Random,
+                          day_number: int = 1) -> list[_LogEntry]:
+    # `day_number` is kept for API stability (it used to seed the BREACH_MATCH
+    # rows, removed 2026-09-19). Defaulted so the many
+    # existing two-argument callers (tests, mostly) keep working; the real day
+    # is threaded through from generate_day_log().
     from .. import config as _cfg
 
     kinds = {d.kind for d in candidate.truth.discrepancies}
@@ -1606,6 +1236,7 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
     account    = candidate.email
     entries: list[_LogEntry] = []
     t = rng.randint(*_cfg.LW_WORKDAY_WINDOW)
+    t_first_login = t
 
     # The candidate's real login origin. v2: when the claimed IP doesn't match,
     # their logins come from an external address (≠ the dossier claim), which
@@ -1627,7 +1258,9 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
 
     if has_brute:
         # Brute force: rapid AUTH_FAIL on the SAME account, then AUTH_OK.
-        ext_ip, ext_city = _lw_ext_ip(rng, "185.220.")
+        # 2026-09-19: random attack city (was always 185.220./Frankfurt, which
+        # made "Frankfurt origin" itself a brute-force tell on the report).
+        ext_ip, ext_city = _lw_ext_ip(rng)
         burst = rng.randint(*_cfg.LW_BRUTE_BURST_SIZE)
         for i in range(burst):
             entries.append(_LogEntry(
@@ -1648,7 +1281,9 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
     if has_stuffing:
         # v2 Credential stuffing: one external IP sprays AUTH_FAIL across many
         # *other* accounts (few tries each), then lands AUTH_OK on the candidate.
-        ext_ip, ext_city = _lw_ext_ip(rng, "45.131.")
+        # 2026-09-19: random attack city (was always the unmapped 45.131.
+        # prefix, i.e. an "unresolved" origin = stuffing tell on the report).
+        ext_ip, ext_city = _lw_ext_ip(rng)
         sprayed = rng.sample(_LW_NOISE_USERS,
                               min(_cfg.LW_STUFFING_SPRAY_SIZE, len(_LW_NOISE_USERS)))
         for i, fake_user in enumerate(sprayed):
@@ -1669,7 +1304,16 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
         t += rng.randint(*_cfg.LW_STUFFING_COOLDOWN)
 
     if has_travel:
-        city_a_entry, city_b_entry = rng.sample(_LW_CITIES, 2)
+        # 2026-09-20: the two cities must be far enough apart that the
+        # LW_TRAVEL_GAP between them is impossible at ANY airliner speed —
+        # honest business travel is now generated too (see the trip block
+        # below), and the two must never be confusable.
+        from .logwatch_report import distance_between as _dist
+        for _ in range(40):
+            city_a_entry, city_b_entry = rng.sample(_LW_CITIES, 2)
+            _km = _dist(city_a_entry[1], city_b_entry[1])
+            if _km is None or _km >= _cfg.LW_TRAVEL_MIN_KM:
+                break
         ip_a = city_a_entry[0] + f"{rng.randint(1,254)}.{rng.randint(1,254)}"
         ip_b = city_b_entry[0] + f"{rng.randint(1,254)}.{rng.randint(1,254)}"
         entries.append(_LogEntry(
@@ -1760,6 +1404,153 @@ def _lw_candidate_entries(candidate, rng: _random.Random) -> list[_LogEntry]:
             ))
             t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
 
+    # ── Honest noise: a second routine IP, same city (2026-09-23) ─────────
+    # Cheaper and more common than the trip below: NOT travel, no flight-time
+    # math needed — the candidate additionally logs in once or twice from an
+    # ordinary second source (home network / VPN / mobile) tagged with the
+    # SAME city as their claimed login, so it can never form a travel pair
+    # (build_logwatch_report skips consecutive-clean pairs with place_a ==
+    # place_b). Own RNG stream, independent of the trip roll and of any
+    # planted discrepancy, so this doesn't perturb anything else and can
+    # stack with a trip on the same candidate.
+    _second_rng = _random.Random(_stable_hash(candidate.id, "lw_second_ip") & 0xFFFFFFFF)
+    if _second_rng.random() < _cfg.LW_SECOND_IP_CHANCE:
+        # login_city is None whenever the login IP is internal (the normal
+        # case — claimed_ip is always an internal address, and _lw_city maps
+        # 10./172.16./192.168. to None). The report only ever prints the
+        # dossier's claimed_location for the claimed-IP origin itself, so
+        # matching THAT here (falling back to login_city for the ipmis case,
+        # where login_ip is already external) is what keeps this row from
+        # accidentally pairing into `travel` against the real login.
+        _home_place = login_city or getattr(candidate.dossier, "claimed_location", None) or "On-site"
+        _prefix2 = _second_rng.choice(_LW_HOME_ISP_PREFIXES)
+        _ip2 = _prefix2 + f"{_second_rng.randint(1,254)}.{_second_rng.randint(1,254)}"
+        for _ in range(_second_rng.randint(*_cfg.LW_SECOND_IP_LOGINS)):
+            entries.append(_LogEntry(
+                ts_secs=t, ts_str=_lw_ts(t), event="AUTH_OK",
+                ip=_ip2, account=account, extra="",
+                owner_id=candidate.id, is_suspicious=False,
+                violation_kind="second_ip", city=_home_place,
+            ))
+            t += _second_rng.randint(*_cfg.LW_SECOND_IP_GAP)
+
+    # ── Honest noise: a real business trip (2026-09-20) ───────────────────
+    # Without this, a second login city ALWAYS meant "deny": impossible travel
+    # was the only way one ever appeared. Now LW_LEGIT_TRIP_CHANCE of the
+    # candidates who carry no IMPOSSIBLE_TRAVEL actually fly somewhere and log
+    # in on arrival, so the player has to read the clock, not the map.
+    #
+    # The destination is chosen so the gap is at least LW_TRIP_TIME_MARGIN x
+    # the flight time it needs — comfortably under LW_MAX_FEASIBLE_KMH, the
+    # line the report treats as evidence. Planned HERE, before the shift
+    # compression below, so the compression can reserve room for it; the rows
+    # themselves are appended after it.
+    #
+    # Skipped for after-hours candidates: their late login from home would
+    # become a return leg with a much tighter gap, and a clean candidate must
+    # never produce an infeasible pair.
+    _trip: tuple[str, str, int] | None = None     # (ip, city, seconds needed)
+    _trip_rng = _random.Random(_stable_hash(candidate.id, "lw_legit_trip") & 0xFFFFFFFF)
+    if (not has_travel and not has_after
+            and _trip_rng.random() < _cfg.LW_LEGIT_TRIP_CHANCE):
+        from .logwatch_report import distance_between as _dist2
+        home_city = login_city or candidate.dossier.claimed_location
+        options = []
+        for prefix, city in _LW_CITIES:
+            km = _dist2(home_city, city)
+            if km is None or not (200 < km <= _cfg.LW_TRIP_MAX_KM):
+                continue
+            need = int((km / _cfg.LW_TRIP_CRUISE_KMH + _cfg.LW_TRIP_OVERHEAD_H)
+                       * 3600 * _cfg.LW_TRIP_TIME_MARGIN)
+            options.append((prefix, city, need))
+        if options:
+            prefix, city, need = _trip_rng.choice(options)
+            _trip = (prefix + f"{_trip_rng.randint(1,254)}.{_trip_rng.randint(1,254)}",
+                     city, need)
+
+    # ── Keep the working day inside the shift (2026-09-19) ────────────────
+    # The Activity Report counts off-hours activity against the standard
+    # shift, so everything on the daytime `t` chain (logins, attack bursts,
+    # travel, routine activity, the credential submission) must end before
+    # LW_SHIFT_END — otherwise an honest candidate reads as an after-hours
+    # worker. Long chains are compressed linearly toward the first login:
+    # order is preserved and gaps shrink proportionally (a 35-90 min travel
+    # gap stays impossible; second-scale bursts stay bursts). The deliberate
+    # off-hours blocks (insider / after-hours) and the scattered low-and-slow
+    # failures keep their own clocks.
+    _off_clock = {"insider", "after_hours", "low_and_slow"}
+    _day_rows = [e for e in entries if e.violation_kind not in _off_clock]
+    _latest = _cfg.LW_SHIFT_END - _cfg.LW_SHIFT_END_MARGIN
+    _reserve = _trip[2] if _trip else 0      # room for the trip's flight time
+    # The chain ends at the running clock `t` (>= the last daytime row); the
+    # HASH_SUBMIT row below lands one more gap after it, so reserve that gap.
+    _chain_end = max([t] + [e.ts_secs for e in _day_rows])
+    _gap_max = _cfg.LW_CLEAN_ACTIVITY_GAP[1]
+    if _chain_end + _gap_max + _reserve > _latest and _chain_end > t_first_login:
+        _k = (_latest - _gap_max - _reserve - t_first_login) / (_chain_end - t_first_login)
+        if _k <= 0:          # no room for the trip after all — drop it
+            _trip, _reserve = None, 0
+            _k = (_latest - _gap_max - t_first_login) / (_chain_end - t_first_login)
+        for e in _day_rows:
+            e.ts_secs = t_first_login + int((e.ts_secs - t_first_login) * _k)
+            e.ts_str = _lw_ts(e.ts_secs)
+        t = t_first_login + int((t - t_first_login) * _k)
+
+    # The planned trip's arrival logins, off the real end of the (possibly
+    # compressed) chain so they always land inside the shift.
+    if _trip is not None:
+        _ip, _city, _need = _trip
+        _chain = max([t] + [e.ts_secs for e in entries if e.owner_id == candidate.id])
+        _budget = _latest - _chain
+        if _budget >= _need:
+            tt = _chain + _trip_rng.randint(_need, _budget)
+            for _ in range(_trip_rng.randint(*_cfg.LW_TRIP_ARRIVAL_LOGINS)):
+                if tt > _latest:
+                    break
+                entries.append(_LogEntry(
+                    ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_OK",
+                    ip=_ip, account=account, extra="",
+                    owner_id=candidate.id, is_suspicious=False,
+                    violation_kind="legit_trip", city=_city,
+                ))
+                tt += _trip_rng.randint(*_cfg.LW_TRIP_ARRIVAL_GAP)
+
+    # ── Honest noise: one fumbled password (2026-09-19) ───────────────────
+    # A single AUTH_FAIL from the user's own origin just before their first
+    # login, for any candidate at LW_BENIGN_TYPO_CHANCE. Without it, "has a
+    # failed login at all" was itself a tell on the Activity Report. Own RNG
+    # stream so no other row in this candidate's block moves.
+    _typo_rng = _random.Random(_stable_hash(candidate.id, "lw_benign_typo") & 0xFFFFFFFF)
+    if _typo_rng.random() < _cfg.LW_BENIGN_TYPO_CHANCE:
+        tt = max(0, t_first_login - _typo_rng.randint(*_cfg.LW_BENIGN_TYPO_LEAD))
+        entries.append(_LogEntry(
+            ts_secs=tt, ts_str=_lw_ts(tt), event="AUTH_FAIL",
+            ip=login_ip, account=account, extra="",
+            owner_id=candidate.id, is_suspicious=False,
+            violation_kind="benign_typo", city=None,
+        ))
+
+    # ── Credential submission row (HASH_SUBMIT) ───────────────────────────
+    #
+    # 2026-09-14 the cipher-block rework relocated two credential rows here
+    # from the old Hashcrack audit log. 2026-09-19 (Logwatch report overhaul,
+    # Nick): the BREACH_MATCH corpus rows were REMOVED again — breach hits are
+    # Ghostscan's (breach panel) and Hashcrack's (cipher readout) business,
+    # never Logwatch's. HASH_SUBMIT stays as neutral context: which credential
+    # was submitted and from which IP. Deliberately is_suspicious=False —
+    # Logwatch owns no credential violation (see
+    # test_no_tool_claims_a_violation_another_tool_owns).
+    h_val = candidate.dossier.submitted_hash or ""
+    if h_val:
+        t += rng.randint(*_cfg.LW_CLEAN_ACTIVITY_GAP)
+        entries.append(_LogEntry(
+            ts_secs=t, ts_str=_lw_ts(t), event="HASH_SUBMIT",
+            ip=login_ip, account=account,
+            extra=f"{_hc_algo(h_val)}:{h_val[:16]}..",
+            owner_id=candidate.id, is_suspicious=False,
+            violation_kind="credential_artifact", city=None,
+        ))
+
     return entries
 
 
@@ -1804,7 +1595,7 @@ def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
     for slot in range(day.candidate_count):
         cand = _gen_candidate(game_seed, day, slot)
         crng = _random.Random(_stable_hash(game_seed, day.number, slot, "lw_entries") & 0xFFFFFFFF)
-        all_entries.extend(_lw_candidate_entries(cand, crng))
+        all_entries.extend(_lw_candidate_entries(cand, crng, day.number))
 
     # Noise count from config — scaled per day
     base_noise = _cfg.LW_ENTRIES_BY_DAY.get(day.number, _cfg.LW_ENTRIES_DEFAULT)
@@ -1825,25 +1616,38 @@ def _lw_render(
     candidate,
     annotate:         bool = False,
     explicit_tags:    bool = False,
-    upgrade_highlight: bool = False,   # log_highlight upgrade (issue #23):
-                                       # free tier colours suspicious lines,
-                                       # WITHOUT the ▲ annotations of a base run
+    upgrade_highlight: bool = False,
+    target_rows_out:  list[int] | None = None,
 ) -> tuple[str, ...]:
-    """Render the shared day log to Rich markup lines.
+    """Render the shared day log (the Logwatch page's right-hand auth log panel).
 
-    Free tier  : full log, candidate rows in yellow, claimed-IP mismatches in orange.
-    Annotate   : adds ▲ inline markers for violations.
-    Explicit   : adds ▲ VIOLATION_TYPE labels.
+    2026-09-19 overhaul — what each tier prints:
+      base (annotate / plain) : every row; the target account's rows in yellow,
+                                AUTH_OK rows from an IP other than the claimed
+                                one tinted orange (a fact the free report
+                                already states). NO labels — the player reads
+                                the shapes themselves.
+      explicit_tags (filter)  : the target's engine-flagged rows in red with
+                                ▲ VIOLATION_TYPE labels, plus the low-and-slow
+                                correlation line.
+      upgrade_highlight (HUD) : a neutral ▸ in the gutter of the target's rows
+                                the engine considers part of an anomaly. The
+                                SAME mark for every kind and never any text —
+                                the Log Analyzer HUD points, it does not name.
+                                Low-and-slow rows are not marked (they are
+                                sub-threshold by design).
+    `annotate` is kept for API compatibility and no longer adds anything.
+    `target_rows_out`, if given, receives the line index of every target row
+    (the panel's [ / ] jump keys use it).
     """
     claimed_ip = (candidate.dossier.claimed_ip or "") if candidate else ""
 
     lines: list[str] = [
-        "[#3d6478]── shared server log ──────────────────────────────────────────[/]",
-        f"[dim]{_LW_DATE}  (all users — locate your target account below)[/]",
+        f"[#3d6478]── auth log · {_LW_DATE} · all accounts ──[/]",
     ]
     if claimed_ip:
-        lines.append(f"[#6b7785]claimed IP[/]  [#ffd93d]{claimed_ip}[/]  "
-                     f"[dim](compare against AUTH_OK source IPs for candidate)[/]")
+        lines.append(f"[#6b7785]target claims[/] [#ffd93d]{claimed_ip}[/]  "
+                     f"[dim]rows in yellow are this account[/]")
     lines.append("")
 
     evt_col = {
@@ -1852,131 +1656,129 @@ def _lw_render(
         "FILE_READ":    "#7dd3c0",
         "SUDO_EXEC":    "#ff8c42",
         "SESSION_END":  "#6b7785",
+        # HASH_SUBMIT: neutral credential context (which credential was
+        # submitted, from where). Never a verdict — naming a credential
+        # violation is Hashcrack's job. (BREACH_MATCH removed 2026-09-19.)
+        "HASH_SUBMIT":  "#c084fc",
     }
-    # Batch-3 task #4e: `annotate` alone used to be enough to trigger
-    # highlighting — meaning log_highlight ("Log Analyzer HUD") never
-    # actually gated anything once the tool was run. The claimed-IP mismatch
-    # special-case below is intentionally NOT part of this gate — it's
-    # documented elsewhere (rules_content._CATCH) as always-free evidence,
-    # a different, pre-existing design decision this task doesn't touch.
-    highlight_active = explicit_tags or upgrade_highlight
+    _TAGS = {
+        "brute_force":       ("#ff5470", "BRUTE_FORCE_IN_LOG", "same account hammered, then a login"),
+        "stuffing":          ("#ff5470", "CREDENTIAL_STUFFING", "one source, many accounts"),
+        "impossible_travel": ("#ff8c42", "IMPOSSIBLE_TRAVEL", ""),
+        "insider":           ("#ff8c42", "INSIDER_BEHAVIOR", "after-hours + privilege escalation"),
+        "after_hours":       ("#ffd93d", "AFTER_HOURS_ACCESS", "minor — corroborate"),
+    }
     prev_vk: str | None = None
 
-    def _format_entry(e: _LogEntry, mine: bool, sus: bool, col: str) -> str:
+    def _row(e: _LogEntry, col: str, gutter: str) -> str:
         ec      = evt_col.get(e.event, "#6b7785")
-        city_s  = f"  [dim][{e.city}][/]" if e.city else ""
+        city_s  = f"  [dim]\\[{e.city}][/]" if e.city else ""
         extra_s = f"  {e.extra}" if e.extra else ""
-        row     = (f"{e.ts_str}  [{ec}]{e.event:<12}[/]  "
-                   f"{e.ip:<18}  {e.account}{extra_s}{city_s}")
+        return (f"{gutter}[{col}]{e.ts_str[11:]}  [/][{ec}]{e.event:<12}[/][{col}] "
+                f"{e.ip:<15}  {e.account}{extra_s}[/]{city_s}")
 
-        # In free tier: highlight claimed-IP mismatches for the candidate
-        if mine and not annotate and not explicit_tags:
-            if e.event == "AUTH_OK" and claimed_ip and e.ip != claimed_ip:
-                return f"[#ff8c42]{row}[/]"   # subtle orange — IP doesn't match claim
-            return f"[{col}]{row}[/]"
-        return f"[{col}]{row}[/]"
+    for e in entries:
+        is_mine = target_id is not None and e.owner_id == target_id
+        if not is_mine:
+            prev_vk = None
+            lines.append(_row(e, "#2e3d4f", "  "))
+            continue
+        if target_rows_out is not None:
+            target_rows_out.append(len(lines))
+        gutter = ("[#ffb454]▸[/] " if (upgrade_highlight and e.is_suspicious
+                                       and not explicit_tags) else "  ")
+        if explicit_tags and e.is_suspicious:
+            lines.append(_row(e, "#ff5470", gutter))
+            tag = _TAGS.get(e.violation_kind or "")
+            if tag and prev_vk != e.violation_kind:
+                tcol, name, note = tag
+                if e.violation_kind == "impossible_travel" and e.city:
+                    note = e.city
+                lines.append(f"    [{tcol}][b]▲ {name}[/][/]"
+                             + (f"  [dim]{note}[/]" if note else ""))
+            prev_vk = e.violation_kind
+            continue
+        prev_vk = None
+        mismatch = e.event == "AUTH_OK" and claimed_ip and e.ip != claimed_ip
+        lines.append(_row(e, "#ff8c42" if mismatch else "#ffd93d", gutter))
 
-    def _render_flat(entries_list: list[_LogEntry]) -> None:
-        nonlocal prev_vk
-        for e in entries_list:
-            is_mine = (e.owner_id == target_id)
-            if is_mine and e.is_suspicious and highlight_active:
-                col = "#ff5470" if explicit_tags else "#ff8c42"
-                lines.append(_format_entry(e, True, True, col))
-                if upgrade_highlight and not explicit_tags:
-                    if e.violation_kind == "brute_force" and e.event == "AUTH_FAIL" and prev_vk != "brute_force":
-                        lines.append("  [#ff8c42]▲ rapid auth failures on this account[/]")
-                    elif e.violation_kind == "stuffing" and e.event == "AUTH_OK" and prev_vk != "stuffing":
-                        lines.append("  [#ff8c42]▲ credential stuffing — same source IP targeting multiple accounts[/]")
-                    elif e.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
-                        lines.append(f"  [#ff8c42]▲ login from geographically distant IP  [{e.city}][/]")
-                    elif e.violation_kind == "insider" and prev_vk != "insider":
-                        lines.append("  [#ff8c42]▲ after-hours privileged access[/]")
-                    elif e.violation_kind == "after_hours" and prev_vk != "after_hours":
-                        lines.append("  [#ff8c42]▲ activity outside business hours[/]")
-                if explicit_tags:
-                    if e.violation_kind == "brute_force" and prev_vk != "brute_force":
-                        lines.append("  [#ff5470][b]▲ BRUTE_FORCE_IN_LOG[/][/]")
-                    elif e.violation_kind == "stuffing" and prev_vk != "stuffing":
-                        lines.append("  [#ff5470][b]▲ CREDENTIAL_STUFFING[/][/]  — one source IP, many accounts")
-                    elif e.violation_kind == "impossible_travel" and prev_vk != "impossible_travel":
-                        lines.append(f"  [#ff5470][b]▲ IMPOSSIBLE_TRAVEL[/][/]  [{e.city}]")
-                    elif e.violation_kind == "insider" and prev_vk != "insider":
-                        lines.append("  [#ff5470][b]▲ INSIDER_BEHAVIOR[/][/]  — after-hours + priv escalation")
-                    elif e.violation_kind == "after_hours" and prev_vk != "after_hours":
-                        lines.append("  [#ff8c42][b]▲ AFTER_HOURS_ACCESS[/][/]  — minor, corroborate")
-                prev_vk = e.violation_kind
-            elif is_mine:
-                prev_vk = None
-                # Claimed IP mismatch: orange even without annotation
-                if e.event == "AUTH_OK" and claimed_ip and e.ip != claimed_ip:
-                    if annotate or explicit_tags:
-                        lines.append(f"[#ff8c42]{_format_entry(e, True, False, '#ff8c42')}[/]")
-                        if annotate:
-                            lines.append("  [#ff8c42]▲ login IP differs from dossier claim[/]")
-                    else:
-                        lines.append(_format_entry(e, True, False, "#ffd93d"))
-                else:
-                    lines.append(_format_entry(e, True, False, "#ffd93d"))
-            else:
-                prev_vk = None
-                lines.append(_format_entry(e, False, False, "#2e3d4f"))
-
-    _render_flat(entries)
-
-    # v2 Low-and-slow only surfaces under the filter's cross-day correlation —
-    # the individual failures are sub-threshold and unflagged in the base run.
+    # Low-and-slow only surfaces under the filter's correlation — each
+    # failure is sub-threshold on its own.
     if explicit_tags and target_id:
         slow = [e for e in entries
                 if e.owner_id == target_id and e.violation_kind == "low_and_slow"]
         if slow:
             lines.append("")
             lines.append(
-                f"  [#ff5470][b]▲ LOW_AND_SLOW[/][/]  — {len(slow)} auth failures from "
-                f"{slow[0].ip} scattered across the day (each sub-threshold)"
-            )
+                f"  [#ff5470][b]▲ LOW_AND_SLOW[/][/]  {len(slow)} auth failures from "
+                f"{slow[0].ip} scattered across the day (each sub-threshold)")
 
     lines.append("")
-    lines.append(f"[dim]{len(entries)} entries  ·  highlighted = current target account[/]")
+    lines.append(f"[dim]{len(entries)} entries[/]")
     return tuple(lines)
 
 
+def _lw_report_lines(entries, candidate, state, log_state: str,
+                     hud: bool = False, width: int | None = None) -> tuple[str, ...]:
+    """The Activity Report (centre column) for one tier. See core/logwatch_report."""
+    from . import logwatch_report as _lr
+    report = _lr.build_logwatch_report(entries, candidate)
+    ups = getattr(state, "upgrades", ()) or ()
+    hud = hud or config.UPGRADE_LOG_HIGHLIGHT in ups
+    notes = config.UPGRADE_LOG_TRIAGE in ups      # Threat Triage HUD (2026-09-20)
+    travel = config.UPGRADE_LOG_MAP_TRAVEL in ups  # Flight Time Analyzer
+    conf = (_lr.filter_confirmations(entries, candidate, report)
+            if log_state == "filtered" else ())
+    cost = tool_cost(state, "logwatch") if state is not None else None
+    return _lr.render_report(report, log_state=log_state, hud=hud, notes=notes,
+                             travel=travel, confirmations=conf, pull_cost=cost,
+                             width=width)
+
+
 def get_logwatch_shared(entries: list[_LogEntry], candidate,
-                        upgrade_highlight: bool = False) -> tuple[str, ...]:
-    """Free full log — candidate highlighted, claimed-IP mismatches in orange.
-    With the log_highlight upgrade, suspicious lines are pre-coloured."""
-    return _lw_render(entries, candidate.id, candidate,
-                      upgrade_highlight=upgrade_highlight)
+                        upgrade_highlight: bool = False, state=None,
+                        width: int | None = None) -> tuple[str, ...]:
+    """FREE tier: the Activity Report with the auth log still sealed.
 
-
-def run_logwatch_shared(entries: list[_LogEntry], candidate, state) -> ToolResult:
-    """Base run: ▲ inline markers on anomalous entries. findings=() — player judges.
-
-    Batch-3 task #4e: previously called _lw_render with only annotate=True —
-    log_highlight ("Log Analyzer HUD") never actually gated anything once
-    the tool was run. Now threads the upgrade from state.
+    (Before 2026-09-19 this returned the whole raw log — see
+    core/logwatch_report.py for why that changed.) `upgrade_highlight` is the
+    Log Analyzer HUD; `state`, when given, also supplies the upgrade set and
+    the ⏱ cost shown in the footer.
     """
+    return _lw_report_lines(entries, candidate, state, "sealed",
+                            hud=upgrade_highlight, width=width)
+
+
+def get_logwatch_log_lines(entries: list[_LogEntry], candidate, state=None, *,
+                           filtered: bool = False,
+                           target_rows_out: list[int] | None = None) -> tuple[str, ...]:
+    """The auth log panel's lines for the current candidate."""
+    hud = config.UPGRADE_LOG_HIGHLIGHT in (getattr(state, "upgrades", ()) or ())
+    return _lw_render(entries, candidate.id, candidate, explicit_tags=filtered,
+                      upgrade_highlight=hud, target_rows_out=target_rows_out)
+
+
+def run_logwatch_shared(entries: list[_LogEntry], candidate, state,
+                        width: int | None = None) -> ToolResult:
+    """Base run (L): pulls the auth log into the panel. findings=() — the
+    player reads the log themselves. raw_lines = the log panel; report_lines
+    = the Activity Report re-rendered with the log open."""
     _charge(state, "logwatch")
-    _highlight = config.UPGRADE_LOG_HIGHLIGHT in getattr(state, "upgrades", ())
-    raw_lines  = _lw_render(entries, candidate.id, candidate, annotate=True,
-                            upgrade_highlight=_highlight)
-    n_findings = len(_findings_from(candidate, ToolName.LOGWATCH))
-    summary = (
-        f"{n_findings} anomalous pattern(s) flagged — review highlighted entries."
-        if n_findings else
-        "No suspicious patterns detected for this account."
-    )
-    return ToolResult(tool=ToolName.LOGWATCH, findings=(), raw_lines=raw_lines, summary=summary)
+    raw_lines = get_logwatch_log_lines(entries, candidate, state)
+    report = _lw_report_lines(entries, candidate, state, "open", width=width)
+    return ToolResult(tool=ToolName.LOGWATCH, findings=(), raw_lines=raw_lines,
+                      summary="auth log pulled — examine it in the right panel",
+                      report_lines=report)
 
 
-def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state) -> ToolResult:
-    """Filter: explicit ▲ VIOLATION_TYPE labels."""
+def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state,
+                                 width: int | None = None) -> ToolResult:
+    """Filter: explicit ▲ VIOLATION_TYPE labels in the log AND a ▲ CONFIRMED
+    block on the report."""
     _charge(state, "logwatch", filter=True)
     findings  = _findings_from(candidate, ToolName.LOGWATCH)
-    _highlight = config.UPGRADE_LOG_HIGHLIGHT in getattr(state, "upgrades", ())
-    raw_lines = _lw_render(entries, candidate.id, candidate,
-                            annotate=True, explicit_tags=True,
-                            upgrade_highlight=_highlight)
+    raw_lines = get_logwatch_log_lines(entries, candidate, state, filtered=True)
+    report = _lw_report_lines(entries, candidate, state, "filtered", width=width)
     summary = (
         f"[FILTERED] {len(findings)} violation(s) confirmed — see ▲ labels."
         if findings else
@@ -1985,6 +1787,7 @@ def run_logwatch_filtered_shared(entries: list[_LogEntry], candidate, state) -> 
     return ToolResult(
         tool=ToolName.LOGWATCH, findings=findings,
         raw_lines=raw_lines, summary=summary, filtered=True,
+        report_lines=report,
     )
 
 
@@ -2003,22 +1806,12 @@ def run_logwatch(candidate: Candidate, state) -> ToolResult:
                       raw_lines=("(legacy — use shared day log)",), summary="Run via logwatch page.")
 
 
-def run_hashcrack(candidate: Candidate, state) -> ToolResult:
-    """Legacy stub — callers should use run_hashcrack_shared() via app.py.
-
-    Pre-refactor this called two module-level helpers, _hashcrack_raw_lines()
-    and _hashcrack_filter_lines(), that no longer exist -- they were removed
-    when the shared-log Hashcrack implementation (run_hashcrack_shared,
-    above) replaced this path. Nothing calls run_hashcrack()/
-    run_hashcrack_filtered() any more (app.py routes through the *_shared
-    variants), so this was dead code that would have raised NameError if it
-    ever ran. Brought in line with the run_logwatch() stub just above, which
-    got the same treatment during that refactor.
-    """
-    _charge(state, "hashcrack")
-    return ToolResult(tool=ToolName.HASHCRACK, findings=(),
-                      raw_lines=("(legacy — use shared hashcrack log)",),
-                      summary="Run via hashcrack page.")
+# run_hashcrack() / run_hashcrack_filtered() used to sit here as legacy stubs,
+# pointing callers at run_hashcrack_shared(). Both were removed on 2026-09-14
+# along with the shared log itself: a stub whose docstring redirects to a
+# function that no longer exists is worse than no stub. Hashcrack has no
+# run/filter entry point at all now — the page is the cipher-block aperture
+# minigame, driven from IntakeScreen._open_aperture.
 
 # ─── Stegotool constants & helpers ────────────────────────────────────────────
 
@@ -2158,6 +1951,129 @@ def _stego_pixel_grid(candidate: Candidate, tier: str) -> list[str]:
     return lines
 
 
+def _stego_entropy_bar(value: int, band: tuple[int, int], colour: str,
+                       width: int | None = None, scale_max: int = 100) -> str:
+    """Magnitude bar for a 0-100 severity score -- fills left-to-right like
+    the Logwatch report's bars (logwatch_report._bar), with │ ticks
+    bracketing the expected/clean band. A channel that fills past the
+    upper tick reads as anomalous by shape alone; `colour` is the caller's
+    job to gate behind the Channel Colorizer upgrade
+    (config.UPGRADE_STEGO_RGB_COLOR) -- the bar's shape is free either way.
+    """
+    w = width or config.STEGO_BAR_WIDTH
+    band_lo, band_hi = band
+    filled = round(min(value, scale_max) / scale_max * w)
+    lo_tick = min(w - 1, max(0, round(band_lo / scale_max * w)))
+    hi_tick = min(w - 1, max(0, round(band_hi / scale_max * w)))
+    cells: list[str] = []
+    for i in range(w):
+        if i in (lo_tick, hi_tick):
+            cells.append("[#6b7785]│[/]")
+        elif i < filled:
+            cells.append(f"[{colour}]█[/]")
+        else:
+            cells.append("[#20303c]░[/]")
+    over = f"[{colour}]▸[/]" if value > scale_max else ""
+    return "".join(cells) + over
+
+
+def _stego_point_bar(value: float, scale: tuple[float, float],
+                     band: tuple[float, float], marker: str, colour: str,
+                     width: int | None = None) -> str:
+    """Point-value bar for a metric that should sit near a centre band (RS
+    ratio, LSB autocorrelation) rather than accumulate from zero like the
+    entropy bars above. Draws the expected band as a shaded strip between
+    two ticks and plots the observed value as a single marker glyph.
+    """
+    w = width or config.STEGO_BAR_WIDTH
+    lo, hi = scale
+    band_lo, band_hi = band
+
+    def pos(v: float) -> int:
+        v = max(lo, min(hi, v))
+        return round((v - lo) / (hi - lo) * (w - 1))
+
+    band_a, band_b = pos(band_lo), pos(band_hi)
+    vpos = pos(value)
+    cells: list[str] = []
+    for i in range(w):
+        if i == vpos:
+            cells.append(f"[{colour}][b]{marker}[/][/]")
+        elif band_a <= i <= band_b:
+            cells.append("[#3d4f5e]▒[/]")
+        else:
+            cells.append("[#20303c]░[/]")
+    return "".join(cells)
+
+
+def _stego_range_col(value: float, band: tuple[float, float], rgb_color: bool) -> str:
+    """Two-tier severity colour for a point-value metric (RS ratio,
+    autocorrelation), gated behind the same Channel Colorizer upgrade as
+    the RGB entropy bars -- neutral grey until it's owned."""
+    if not rgb_color:
+        return "#c8d4e1"
+    band_lo, band_hi = band
+    return "#ff5470" if (value < band_lo or value > band_hi) else "#00ff9f"
+
+
+def _stego_pair_col(x: float, y: float, band: tuple[float, float], rgb_color: bool) -> str:
+    """Severity colour for the RS 2-D point -- red if EITHER axis has
+    drifted outside the expected band, gated behind Channel Colorizer."""
+    if not rgb_color:
+        return "#c8d4e1"
+    lo, hi = band
+    out = x < lo or x > hi or y < lo or y > hi
+    return "#ff5470" if out else "#00ff9f"
+
+
+def _stego_rs_plane(x: float, y: float, scale: tuple[float, float],
+                    band: tuple[float, float], colour: str,
+                    width: int | None = None, height: int | None = None) -> list[str]:
+    """2-D scatter of the RS pair -- R-group ratio on X, S-group ratio on Y,
+    both sharing `scale`. The expected band is drawn as a shaded square on
+    both axes at once; a clean image's point sits inside it, and embedding
+    (which pushes R up and S down, or vice versa) drifts the point off the
+    square diagonally -- a paired divergence that two disconnected 1-D bars
+    couldn't show as one shape.
+    """
+    w = width or config.STEGO_RS_PLANE_W
+    h = height or config.STEGO_RS_PLANE_H
+    lo, hi = scale
+    band_lo, band_hi = band
+
+    def colpos(v: float) -> int:
+        v = max(lo, min(hi, v))
+        return round((v - lo) / (hi - lo) * (w - 1))
+
+    def rowpos(v: float) -> int:
+        # inverted: a higher S-ratio plots nearer the top row
+        v = max(lo, min(hi, v))
+        return round((hi - v) / (hi - lo) * (h - 1))
+
+    bx0, bx1 = sorted((colpos(band_lo), colpos(band_hi)))
+    by0, by1 = sorted((rowpos(band_hi), rowpos(band_lo)))
+    px, py = colpos(x), rowpos(y)
+
+    # Rounded corners (╭╮╰╯) deliberately, not the pixel-grid's sharp ┌┐└┘ —
+    # besides reading as a distinct "plot" frame from the image frame above
+    # it, get_stego_stats() strips everything between a "┌─" line and the
+    # matching "└" as the (relocated) pixel grid; a sharp-cornered box here
+    # would vanish from the stamp-analysis terminal along with it.
+    lines: list[str] = [f"[#3d6478]╭{'─' * w}╮[/]"]
+    for row in range(h):
+        cells: list[str] = []
+        for col in range(w):
+            if col == px and row == py:
+                cells.append(f"[{colour}][b]●[/][/]")
+            elif bx0 <= col <= bx1 and by0 <= row <= by1:
+                cells.append("[#3d4f5e]▒[/]")
+            else:
+                cells.append("[#20303c]·[/]")
+        lines.append(f"[#3d6478]│[/]{''.join(cells)}[#3d6478]│[/]")
+    lines.append(f"[#3d6478]╰{'─' * w}╯[/]")
+    return lines
+
+
 def get_stego_image_info(candidate: Candidate,
                          upgrades: set | None = None) -> tuple[str, ...]:
     """Free image metadata — always visible in the stegotool terminal, no cost."""
@@ -2185,6 +2101,25 @@ def _stego_image_lines(candidate: Candidate,
                       for d in candidate.truth.discrepancies)  # v2
     suspicious  = has_payload or has_c2 or has_enc
 
+    # Multiple points of contact: a suspicious image doesn't push every
+    # readout out of range together. Each signal group rolls its own "tell"
+    # independently, so sometimes only the RS plane reads anomalous while
+    # the RGB bars look clean, or the reverse -- no single readout is a
+    # reliable verdict on its own. A clean image never tells on any axis.
+    if suspicious:
+        tell_entropy = rng.random() < config.STEGO_TELL_CHANCE_ENTROPY
+        tell_rs      = rng.random() < config.STEGO_TELL_CHANCE_RS
+        tell_corr    = rng.random() < config.STEGO_TELL_CHANCE_CORR
+        if not (tell_entropy or tell_rs or tell_corr):
+            # never leave a genuinely suspicious image with zero free-tier
+            # tell -- force one signal so there's always at least one
+            # thread to pull before reaching for the stamp mechanic.
+            tell_entropy, tell_rs, tell_corr = rng.choice([
+                (True, False, False), (False, True, False), (False, False, True),
+            ])
+    else:
+        tell_entropy = tell_rs = tell_corr = False
+
     img_file    = candidate.dossier.submitted_image_path or "image.png"
     img_type    = "PNG" if img_file.endswith(".png") else "JPEG"
     width       = rng.choice([640, 800, 1024, 1280])
@@ -2207,7 +2142,7 @@ def _stego_image_lines(candidate: Candidate,
     g_score = rng.randint(10, 25)
     b_score = rng.randint(11, 26)
 
-    if suspicious:
+    if tell_entropy:
         # plant one anomalously high channel
         hot_ch = rng.choice(["R", "G", "B"])
         hot_score = rng.randint(62, 94)
@@ -2230,23 +2165,35 @@ def _stego_image_lines(candidate: Candidate,
         if s >= 31: return "#ff8c42"
         return "#00ff9f"
 
-    lines.append(f"  R channel LSB entropy  [{score_col(r_score)}]{r_score:>3}[/] / 100")
-    lines.append(f"  G channel LSB entropy  [{score_col(g_score)}]{g_score:>3}[/] / 100")
-    lines.append(f"  B channel LSB entropy  [{score_col(b_score)}]{b_score:>3}[/] / 100")
+    ent_band = config.STEGO_ENTROPY_EXPECTED
+    lines.append(f"  {'R channel entropy':<19}{_stego_entropy_bar(r_score, ent_band, score_col(r_score))} {r_score:>3}/100")
+    lines.append(f"  {'G channel entropy':<19}{_stego_entropy_bar(g_score, ent_band, score_col(g_score))} {g_score:>3}/100")
+    lines.append(f"  {'B channel entropy':<19}{_stego_entropy_bar(b_score, ent_band, score_col(b_score))} {b_score:>3}/100")
     lines.append("")
 
-    # RS analysis ratio — clean images near 1.0; stego images show divergence
-    if suspicious:
+    # RS analysis ratio — clean images near 1.0; stego images show divergence.
+    # Plotted as one 2-D point (R on X, S on Y) rather than two separate
+    # numbers, since the two ratios move in OPPOSITE directions together
+    # under embedding — a shape a pair of disconnected bars can't show.
+    if tell_rs:
         rs_r = round(rng.uniform(1.08, 1.22), 3)
         rs_s = round(rng.uniform(0.78, 0.92), 3)
     else:
         rs_r = round(rng.uniform(0.97, 1.03), 3)
         rs_s = round(rng.uniform(0.97, 1.03), 3)
-    lines.append(f"  RS analysis  R/S ratio  {rs_r:.3f} / {rs_s:.3f}")
+    rs_scale = config.STEGO_RS_SCALE
+    rs_band = config.STEGO_RS_EXPECTED
+    rs_col = _stego_pair_col(rs_r, rs_s, rs_band, _rgb_color)
+    lines.append(f"  RS pair analysis  [dim](R -> , S ^)[/]")
+    lines.extend(_stego_rs_plane(rs_r, rs_s, rs_scale, rs_band, rs_col))
+    lines.append(f"    R {rs_r:.3f}   S {rs_s:.3f}")
+    lines.append("")
 
     # Pixel pair correlation — clean near 0.0; stego shows disruption
-    corr = round(rng.uniform(0.08, 0.19) if suspicious else rng.uniform(-0.02, 0.03), 3)
-    lines.append(f"  LSB autocorrelation    {corr:+.3f}")
+    corr = round(rng.uniform(0.08, 0.19) if tell_corr else rng.uniform(-0.02, 0.03), 3)
+    corr_scale = config.STEGO_CORR_SCALE
+    corr_band = config.STEGO_CORR_EXPECTED
+    lines.append(f"  {'LSB autocorrelation':<19}{_stego_point_bar(corr, corr_scale, corr_band, 'x', _stego_range_col(corr, corr_band, _rgb_color))} {corr:+.3f}")
 
     return lines
 
@@ -2341,6 +2288,18 @@ def _stego_filter_lines(candidate: Candidate) -> list[str]:
     else:
         lines.append("  [#00ff9f]v all channels clean -- no LSB anomaly detected[/]")
 
+    # 2026-09-19: the carrier-shape axis rides on the colour kind above. Kept
+    # in step here only so this legacy path never disagrees with the stamp
+    # minigame about what the image carries (unreachable from the UI).
+    shape_kind = next((d.kind for d in candidate.truth.discrepancies
+                       if d.kind in _SHAPE_BY_KIND), None)
+    if suspicious and shape_kind is not None:
+        geometry, purpose = _STAMP_SHAPE_META[_SHAPE_BY_KIND[shape_kind]][:2]
+        lines += [
+            f"  [#ff5470][b]^ {shape_kind.value.upper()}[/][/]",
+            f"  [#6b7785]glyph:[/]   {geometry} -- {purpose}",
+        ]
+
     return lines
 
 
@@ -2378,18 +2337,6 @@ def run_logwatch_filtered(candidate: Candidate, state) -> ToolResult:
                       summary="[FILTERED] Run via logwatch page.", filtered=True)
 
 
-def run_hashcrack_filtered(candidate: Candidate, state) -> ToolResult:
-    """Legacy stub -- callers should use run_hashcrack_filtered_shared() via app.py.
-
-    See run_hashcrack() above -- same dead reference to helpers removed in
-    the shared-log refactor, fixed the same way.
-    """
-    _charge(state, "hashcrack", filter=True)
-    findings = _findings_from(candidate, ToolName.HASHCRACK)
-    return ToolResult(tool=ToolName.HASHCRACK, findings=findings,
-                      raw_lines=("(legacy -- use shared hashcrack log)",),
-                      summary="[FILTERED] Run via hashcrack page.", filtered=True)
-
 def run_stegotool_filtered(candidate: Candidate, state) -> ToolResult:
     """Per-channel LSB breakdown -- explicitly confirms payload type."""
     _charge(state, "stegotool", filter=True)
@@ -2418,10 +2365,25 @@ def run_stegotool_filtered(candidate: Candidate, state) -> ToolResult:
 #                            purple= covert C2 channel (multi-channel)
 #   density → carrier fill   dense block vs sparse scatter inside the zone
 #   size    → zone area      how much of the image the payload occupies
+#   shape   → payload PURPOSE (2026-09-19) — the glyph the carrier cells form,
+#             independent of colour (any colour can carry any shape):
+#                            conventional = clumped blocks / sequential runs
+#                                           (no extra violation)
+#                            cross    = + or X, strokes intersect
+#                                           → SIGNAL_COMMS_PAYLOAD
+#                            enclosed = hollow ring / diamond
+#                                           → RECURSIVE_PAYLOAD
+#                            slash    = 2-4 parallel strokes, never touching
+#                                           → HOSTILE_PAYLOAD
+#             Shape needs no colour of its own: it emerges from WHICH cells
+#             are carrier, so the widget paints carriers exactly as before.
 #
 # Once cumulative revealed coverage of the zone crosses
 # config.STEGO_STAMP_RESOLVE_COVERAGE the signature "resolves" and the
 # explicit ▲ violation label prints — the stamp equivalent of the old filter.
+# Without the filter the resolve block describes the glyph's GEOMETRY only
+# ("strokes cross at a single point"); naming its purpose (▲ HOSTILE_PAYLOAD
+# etc.) is filter-tier, exactly like naming the colour.
 
 _STAMP_KIND_META: dict[DiscrepancyKind, tuple[str, str, str]] = {
     # kind → (signature name, hex color, carrier description)
@@ -2430,7 +2392,216 @@ _STAMP_KIND_META: dict[DiscrepancyKind, tuple[str, str, str]] = {
     DiscrepancyKind.ENCRYPTED_PAYLOAD: (
         "CRIMSON", "#ff5470", "high-entropy carrier — XOR/encrypted payload"),
     DiscrepancyKind.COVERT_C2_CHANNEL: (
-        "VIOLET", "#c084fc", "sparse multi-channel scatter — covert C2 beacon pattern"),
+        "VIOLET", "#c084fc", "covert C2 beacon carrier — sparse multi-channel scatter"),
+}
+# Every description above reads "<payload type> — <texture>". The texture half
+# describes the CONVENTIONAL block layout; when a carrier takes a special shape
+# (below) its cells trace a glyph instead, so stamp_signature_lines prints only
+# the type half rather than contradict the glyph line under it. (2026-09-19:
+# the C2 entry was reordered type-first to fit that convention.)
+
+
+class StegoShape(str, Enum):
+    """The glyph a stego carrier's cells form — the payload-PURPOSE axis."""
+    CONVENTIONAL = "conventional"   # clumped blocks — no extra violation
+    CROSS        = "cross"          # + or X          → SIGNAL_COMMS_PAYLOAD
+    ENCLOSED     = "enclosed"       # hollow loop     → RECURSIVE_PAYLOAD
+    SLASH        = "slash"          # parallel strokes → HOSTILE_PAYLOAD
+
+
+# Ground truth → glyph. candidate_gen owns WHETHER a carrier has a special
+# shape (it plants the kind); this table only says which glyph renders it, so
+# the image can never disagree with ground truth — build_stego_image derives
+# the shape from the planted kind and never rolls one of its own.
+_SHAPE_BY_KIND: dict[DiscrepancyKind, StegoShape] = {
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD: StegoShape.CROSS,
+    DiscrepancyKind.RECURSIVE_PAYLOAD:    StegoShape.ENCLOSED,
+    DiscrepancyKind.HOSTILE_PAYLOAD:      StegoShape.SLASH,
+}
+
+# shape → (neutral GEOMETRY description, PURPOSE — filter tier only, ▲ kind).
+# The geometry string is what the player is told without the filter: an
+# observation of what the revealed cells already show on the grid, never the
+# purpose. Conventional has no ▲ kind and must never print a ▲ shape label.
+_STAMP_SHAPE_META: dict[StegoShape, tuple[str, str, DiscrepancyKind | None]] = {
+    StegoShape.CONVENTIONAL: (
+        "irregular blocks / sequential runs — no single figure",
+        "conventional carrier, no operation signature", None),
+    StegoShape.CROSS: (
+        "strokes cross at a single point",
+        "signal communications — relays traffic through the image",
+        DiscrepancyKind.SIGNAL_COMMS_PAYLOAD),
+    StegoShape.ENCLOSED: (
+        "closed loop, hollow interior",
+        "recursive payload — unpacks and re-embeds itself",
+        DiscrepancyKind.RECURSIVE_PAYLOAD),
+    StegoShape.SLASH: (
+        "parallel strokes, no intersections",
+        "hostile payload — built to corrupt or lock what it lands on",
+        DiscrepancyKind.HOSTILE_PAYLOAD),
+}
+
+
+def _touches(a, b) -> bool:
+    """True if any cell of `a` equals, or is 8-adjacent to, a cell of `b`."""
+    for (x, y) in a:
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if (x + dx, y + dy) in b:
+                    return True
+    return False
+
+
+# ── Special-shape glyph generators (2026-09-19) ─────────────────────────────
+# Each takes the carrier rng and the zone's (W, H) and returns the glyph's
+# STROKES in zone-local coordinates. They share the constraints the block
+# generator's comments below record from real bugs:
+#   • the glyph spans the zone (top row to bottom row), so a systematic sweep
+#     meets carrier cells well before coverage resolves;
+#   • strokes are legible: vertical-ish strokes are 2 columns wide wherever the
+#     zone allows, because a terminal cell is ~twice as tall as it is wide —
+#     one row of horizontal stroke already reads as thick;
+#   • the glyph only ever occupies ZONE cells, and coverage is computed from
+#     zone cells, so the stamp economy is identical to a conventional carrier.
+
+
+def _glyph_cross(rng, W: int, H: int) -> tuple[frozenset, ...]:
+    """A '+' (vertical bar across a horizontal bar) or an 'X' of diagonals.
+    Either way the two strokes genuinely share cells — they cross."""
+    if rng.random() < 0.5:
+        tv = 2 if W >= 8 else 1
+        th = 2 if H >= 12 else 1
+        jx, jy = max(0, W // 6), max(0, H // 6)
+        # Crossing point jitters inside the middle third, never onto an edge,
+        # so the bars always extend on both sides of it.
+        cx = W // 2 - tv // 2 + rng.randint(-jx, jx)
+        cy = H // 2 - th // 2 + rng.randint(-jy, jy)
+        cx = max(1, min(W - tv - 1, cx))
+        cy = max(1, min(H - th - 1, cy))
+        vert = frozenset((x, y) for x in range(cx, cx + tv) for y in range(H))
+        horiz = frozenset((x, y) for x in range(W) for y in range(cy, cy + th))
+        return (vert, horiz)
+    # 'X' — corner-to-corner diagonals drawn as 4-connected staircases: each
+    # row's span reaches the next row's first column, so the stroke never
+    # breaks into diagonal-only dots.
+    main: set = set()
+    for y in range(H):
+        lo = (y * W) // H
+        hi = max(lo + 1, ((y + 1) * W) // H)
+        main.update((x, y) for x in range(lo, min(W, hi + 1)))
+    anti = frozenset((W - 1 - x, y) for (x, y) in main)
+    return (frozenset(main), anti)
+
+
+def _glyph_enclosed(rng, W: int, H: int) -> tuple[frozenset, ...]:
+    """A closed, HOLLOW outline — an ellipse ring or a diamond.
+
+    Built row by row from a half-width profile. Each row's wall runs from its
+    own boundary inward to at least its neighbours' boundaries, which makes the
+    outline 4-connected and puts every interior cell's four neighbours either
+    on the outline or inside it — so the interior is sealed by construction (a
+    4-way flood fill from outside the glyph cannot reach it) and genuinely
+    empty: no carrier cell is ever placed inside.
+    """
+    diamond = rng.random() >= 0.5
+    t = 2 if W >= 10 else 1
+    cx = rx = (W - 1) / 2.0
+    cy = (H - 1) / 2.0
+    ry = cy + 0.5
+
+    def half_width(y: int) -> float:
+        u = min(1.0, abs(y - cy) / ry)
+        return rx * (1.0 - u) if diamond else rx * _math.sqrt(max(0.0, 1.0 - u * u))
+
+    for _attempt in range(2):
+        xl = [int(round(cx - half_width(y))) for y in range(H)]
+        xr = [int(round(cx + half_width(y))) for y in range(H)]
+        cells: set = set()
+        interior = 0
+        for y in range(H):
+            if y in (0, H - 1):
+                cells.update((x, y) for x in range(xl[y], xr[y] + 1))
+                continue
+            e = max(xl[y] + t - 1, xl[y - 1], xl[y + 1])
+            s = min(xr[y] - t + 1, xr[y - 1], xr[y + 1])
+            cells.update((x, y) for x in range(xl[y], min(e, xr[y]) + 1))
+            cells.update((x, y) for x in range(max(s, xl[y]), xr[y] + 1))
+            interior += max(0, s - e - 1)
+        if interior:
+            return (frozenset(cells),)
+        t = 1   # too tight for a 2-wide wall — thin it and retry
+    # Last resort, tiny zones only: a hollow rectangle encloses something
+    # whenever W, H >= 3, which every stego zone is (see the zone sizing).
+    rect = {(x, y) for x in range(W) for y in (0, H - 1)}
+    rect |= {(x, y) for y in range(H) for x in (0, W - 1)}
+    return (frozenset(rect),)
+
+
+def _glyph_slash(rng, W: int, H: int) -> tuple[frozenset, ...]:
+    """2-4 PARALLEL strokes — horizontal, vertical or diagonal — that never
+    touch: every stroke is a translate of the first, and no two are even
+    diagonally adjacent (≥1 clear cell between them everywhere)."""
+    want = rng.randint(2, 4)
+    orient = rng.choice(("horizontal", "vertical", "diagonal"))
+
+    def spread(n: int, span: int, size: int, gap: int) -> list[int] | None:
+        last = span - size
+        if n < 2 or last < (n - 1) * (size + gap):
+            return None
+        return [round(i * last / (n - 1)) for i in range(n)]
+
+    def straight(kind: str) -> tuple[frozenset, ...] | None:
+        if kind == "horizontal":
+            for n in range(want, 1, -1):
+                pos = spread(n, H, 1, 1)
+                if pos:
+                    return tuple(frozenset((x, y) for x in range(W)) for y in pos)
+            return None
+        tv = 2 if W >= 8 else 1
+        for n in range(want, 1, -1):
+            pos = spread(n, W, tv, 2)
+            if pos:
+                return tuple(frozenset((x, y) for x in range(p, p + tv)
+                                       for y in range(H)) for p in pos)
+        return None
+
+    if orient == "diagonal":
+        lean = rng.choice((1, -1))                 # '\' or '/'
+        # Shallowest lean first (reads most clearly as a slash), steepening
+        # until at least two strokes fit side by side in the zone.
+        for travel in (2 * (H - 1), (3 * (H - 1)) // 2, H - 1):
+            if travel < 1:
+                continue
+            base: set = set()
+            for y in range(H):
+                lo = (y * travel) // H
+                hi = max(lo + 1, ((y + 1) * travel) // H)
+                for x in range(lo, hi + 1):
+                    base.add((x if lean > 0 else travel + 1 - x, y))
+            base_w = max(x for x, _ in base) + 1
+            off = 2
+            while _touches(base, {(x + off, y) for x, y in base}):
+                off += 1
+            for n in range(want, 1, -1):
+                total = base_w + (n - 1) * off
+                if total <= W:
+                    x0 = (W - total) // 2
+                    return tuple(
+                        frozenset((x + x0 + i * off, y) for x, y in base)
+                        for i in range(n))
+        orient = rng.choice(("horizontal", "vertical"))
+    other = "vertical" if orient == "horizontal" else "horizontal"
+    strokes = straight(orient) or straight(other)
+    if strokes is None:     # unreachable for real zones (H >= 3); belt and braces
+        strokes = (frozenset((x, 0) for x in range(W)),
+                   frozenset((x, H - 1) for x in range(W)))
+    return strokes
+
+
+_GLYPH_BUILDERS = {
+    StegoShape.CROSS:    _glyph_cross,
+    StegoShape.ENCLOSED: _glyph_enclosed,
+    StegoShape.SLASH:    _glyph_slash,
 }
 
 
@@ -2457,6 +2628,15 @@ class StegoImageData:
     # and the tint can never be a false positive. Declared last because it has a
     # default and every field above it does not.
     hint_region: tuple[int, int, int, int] | None = None
+    # 2026-09-19: the payload-PURPOSE axis. `shape` is None for a clean image
+    # (no carrier to have a shape); otherwise CONVENTIONAL unless ground truth
+    # carries one of the shape kinds, in which case `shape_kind` names it.
+    # `strokes` is the glyph's decomposition in grid coordinates (empty for
+    # conventional blocks) — it unions to exactly `carrier`, and exists so the
+    # geometry guards can check "strokes cross / never touch" directly.
+    shape: StegoShape | None = None
+    shape_kind: DiscrepancyKind | None = None
+    strokes: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -2480,6 +2660,15 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
     (per the Notion design note: 'higher resolution → more pixels'). All the
     size knobs live in config.STEGO_GRID_* so this can be rebalanced without
     touching code.
+
+    Carrier SHAPE (2026-09-19) is derived, never rolled here: a planted
+    SIGNAL_COMMS / RECURSIVE / HOSTILE_PAYLOAD kind selects a cross / enclosed
+    / slash glyph inside the SAME zone, and anything else keeps the
+    conventional clumped-block layout — generated by the unchanged block code
+    below, so a conventional carrier is cell-for-cell what it always was. The
+    zone, grid size, hint region and base image are identical whatever the
+    shape, so the stamp economy (coverage is counted over zone cells) cannot
+    move with it.
     """
     rng = _random.Random(int(candidate.id, 16) ^ 0xB10CA0DE)
 
@@ -2528,6 +2717,10 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         hz_h = rng.randint(max(3, rows // 4), rows // 2)
         zone = (hz_x, hz_y, hz_w, hz_h)
         carrier_rng = _random.Random(int(candidate.id, 16) ^ 0x57A3B007)
+        shape_kind = next((d.kind for d in candidate.truth.discrepancies
+                           if d.kind in _SHAPE_BY_KIND), None)
+        shape = (_SHAPE_BY_KIND[shape_kind] if shape_kind is not None
+                 else StegoShape.CONVENTIONAL)
         # #54: carrier cells are CLUMPED into segmented rectangles rather than
         # scattered by an independent per-cell coin flip. The old uniform fill
         # produced static: revealing a cell told the player nothing about where
@@ -2547,47 +2740,60 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         # padding with random spare cells, which silently destroyed the very
         # clumping it was meant to preserve.
         zone_area = hz_w * hz_h
-        # More segments for the sparse types - "segmented rectangles grouped
-        # together in strange ways" needs enough pieces to read as segmented.
-        if has_c2:
-            n_blocks, fill = carrier_rng.randint(5, 8), 0.30
-        elif has_enc:
-            n_blocks, fill = carrier_rng.randint(3, 5), 0.45
+        strokes: tuple = ()
+        if shape is not StegoShape.CONVENTIONAL:
+            # A special glyph replaces the blocks outright, inside the same
+            # zone. Strokes come back zone-local; translate them onto the grid.
+            local = _GLYPH_BUILDERS[shape](carrier_rng, hz_w, hz_h)
+            strokes = tuple(frozenset((hz_x + x, hz_y + y) for x, y in st)
+                            for st in local)
+        if strokes:
+            # The glyph IS the carrier — the block layout below is skipped, and
+            # it is the CONVENTIONAL layout from here on, byte-for-byte the
+            # pre-shape generator (same rng, same draws, same cells).
+            cells = set().union(*strokes)
         else:
-            n_blocks, fill = carrier_rng.randint(2, 3), 0.55
+            # More segments for the sparse types - "segmented rectangles grouped
+            # together in strange ways" needs enough pieces to read as segmented.
+            if has_c2:
+                n_blocks, fill = carrier_rng.randint(5, 8), 0.30
+            elif has_enc:
+                n_blocks, fill = carrier_rng.randint(3, 5), 0.45
+            else:
+                n_blocks, fill = carrier_rng.randint(2, 3), 0.55
 
-        # Cap each block well short of the zone in BOTH axes. Without this, a
-        # large per-block area with a short height clamps bw to the full zone
-        # width and the payload renders as flat bands spanning the image - which
-        # reads as a scanline artifact, not an embedded object.
-        max_bw = max(2, int(hz_w * 0.55))
-        max_bh = max(1, int(hz_h * 0.55))
-        per_block = max(2, int(zone_area * fill / max(1, n_blocks)))
+            # Cap each block well short of the zone in BOTH axes. Without this, a
+            # large per-block area with a short height clamps bw to the full zone
+            # width and the payload renders as flat bands spanning the image - which
+            # reads as a scanline artifact, not an embedded object.
+            max_bw = max(2, int(hz_w * 0.55))
+            max_bh = max(1, int(hz_h * 0.55))
+            per_block = max(2, int(zone_area * fill / max(1, n_blocks)))
 
-        cells: set[tuple[int, int]] = set()
-        # Start at the zone CENTRE, not a random corner. A systematic sweep
-        # crosses the middle of the zone, so anchoring here means the player
-        # reliably lands on a carrier cell and sees the signature colour before
-        # coverage resolves. Starting from a random edge could put every block in
-        # one corner and let a sweep resolve the zone having touched nothing -
-        # observed for STEGO_PAYLOAD_PRESENT with the first version of this.
-        wx = hz_x + hz_w // 2
-        wy = hz_y + hz_h // 2
-        for _ in range(n_blocks):
-            bh = max(1, min(max_bh, carrier_rng.randint(1, max_bh)))
-            bw = max(2, min(max_bw, per_block // bh + carrier_rng.randint(0, 2)))
-            bx = max(hz_x, min(hz_x + hz_w - bw, wx - bw // 2))
-            by = max(hz_y, min(hz_y + hz_h - bh, wy - bh // 2))
-            for yy in range(by, min(by + bh, hz_y + hz_h)):
-                for xx in range(bx, min(bx + bw, hz_x + hz_w)):
-                    cells.add((xx, yy))
-            # Walk to a random edge of the block just placed, so the next block
-            # abuts or overlaps it from an unpredictable side. Always advancing
-            # to the same corner marched the whole group into one edge.
-            wx = bx + carrier_rng.choice([-1, 0, bw // 2, bw, bw + 1])
-            wy = by + carrier_rng.choice([-1, 0, bh // 2, bh, bh + 1])
-            wx = max(hz_x, min(hz_x + hz_w - 1, wx))
-            wy = max(hz_y, min(hz_y + hz_h - 1, wy))
+            cells: set[tuple[int, int]] = set()
+            # Start at the zone CENTRE, not a random corner. A systematic sweep
+            # crosses the middle of the zone, so anchoring here means the player
+            # reliably lands on a carrier cell and sees the signature colour before
+            # coverage resolves. Starting from a random edge could put every block in
+            # one corner and let a sweep resolve the zone having touched nothing -
+            # observed for STEGO_PAYLOAD_PRESENT with the first version of this.
+            wx = hz_x + hz_w // 2
+            wy = hz_y + hz_h // 2
+            for _ in range(n_blocks):
+                bh = max(1, min(max_bh, carrier_rng.randint(1, max_bh)))
+                bw = max(2, min(max_bw, per_block // bh + carrier_rng.randint(0, 2)))
+                bx = max(hz_x, min(hz_x + hz_w - bw, wx - bw // 2))
+                by = max(hz_y, min(hz_y + hz_h - bh, wy - bh // 2))
+                for yy in range(by, min(by + bh, hz_y + hz_h)):
+                    for xx in range(bx, min(bx + bw, hz_x + hz_w)):
+                        cells.add((xx, yy))
+                # Walk to a random edge of the block just placed, so the next block
+                # abuts or overlaps it from an unpredictable side. Always advancing
+                # to the same corner marched the whole group into one edge.
+                wx = bx + carrier_rng.choice([-1, 0, bw // 2, bw, bw + 1])
+                wy = by + carrier_rng.choice([-1, 0, bh // 2, bh, bh + 1])
+                wx = max(hz_x, min(hz_x + hz_w - 1, wx))
+                wy = max(hz_y, min(hz_y + hz_h - 1, wy))
 
         carrier = frozenset(sorted(cells))
         # Report the density we actually produced, not the one we hoped for.
@@ -2602,6 +2808,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
                        min(rows - hy, hz_h + 2 * buf))
     else:
         zone, carrier, hint_region = None, frozenset(), None
+        shape, shape_kind, strokes = None, None, ()
 
     def _base_rgb(x: int, y: int) -> tuple[int, int, int]:
         fx = x / max(1, cols - 1)
@@ -2640,6 +2847,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         hint_region=hint_region,
         filename=img_file, width=width, height=height,
         file_kb=file_kb, img_type=img_type,
+        shape=shape, shape_kind=shape_kind, strokes=strokes,
     )
 
 
@@ -2703,6 +2911,12 @@ def stamp_log_lines(img: StegoImageData, res: StampResult,
     player sees that a carrier is present and its density, but must read the
     stamp's COLOUR on the image to judge the payload type themselves. With the
     filter active, the named signature (AMBER/CRIMSON/VIOLET) is printed.
+
+    Carrier SHAPE is deliberately absent from the per-stamp block, filter or
+    not: one 8×4 window cannot show a glyph, so any per-stamp shape claim
+    would be the tool reading ground truth rather than reporting what this
+    stamp uncovered. The glyph is read on the grid as reveals accumulate and
+    is described (or, with the filter, named) once, in stamp_signature_lines.
     """
     head = (f"[#7dd3c0][b]STAMP {stamp_no:02d}[/][/] "
             f"[dim]@ ({x:>2},{y:>2})  −{config.STEGO_STAMP_COST} ⏱[/]")
@@ -2741,13 +2955,41 @@ def stamp_log_lines(img: StegoImageData, res: StampResult,
     return lines
 
 
+def stego_shape_hint_lines(is_special: bool) -> list[str]:
+    """Glyph Detector's one-line note on the stamp that FIRST lands on any
+    carrier cell — boolean only, never which shape, never the kind.
+
+    Deliberately its own function rather than a stamp_log_lines() branch:
+    that function's shape silence is a considered design constraint (an 8x4
+    stamp window cannot show a glyph, so a per-stamp shape CLAIM would be the
+    tool reading ground truth rather than reporting what the stamp
+    uncovered). This upgrade doesn't ask stamp_log_lines to do that — it
+    answers a narrower question ("is there a glyph here at all, yes or no"),
+    once, the moment the player has actually touched the carrier, and says
+    nothing about the carrier's geometry or purpose. That's still short of
+    what stamp_signature_lines' unfiltered `glyph:` line gives at full zone
+    coverage — this just moves the yes/no half of that reveal earlier.
+    """
+    if is_special:
+        return ["  [#c084fc][b]◆ special glyph detected[/][/]  "
+                "[dim]— this carrier isn't a conventional block; keep digging[/]"]
+    return ["  [dim]◇ conventional carrier — no special glyph here[/]"]
+
+
 def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> list[str]:
     """Block printed once when coverage resolves.
 
     Without the filter (`reveal_type=False`) the zone is confirmed as carrying
     a payload, but it is NOT named — the player must classify by the stamp
     colour. With the filter active, the explicit ▲ violation label prints
-    (the stamp-mechanic equivalent of the old filter tier)."""
+    (the stamp-mechanic equivalent of the old filter tier).
+
+    Carrier SHAPE (2026-09-19) follows the same two tiers. Unfiltered, a
+    `glyph:` line describes the figure's GEOMETRY neutrally — an observation
+    of what the revealed cells already show on the grid ("strokes cross at a
+    single point"), never its purpose. Filtered, a special shape also prints
+    its own ▲ label (▲ SIGNAL_COMMS_PAYLOAD etc.) beside the colour one. A
+    conventional carrier never prints a ▲ shape label at either tier."""
     if img.kind is None or img.zone is None:
         return []
     _sig, col, desc = _STAMP_KIND_META[img.kind]
@@ -2756,22 +2998,37 @@ def stamp_signature_lines(img: StegoImageData, reveal_type: bool = False) -> lis
     size_word = ("sprawling" if zw * zh >= img.cols * img.rows // 4
                  else "moderate" if zw * zh >= img.cols * img.rows // 8
                  else "compact")
+    shape = img.shape or StegoShape.CONVENTIONAL
+    geometry, purpose, shape_kind = _STAMP_SHAPE_META[shape]
+    if shape is not StegoShape.CONVENTIONAL:
+        desc = desc.split(" — ", 1)[0]   # type only; the glyph line has the layout
     if not reveal_type:
         return [
             "",
             "[#c8d4e1][b]▲ PAYLOAD ZONE MAPPED — carrier confirmed[/][/]",
             f"  [#6b7785]density:[/]  {dens}% fill",
             f"  [#6b7785]extent:[/]   {zw}×{zh} px zone ({size_word})",
+            f"  [#6b7785]glyph:[/]    {geometry}",
             "  [#6b7785]type:[/]     [dim]unclassified — inspect the stamp colour, or run filter (F) to classify[/]",
+            "  [#6b7785]purpose:[/]  [dim]unclassified — read the glyph's shape, or run filter (F) to name it[/]",
         ]
-    return [
+    lines = [
         "",
         f"[{col}][b]▲ {img.kind.value.upper()} — SIGNATURE RESOLVED[/][/]",
         f"  [#6b7785]carrier:[/]  {desc}",
         f"  [#6b7785]density:[/]  {dens}% fill",
         f"  [#6b7785]extent:[/]   {zw}×{zh} px zone ({size_word})",
-        "  [dim]flag it on the Evidence Board (Tab)[/]",
+        f"  [#6b7785]glyph:[/]    {geometry}",
     ]
+    if shape_kind is not None and img.shape_kind is shape_kind:
+        lines += [
+            f"[{col}][b]▲ {shape_kind.value.upper()} — GLYPH RESOLVED[/][/]",
+            f"  [#6b7785]purpose:[/]  {purpose}",
+        ]
+    else:
+        lines.append(f"  [#6b7785]purpose:[/]  [dim]{purpose}[/]")
+    lines.append("  [dim]flag it on the Evidence Board (Tab)[/]")
+    return lines
 
 
 def get_stego_stats(candidate: Candidate,
@@ -2802,3 +3059,675 @@ def get_stego_stats(candidate: Candidate,
         "",
     ]
     return tuple(header + out)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HASHCRACK — the cipher block
+# ════════════════════════════════════════════════════════════════════════════
+#
+# A standalone two-stage decryption minigame. Not a variant of the stego stamp:
+# there is no canvas to sweep and nothing spatially hidden. The whole block
+# decrypts at once, and the skill is reading the credential and tuning the
+# decrypt.
+#
+#   STAGE 0 (free)   The block renders as ciphertext with a header carrying
+#                    three plain observations: its dimensions, its glyph
+#                    alphabet, and its DIGEST SHAPE ("64 hex characters").
+#                    Those identify the algorithm to a player who has read the
+#                    reference table — and, separately, tell them whether the
+#                    credential is worth opening at all.
+#
+#   STAGE 1 (paid)   Choose one of three decryption windows. The matching one
+#                    engages the decrypt; any other wastes the spend. bcrypt's
+#                    window engages and then STALLS — correctly identifying
+#                    key-stretching is not the same as it being crackable, and
+#                    the only winning move is not to open it.
+#
+#   STAGE 2 (free*)  An alignment PAD. The decrypt has the right family but
+#                    the wrong derived key, and that key is an (x, y)
+#                    coordinate: walking toward it with the arrow keys brings
+#                    the plaintext into focus, cell by cell. On the exact
+#                    square the block locks and the credential resolves.
+#
+#                    *Free for the first config.CIPHER_DIAL_FREE_STEPS presses.
+#                    Past that a small ⏱ fee lands every
+#                    CIPHER_DIAL_OVERAGE_BLOCK further steps, so a wandering
+#                    search costs something a direct walk never does. See
+#                    step_overage_charge().
+#
+# The plaintext is TILED across the whole block rather than hidden in one run.
+# Partial alignment scrambles a different subset of cells in each repeat, so a
+# player who is close can read the password by consensus across rows — which is
+# what makes the last few steps satisfying rather than fiddly.
+#
+# Only stage 1 costs ⏱. The spend decision is made once, up front, on
+# information the player already had for free.
+
+
+_CIPHER_HEX_GLYPHS = "0123456789abcdef"
+# bcrypt's radix-64 alphabet, plus the $ that makes its blocks unmistakable at
+# a glance even before you count anything.
+_CIPHER_B64_GLYPHS = ("./$ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                      "abcdefghijklmnopqrstuvwxyz0123456789")
+
+# tier → (label, hex colour, algorithm name, one-line description)
+_CIPHER_TIER_META: dict[str, tuple[str, str, str, str]] = {
+    "weak":   ("WEAK",   "#ff5470", "MD5",
+               "32-hex digest, unsalted round — one pass, short dial"),
+    "medium": ("MEDIUM", "#ffd93d", "SHA256",
+               "64-hex digest — recoverable, but the key needs finding"),
+    "strong": ("STRONG", "#00ff9f", "bcrypt",
+               "key-stretched, cost factor 12 — no completion possible"),
+}
+
+# Outcomes of selecting a decryption window (stage 1).
+CIPHER_WINDOW_WRONG   = "wrong"     # window does not match the digest
+CIPHER_WINDOW_STALLED = "stalled"   # matched, but key-stretched — dead end
+CIPHER_WINDOW_ENGAGED = "engaged"   # matched and crackable — dial unlocks
+
+
+@dataclass(frozen=True)
+class CipherBlockData:
+    """Deterministic render model for one candidate's credential.
+
+    `cipher_glyphs` is what the player sees before any window is applied.
+    `plain_glyphs` is the fully-decrypted block — the password tiled across the
+    grid. `cell_tolerance` gives each cell its own threshold: at Manhattan
+    distance `err` from the true coordinate, a cell shows its plain glyph when
+    its tolerance clears `err`, and its cipher glyph otherwise. That is the
+    entire sharpening effect, and keeping it in the DATA rather than in the
+    renderer is what makes walking the pad back and forth show the same
+    picture every time.
+
+    `align_true_x` / `align_true_y` are the coordinate at which every cell
+    resolves. For bcrypt there is no pad and no plaintext: both spans are 0 and
+    `plaintext` is None, which is the single fact the whole strong tier turns
+    on.
+    """
+    cols:           int
+    rows:           int
+    tier:           str                  # "weak" | "medium" | "strong"
+    algo:           str                  # "MD5" | "SHA256" | "bcrypt"
+    cipher_glyphs:  tuple                # rows × cols of single-char strings
+    plain_glyphs:   tuple                # rows × cols — the tiled plaintext
+    cell_tolerance: tuple                # rows × cols of ints
+    align_true_x:   int
+    align_true_y:   int
+    align_span_x:   int                  # x walks 0 .. align_span_x
+    align_span_y:   int                  # y walks 0 .. align_span_y
+    align_falloff:  float                # tolerance-distribution exponent
+    plaintext:      str | None
+    hash_value:     str
+    # Defaults last (dataclass field order).
+    pre_revealed:   bool = False         # UNSALTED_STORAGE: arrives decrypted
+
+    @property
+    def crackable(self) -> bool:
+        """Whether stage 2 exists for this block at all."""
+        return self.plaintext is not None and self.tier != "strong"
+
+    @property
+    def align_true(self) -> tuple[int, int]:
+        """The true coordinate, as one (x, y) pair."""
+        return (self.align_true_x, self.align_true_y)
+
+    @property
+    def max_walk(self) -> int:
+        """Manhattan distance across the whole pad, corner to corner."""
+        return self.align_span_x + self.align_span_y
+
+    @property
+    def start_cursor(self) -> tuple[int, int]:
+        """Where the pad cursor begins — the CENTRE, not a corner.
+
+        Centre rather than (0, 0) for two reasons, and the second is the one
+        that matters. It halves the worst-case direct walk, from the pad's full
+        diagonal to half of it, so the step budget has far more headroom for a
+        player who walks straight. And it removes a free bit of information: a
+        corner start means the first press is never ambiguous, because three of
+        the four directions are walls. From the middle, every direction is
+        live, and the player has to read the block to choose one.
+        """
+        return (self.align_span_x // 2, self.align_span_y // 2)
+
+    @property
+    def worst_direct_walk(self) -> int:
+        """Steps a player who walks STRAIGHT at the key could face, worst case.
+
+        Measured from `start_cursor`, so it tracks the centre start rather than
+        assuming a corner: the farthest square from the middle of the pad is a
+        corner, at roughly half the full diagonal. This is the number the free
+        step allowance has to clear — see test_a_direct_walk_is_always_free.
+        """
+        sx, sy = self.start_cursor
+        return (max(sx, self.align_span_x - sx)
+                + max(sy, self.align_span_y - sy))
+
+    def error_at(self, x: int, y: int) -> int:
+        """Manhattan distance from (x, y) to the true coordinate.
+
+        Manhattan rather than Chebyshev on purpose — see the note on
+        config.CIPHER_ALIGN_SPAN. Every arrow press must move this by exactly
+        one, in one direction or the other, or the pad has dead zones where a
+        keypress appears to do nothing.
+        """
+        return abs(x - self.align_true_x) + abs(y - self.align_true_y)
+
+
+@dataclass(frozen=True)
+class WindowResult:
+    """Outcome of applying a decryption window (stage 1)."""
+    outcome:  str          # CIPHER_WINDOW_WRONG | _STALLED | _ENGAGED
+    chosen:   str          # tier key of the window the player picked
+    cost:     int          # ⏱ charged
+
+
+def cipher_tier(hash_value: str | None) -> str | None:
+    """The block tier for a submitted hash.
+
+    Deliberately a thin alias of password_strength() rather than a second
+    implementation — the dossier, the block and the rules page must never
+    disagree about what tier a hash is, and two functions computing it from the
+    same shape is how that drift starts.
+    """
+    return password_strength(hash_value)
+
+
+def _cipher_rng(candidate: Candidate) -> _random.Random:
+    """Per-candidate RNG for block layout. Distinct salt from the stego grid's
+    so the two surfaces cannot accidentally correlate."""
+    return _random.Random(int(candidate.id, 16) ^ 0x0C1F4E)
+
+
+def _digest_shape(hash_value: str) -> str:
+    """How the submitted hash LOOKS, as a free observation.
+
+    Never names the algorithm — that is the conclusion the player draws, or
+    buys Cipher ID HUD to have drawn for them. It only counts what is there.
+    """
+    if hash_value.startswith("$2b$"):
+        return f"$2b$ prefix, {len(hash_value)} characters"
+    return f"{len(hash_value)} hex characters"
+
+
+def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
+    """Build the render model for the two-stage decrypt.
+
+    Deterministic per candidate. Every size and difficulty knob lives in
+    config.CIPHER_* so this can be rebalanced without touching code.
+    """
+    h_val = candidate.dossier.submitted_hash or ""
+    tier  = cipher_tier(h_val) or "medium"
+    _lbl, _col, algo, _desc = _CIPHER_TIER_META[tier]
+
+    base_c, base_r = config.CIPHER_GRID_BASE[tier]
+    extra = max(0, day - 1)
+    cols = base_c + extra * config.CIPHER_GRID_GROWTH_COLS_PER_DAY
+    rows = base_r + extra // config.CIPHER_GRID_GROWTH_ROWS_PERIOD
+    max_c, max_r = config.CIPHER_GRID_MAX
+    cols, rows = min(cols, max_c), min(rows, max_r)
+
+    rng = _cipher_rng(candidate)
+    alphabet = _CIPHER_B64_GLYPHS if tier == "strong" else _CIPHER_HEX_GLYPHS
+    cipher = [[rng.choice(alphabet) for _ in range(cols)] for _ in range(rows)]
+
+    # bcrypt stamps its literal cost prefix into the top-left of the block.
+    # Structural evidence, not a label: the player is reading actual
+    # ciphertext, exactly as they would a real $2b$12$ hash.
+    if tier == "strong":
+        for i, ch in enumerate(config.CIPHER_BCRYPT_PREFIX[:cols]):
+            cipher[0][i] = ch
+
+    plaintext = crack_password(candidate)
+    span_x, span_y = config.CIPHER_ALIGN_SPAN[tier]
+    falloff        = config.CIPHER_ALIGN_FALLOFF[tier]
+
+    if not plaintext or tier == "strong":
+        # Strong tier: crack_password() already returns None for bcrypt, so
+        # there is no pad, no coordinate and no amount of ⏱ that changes it.
+        return CipherBlockData(
+            cols=cols, rows=rows, tier=tier, algo=algo,
+            cipher_glyphs=tuple(tuple(r) for r in cipher),
+            plain_glyphs=tuple(tuple(r) for r in cipher),
+            cell_tolerance=tuple(tuple(0 for _ in range(cols)) for _ in range(rows)),
+            align_true_x=0, align_true_y=0,
+            align_span_x=0, align_span_y=0, align_falloff=0.0,
+            plaintext=None, hash_value=h_val,
+        )
+
+    # The decrypted block: the password tiled across every row, separated so
+    # repeats are visually distinguishable from one long smear.
+    unit = plaintext + config.CIPHER_TILE_SEPARATOR
+    flat = (unit * (cols * rows // len(unit) + 2))[:cols * rows]
+    plain = [tuple(flat[y * cols:(y + 1) * cols]) for y in range(rows)]
+
+    # The true coordinate. Drawn from the SAME rng stream the glyphs came from,
+    # so a candidate's pad is as deterministic as their block.
+    align_true_x = rng.randint(0, span_x)
+    align_true_y = rng.randint(0, span_y)
+    # Per-cell tolerance. A cell with tolerance t resolves whenever the
+    # Manhattan error is within t, so the distribution of t across the block IS
+    # the reveal curve — see config.CIPHER_ALIGN_FALLOFF for its shape and why
+    # it is convex rather than uniform.
+    #
+    # The range STARTS AT ZERO, and that is load-bearing. A draw that gave
+    # every cell a tolerance of at least 1 would make err=1 render identically
+    # to err=0: the player would see a fully legible block one step away from
+    # true, with no way to tell they were not there yet. The zero-tolerance
+    # cells are the handful of characters that refuse to settle until the
+    # coordinate is exactly right, which is the whole "fine-tune it exactly"
+    # beat — and rounding a u near 0 lands on exactly that.
+    max_walk = span_x + span_y
+    cell_tol = tuple(
+        tuple(round(max_walk * rng.random() ** falloff) for _ in range(cols))
+        for _ in range(rows)
+    )
+
+    return CipherBlockData(
+        cols=cols, rows=rows, tier=tier, algo=algo,
+        cipher_glyphs=tuple(tuple(r) for r in cipher),
+        plain_glyphs=tuple(plain),
+        cell_tolerance=cell_tol,
+        align_true_x=align_true_x, align_true_y=align_true_y,
+        align_span_x=span_x, align_span_y=span_y,
+        align_falloff=falloff,
+        plaintext=plaintext, hash_value=h_val,
+        pre_revealed=bool(candidate.dossier.credential_unsalted),
+    )
+
+
+# ── Stage 1 — the decryption window ─────────────────────────────────────────
+
+
+def window_cost(state) -> int:
+    """⏱ to apply one decryption window — the tool's ordinary base cost.
+
+    Routed through tool_cost() rather than a constant of its own, so the
+    Hashcrack Optimizer upgrade and campaign inflation keep applying to this
+    tool exactly as they do to every other one.
+    """
+    return tool_cost(state, "hashcrack")
+
+
+def apply_window(block: CipherBlockData, chosen_tier: str, state) -> WindowResult:
+    """Charge for, and evaluate, one decryption-window choice.
+
+    Raises InsufficientCompute if unaffordable — and charges NOTHING in that
+    case, so a refused purchase can never leave the player worse off.
+    """
+    cost = window_cost(state)
+    if state.compute_hours < cost:
+        raise InsufficientCompute(
+            f"Need {cost} ⏱ to apply a decryption window, "
+            f"have {state.compute_hours} ⏱"
+        )
+    state.compute_hours -= cost
+
+    if chosen_tier != block.tier:
+        outcome = CIPHER_WINDOW_WRONG
+    elif block.crackable:
+        outcome = CIPHER_WINDOW_ENGAGED
+    else:
+        # Matched the algorithm, but the algorithm is the problem.
+        outcome = CIPHER_WINDOW_STALLED
+    return WindowResult(outcome=outcome, chosen=chosen_tier, cost=cost)
+
+
+def window_log_lines(block: CipherBlockData, res: WindowResult) -> list[str]:
+    """Terminal block for one window application."""
+    label = next((lbl for key, lbl, _shape in config.CIPHER_WINDOWS
+                  if key == res.chosen), res.chosen)
+    head = (f"[#c084fc][b]DECRYPTION WINDOW — {label}[/][/]  "
+            f"[dim]−{res.cost} ⏱[/]")
+
+    if res.outcome == CIPHER_WINDOW_WRONG:
+        return [
+            head,
+            ("  [#ff5470]no structure emerged[/] — this window does not "
+             "fit the digest"),
+            (f"  [dim]the block is {_digest_shape(block.hash_value)}; "
+             f"check it against the reference table before paying again[/]"),
+        ]
+    if res.outcome == CIPHER_WINDOW_STALLED:
+        return [
+            head,
+            "  [#00ff9f]window fits — and the decrypt stalls immediately[/]",
+            ("  [dim]key-stretched at cost factor 12: every guess costs the "
+             "same as the first. There is no alignment to find and no plaintext "
+             "to recover. Reading the digest would have told you this for "
+             "free.[/]"),
+        ]
+    return [
+        head,
+        "  [#c084fc][b]▲ decrypt engaged[/][/] — the block has structure",
+        ("  [dim]wrong derived key: walk the alignment pad until the text "
+         "comes into focus[/]"),
+    ]
+
+
+# ── Stage 2 — the alignment pad ─────────────────────────────────────────────
+
+
+def render_block(block: CipherBlockData, x: int, y: int,
+                 engaged: bool = True) -> list[list[tuple[str, bool]]]:
+    """The block as it looks from a given pad coordinate.
+
+    Returns rows of (glyph, resolved) pairs so the widget can colour resolved
+    cells without recomputing which ones they are. Before a window is applied
+    (`engaged=False`) every cell is ciphertext, wherever the cursor sits.
+
+    A pre-revealed block (UNSALTED_STORAGE) is fully resolved unconditionally:
+    no salt means the stored value is exposed with no tool run at all, which is
+    the violation itself.
+    """
+    if block.pre_revealed:
+        return [[(g, True) for g in row] for row in block.plain_glyphs]
+    if not engaged or not block.crackable:
+        return [[(g, False) for g in row] for row in block.cipher_glyphs]
+
+    err = block.error_at(x, y)
+    out: list[list[tuple[str, bool]]] = []
+    for gy in range(block.rows):
+        row: list[tuple[str, bool]] = []
+        for gx in range(block.cols):
+            if err <= block.cell_tolerance[gy][gx]:
+                row.append((block.plain_glyphs[gy][gx], True))
+            else:
+                row.append((block.cipher_glyphs[gy][gx], False))
+        out.append(row)
+    return out
+
+
+def alignment_locked(block: CipherBlockData, x: int, y: int) -> bool:
+    """True when the cursor is exactly on the key and the credential resolves."""
+    if block.pre_revealed:
+        return True
+    return block.crackable and (x, y) == block.align_true
+
+
+def resolved_fraction(block: CipherBlockData, x: int, y: int) -> float:
+    """Fraction of cells currently showing plaintext.
+
+    Used by the widget for the lock indicator and by tests to assert the
+    sharpening curve. Deliberately NOT surfaced to the player as a number —
+    the design is that they read the block, not a percentage.
+    """
+    if block.pre_revealed:
+        return 1.0
+    if not block.crackable:
+        return 0.0
+    err = block.error_at(x, y)
+    hit = sum(1 for row in block.cell_tolerance for t in row if err <= t)
+    return hit / max(1, block.cols * block.rows)
+
+
+def hint_band(block: CipherBlockData, upgrades: set | None = None
+              ) -> tuple[int, int, int, int] | None:
+    """The pad BOX Credential HUD marks, or None without the upgrade.
+
+    Returns an INCLUSIVE (x0, y0, x1, y1) box containing the true coordinate,
+    widened on each axis by config.CIPHER_HINT_FRACTION of THAT axis's span.
+    Per #54's lesson it narrows the search without answering it, and the base
+    tier marks nothing.
+
+    Per-axis rather than one shared half-width: the pads are much wider than
+    they are tall, so a single figure large enough to be a hint on X swallows
+    the whole of Y and hands that axis over for free.
+    """
+    if config.UPGRADE_HASH_HIGHLIGHT not in (upgrades or ()):
+        return None
+    if not block.crackable:
+        return None
+    bx = max(1, round(block.align_span_x * config.CIPHER_HINT_FRACTION))
+    by = max(1, round(block.align_span_y * config.CIPHER_HINT_FRACTION))
+    return (max(0, block.align_true_x - bx),
+            max(0, block.align_true_y - by),
+            min(block.align_span_x, block.align_true_x + bx),
+            min(block.align_span_y, block.align_true_y + by))
+
+
+def step_overage_charge(steps_before: int, steps_after: int) -> int:
+    """⏱ owed for crossing step thresholds between two step counts.
+
+    The budget is a staircase, not a meter: the first
+    config.CIPHER_DIAL_FREE_STEPS presses are free, and every
+    CIPHER_DIAL_OVERAGE_BLOCK presses after that bills
+    CIPHER_DIAL_OVERAGE_COST. This returns only what the move just taken owes,
+    so callers charge incrementally and never have to remember what they have
+    already paid.
+
+    Expressed as (blocks crossed after) − (blocks crossed before) rather than
+    by testing a single step against a threshold, so a multi-step move is
+    billed for every boundary it passes rather than at most one.
+    """
+    def _blocks(steps: int) -> int:
+        over = steps - config.CIPHER_DIAL_FREE_STEPS
+        if over <= 0:
+            return 0
+        return -(-over // config.CIPHER_DIAL_OVERAGE_BLOCK)   # ceil
+
+    return (_blocks(steps_after) - _blocks(steps_before)) * config.CIPHER_DIAL_OVERAGE_COST
+
+
+def steps_until_charge(steps: int) -> int:
+    """How many more presses until the next ⏱ lands. Always at least 1.
+
+    Drives the footer counter, so it must agree with step_overage_charge()
+    exactly — a readout that is off by one is worse than no readout at all.
+
+    Derived by ASKING that function rather than re-deriving the boundaries from
+    the constants. The arithmetic version of this was wrong in both branches on
+    the first attempt (the free allowance runs to FREE_STEPS + 1 presses, not
+    FREE_STEPS, and the later boundaries are offset by that same one), and any
+    second implementation of the staircase is a second place for it to drift.
+    The loop runs at most OVERAGE_BLOCK times.
+    """
+    k = 1
+    while step_overage_charge(steps, steps + k) == 0:
+        k += 1
+    return k
+
+
+# ── Readouts ────────────────────────────────────────────────────────────────
+
+
+def cipher_header_lines(block: CipherBlockData,
+                        upgrades: set | None = None) -> list[str]:
+    """The block's header — structural facts always, the ALGORITHM on upgrade.
+
+    The split here is the whole design of WEAK_ENCRYPTION's evidence, so it is
+    worth being precise about.
+
+    Printed ALWAYS, free: the block's dimensions, its glyph alphabet, and the
+    DIGEST SHAPE. All three are observations about the artifact in front of the
+    player, readable off the hash the dossier already shows. The digest line is
+    what makes WEAK_ENCRYPTION flaggable by a player who owns no upgrades: they
+    see "32 hex characters", match it against the rules page's table, and
+    conclude MD5 themselves.
+
+    Printed ONLY with Cipher ID HUD: the algorithm's NAME and what it implies.
+    That is the conclusion, and the upgrade buys drawing it for you.
+
+    An earlier draft left the algorithm entirely behind the upgrade, which
+    would have made a violation ABOUT the algorithm unflaggable without it —
+    turning a 20 HD$ convenience into a paywall on a whole kind.
+    """
+    upgrades = upgrades or ()
+    lines = [
+        "[#3d6478]── cipher block ─────────────────────────────────────────────[/]",
+        (f"[dim]{block.cols} × {block.rows} cells  ·  "
+         f"{'radix-64' if block.tier == 'strong' else 'hex'} glyphs[/]"),
+        f"[dim]digest: {_digest_shape(block.hash_value)}[/]",
+    ]
+    if config.UPGRADE_CRYPTO_ID in upgrades:
+        lbl, col, algo, desc = _CIPHER_TIER_META[block.tier]
+        lines.append(f"  [{col}][b]{lbl} — {algo}[/][/]  [dim]{desc}[/]")
+    else:
+        lines.append("  [dim]algorithm unidentified — match the digest shape "
+                     "against the reference table[/]")
+    return lines
+
+
+def get_cipher_intro(block: CipherBlockData,
+                     upgrades: set | None = None) -> tuple[str, ...]:
+    """Free-tier content for the Hashcrack findings terminal, before any spend."""
+    lines = cipher_header_lines(block, upgrades)
+    lines += [
+        "",
+        f"[dim]hash on file:[/] [#6b7785]{block.hash_value[:28]}…[/]",
+        "",
+        "[#c084fc][b]DECRYPTION[/][/]  [dim]X to open the window selector[/]",
+        "[dim]stage 1 — choose the window matching the digest (costs ⏱)[/]",
+        ("[dim]stage 2 — walk the alignment pad with the arrow keys until the "
+         "text resolves[/]"),
+        (f"[dim]         first {config.CIPHER_DIAL_FREE_STEPS} steps free, "
+         f"then {config.CIPHER_DIAL_OVERAGE_COST} ⏱ per "
+         f"{config.CIPHER_DIAL_OVERAGE_BLOCK}[/]"),
+    ]
+    if block.pre_revealed:
+        lines += [
+            "",
+            ("[#ff5470][b]⚠ UNSALTED STORAGE[/][/]  "
+             "[dim]— stored without a salt; the block is already in the clear, "
+             "no decryption required[/]"),
+            f"  [b #e8f0f8]{block.plaintext}[/]",
+        ]
+    return tuple(lines)
+
+
+def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
+                         day_number: int = 1,
+                         upgrades: set | None = None) -> list[str]:
+    """Block printed once the alignment locks and the credential resolves.
+
+    This is what makes Hashcrack self-sufficient for LEAKED_PASSWORD and
+    CROSS_BREACH_REUSE: the corpus is named HERE, by the tool that owns those
+    kinds, so neither depends on a Logwatch page that does not exist until a
+    day later. (Logwatch no longer carries corpus rows at all since
+    2026-09-19; the Ghostscan breach panel is the only corroborating view.)
+
+    Which violations get NAMED here, and which the player calls themselves, is
+    the line this whole rework turns on:
+
+      OBSERVED, always shown — the corpus list itself. "This plaintext is in
+      LinkedIn (2016)" is a lookup the player can always see, dim and
+      unlabeled at base tier.
+
+      JUDGED, so gated behind an upgrade — the ▲ LEAKED_PASSWORD /
+      ▲ CROSS_BREACH_REUSE label, and WEAK_CREDENTIAL. Whether one corpus
+      reads as LEAKED_PASSWORD or two-plus as CROSS_BREACH_REUSE (Breach
+      Classifier), and whether `monkey123` is a bad password (Crack Verdict
+      Analyzer), are exactly the calls this rework hands back to the player —
+      the rules page already teaches the corpus-count rule, so the raw list is
+      enough to work from without the label.
+
+    The corpus line is gated on the candidate actually carrying a credential
+    corpus kind, NOT merely on breach_dbs_for_candidate() returning something.
+    That function also answers for BREACH_HIT, which is Ghostscan-owned and
+    means the EMAIL was exposed — printing it inside a block headed "credential
+    recovered" would tell the player their password was found in a dump when it
+    was not.
+    """
+    upgrades = upgrades or ()
+    if not block.plaintext:
+        return []
+    _lbl, col, algo, desc = _CIPHER_TIER_META[block.tier]
+    lines = [
+        "",
+        "[#c084fc][b]▲ CREDENTIAL RECOVERED[/][/]",
+        f"  [#6b7785]plaintext:[/]  [b #e8f0f8]{block.plaintext}[/]",
+        f"  [#6b7785]algorithm:[/]  [{col}]{algo}[/]  [dim]{desc}[/]",
+    ]
+
+    kinds = {d.kind for d in candidate.truth.discrepancies}
+    has_leaked = DiscrepancyKind.LEAKED_PASSWORD in kinds
+    has_reuse  = DiscrepancyKind.CROSS_BREACH_REUSE in kinds
+    has_weak   = DiscrepancyKind.WEAK_CREDENTIAL in kinds
+    has_wenc   = DiscrepancyKind.WEAK_ENCRYPTION in kinds
+    has_unsalt = DiscrepancyKind.UNSALTED_STORAGE in kinds
+
+    has_breach_label = config.UPGRADE_HC_BREACH_LABEL in upgrades
+
+    if has_leaked or has_reuse:
+        corpora = breach_dbs_for_candidate(candidate, day_number)
+        if corpora:
+            # Base tier: the collection list still shows — it is a lookup the
+            # tool has already done, not a judgement — but dim and unlabeled,
+            # so it reads as raw evidence rather than a call-out. Breach
+            # Classifier promotes it to the same orange accent the ▲ label
+            # lines use, so "highlighted" and "named" land together.
+            corpus_col = "#ff8c42" if has_breach_label else "#6b7785"
+            lines.append("  [#6b7785]corpus:[/]     "
+                         + " · ".join(f"[{corpus_col}]{c}[/]" for c in corpora))
+
+    if has_breach_label:
+        if has_leaked:
+            lines.append("  [#ff8c42][b]▲ LEAKED_PASSWORD[/][/]  "
+                         "— plaintext confirmed in breach corpus")
+        if has_reuse:
+            lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
+                         "— this exact plaintext appears in more than one corpus")
+    elif has_leaked or has_reuse:
+        lines.append("  [dim]classify it yourself — one corpus reads as "
+                     "LEAKED_PASSWORD, two or more as CROSS_BREACH_REUSE[/]")
+    if has_unsalt:
+        lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  "
+                     "— stored without a salt; no decryption was required")
+    if has_wenc and config.UPGRADE_CRYPTO_ID in upgrades:
+        # Free evidence for this kind is the digest shape in the header; the
+        # HUD is what turns that observation into a named violation.
+        lines.append("  [#ffd93d][b]▲ WEAK_ENCRYPTION[/][/]  "
+                     "— stored with the weakest available algorithm")
+
+    if config.UPGRADE_HC_VERDICT in upgrades:
+        lines.append(f"  [#6b7785]verdict:[/]    {_cipher_verdict(block.plaintext)}")
+        if has_weak:
+            lines.append("  [#ffd93d][b]▲ WEAK_CREDENTIAL[/][/]  "
+                         "— recovered plaintext fails the complexity threshold")
+    else:
+        lines.append("  [dim]judge the password's own strength yourself — "
+                     "see the reference panel[/]")
+    lines.append("  [dim]flag it on the Evidence Board (Tab)[/]")
+    return lines
+
+
+def _cipher_verdict(plaintext: str) -> str:
+    """Crack Verdict Analyzer's one-line strength call on a recovered password.
+
+    Reads the STRING, not the ground truth. A verdict derived from the
+    candidate's discrepancy list would be the guard-hardening mistake in
+    miniature: it would agree with the answer key by construction and so could
+    never disagree with what the player is actually looking at.
+    """
+    from .candidate_gen import _HC_LEAKED_PASSWORDS, _HC_WEAK_PASSWORDS
+    if plaintext in _HC_WEAK_PASSWORDS:
+        return "[#ff5470]weak — dictionary word or keyboard walk[/]"
+    if plaintext in _HC_LEAKED_PASSWORDS:
+        return "[#ff8c42]dated pattern — word plus year, corpus-typical[/]"
+    has_sym = any(not c.isalnum() for c in plaintext)
+    if len(plaintext) >= 12 and has_sym:
+        return "[#00ff9f]strong — long, mixed, symbol-laden[/]"
+    return "[#ffd93d]moderate — no obvious dictionary root[/]"
+
+
+def cipher_full_readout(block: CipherBlockData, candidate: Candidate,
+                        day_number: int = 1,
+                        upgrades: set | None = None) -> list[str]:
+    """Everything the cipher block can tell the player, fully solved.
+
+    The end state of the minigame without playing it. Used by the lab CLI
+    (`hackdox lab --tool hashcrack`) and by tests that need this tool's REAL
+    final output to check against ground truth.
+
+    Deliberately routed through the same cipher_header_lines() and
+    cipher_resolve_lines() the live page calls, rather than composing its own
+    prose. A debug view that formats findings its own way is a view that can
+    agree with the answer key while the actual page disagrees.
+    """
+    lines = cipher_header_lines(block, upgrades)
+    if not block.plaintext:
+        lines.append("  [#00ff9f]key-stretched — no alignment exists and no "
+                     "plaintext can be recovered from this block[/]")
+        return lines
+    lines += cipher_resolve_lines(block, candidate, day_number, upgrades)
+    return lines

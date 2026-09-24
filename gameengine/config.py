@@ -36,6 +36,22 @@ STARTING_ALIGNMENT = 0     # range: ALIGNMENT_MIN .. ALIGNMENT_MAX
 ALIGNMENT_MIN      = -10
 ALIGNMENT_MAX      = +10
 
+# Alignment bands (issue #42) — the three-ending structure (Game Design →
+# "Player Alignment") needs a way to classify a running GameState.alignment
+# value as leaning White Hat, leaning Dark Web, or neither. See
+# `core/overseer.py` for the selector this feeds and the full reasoning;
+# short version: scoring.score() moves alignment by the candidate's
+# moral_modifier (Dark Web = -1 per verdict, White Hat = +4 once on day 12),
+# so a player who resists the Overseer's Dark Web pressure across even a
+# handful of encounters — or who makes the single White Hat call — clears
+# +4 well before day 20; a player who complies clears -4 the same way. A
+# threshold set at the White Hat's own single-encounter magnitude means one
+# unambiguous act of resistance (or complicity) is enough to be recognized,
+# while a genuinely mixed record — some resisted, some not — stays neutral
+# rather than tipping on noise. Symmetric around STARTING_ALIGNMENT (0).
+ALIGNMENT_BAND_WHITE_HAT_THRESHOLD = 4    # alignment >= this -> "whitehat"
+ALIGNMENT_BAND_DARK_WEB_THRESHOLD  = -4   # alignment <= this -> "darkweb"
+
 # Daily-budget difficulty formula (issue #27). Later days bring more
 # candidates, so the pool grows a little each day — but slower than the
 # workload does, tightening scarcity as the campaign progresses.
@@ -227,8 +243,8 @@ BREACH_DB_UNLOCK_DAY: dict[str, int] = {
 }
 
 # CROSS_BREACH_REUSE means "this password recurs across MULTIPLE corpora", so
-# it is not expressible — in ground truth or in the Hashcrack log, which prints
-# two BREACH_MATCH rows for it — until at least two databases are unlocked.
+# it is not expressible — in ground truth or in the cipher block's readout, which
+# names two corpora for it — until at least two databases are unlocked.
 # The generator refuses to plant it below this threshold. Under the schedule
 # above that is day 3, which is also the kind's evidence-tier intro day
 # (Hashcrack), so today the constraint binds exactly where the tier gate
@@ -275,7 +291,7 @@ TOOL_COSTS: dict[str, int] = {
 FILTER_COSTS: dict[str, int] = {
     "ghostscan":  4,   # cross-reference email vs GitHub commit history
     "logwatch":   6,   # geographic timeline overlay
-    "hashcrack":  8,   # extended wordlist + full mutation rules
+    "hashcrack":  8,   # legacy — hashcrack page now uses the cipher-block aperture
     "stegotool":  10,   # legacy — stego page now uses the stamp mechanic
 }
 
@@ -357,6 +373,253 @@ STEGO_GRID_BASE: dict[str, tuple[int, int]] = {
 STEGO_GRID_GROWTH_COLS_PER_DAY = 4   # extra columns per day beyond day 1
 STEGO_GRID_GROWTH_ROWS_PER_DAY = 2   # extra rows per day beyond day 1
 STEGO_GRID_MAX = (72, 32)            # hard cap (cols, rows) so it never overflows
+
+# ── Carrier SHAPE axis (2026-09-19) ───────────────────────────────────────
+# Independent of the payload COLOUR above: the glyph the carrier cells form
+# encodes the payload's purpose. Rolled in candidate_gen._roll_discrepancies
+# ONLY for a shape-eligible archetype (candidate_gen._SHAPE_ELIGIBLE_ARCHETYPES)
+# that actually carries a stego colour kind. This is the chance such a carrier
+# stays CONVENTIONAL (clumped blocks — no extra violation); the remainder is
+# split evenly across the three special shapes (cross / enclosed / slash).
+# Kept the majority outcome so a special glyph stays a notable find rather
+# than the default.
+STEGO_SHAPE_CONVENTIONAL_CHANCE = 0.55
+
+# ── Free-tier readout bars (image statistics) ─────────────────────────────
+# The free stego terminal (tools_bridge._stego_image_lines) renders R/G/B
+# channel entropy, RS-pair ratios, and LSB autocorrelation as bars instead
+# of bare numbers -- same block-bar language as the Logwatch Activity
+# Report (LW_PROFILE_METRICS / logwatch_report._bar), so the tool pages
+# read as one system. Each bar shows a shaded "expected" band (what a
+# clean image reads) plus the observed value's position -- visible with
+# no upgrade owned. The Channel Colorizer upgrade (UPGRADE_STEGO_RGB_COLOR)
+# only adds severity colour on top; it never gates the band/shape itself.
+STEGO_BAR_WIDTH          = 14        # chars; LW_BAR_WIDTH_COMPACT-sized to
+                                      # fit the 34%-wide findings terminal
+
+# R/G/B channel LSB entropy score (0-100). Clean images land in this band;
+# suspicious images push one (or two, for C2) channels well past it.
+STEGO_ENTROPY_SCALE      = 100
+STEGO_ENTROPY_EXPECTED   = (8, 30)
+
+# RS pair analysis: R-group and S-group ratios plotted as two point-value
+# bars on the same 0.70-1.30 scale. Clean images keep both near 1.0;
+# embedding pushes them apart in opposite directions.
+STEGO_RS_SCALE           = (0.70, 1.30)
+STEGO_RS_EXPECTED        = (0.95, 1.05)
+
+# LSB autocorrelation: signed, expected near zero for a clean image.
+STEGO_CORR_SCALE         = (-0.05, 0.25)
+STEGO_CORR_EXPECTED      = (-0.02, 0.04)
+
+# RS pair (R-group / S-group ratio) is plotted as a 2-D point on one square,
+# both axes sharing STEGO_RS_SCALE/STEGO_RS_EXPECTED -- a clean image sits
+# near the centre band on both axes; embedding pushes R and S apart in
+# opposite directions, which reads as the point drifting off the shaded
+# square rather than two separately-legible numbers.
+STEGO_RS_PLANE_W         = 13        # chars (X axis: R-group ratio)
+STEGO_RS_PLANE_H         = 5         # rows  (Y axis: S-group ratio)
+
+# Independent per-signal "tell" chance (issue: multiple points of contact).
+# A suspicious image doesn't push every readout out of range together --
+# each signal group rolls independently, so sometimes only the RS plane
+# reads anomalous while the RGB bars look clean, or vice versa. The player
+# has to cross-check more than one readout before trusting either; no
+# single number is a reliable go/no-go on its own. If every roll misses,
+# one group is forced on so a genuinely suspicious image always leaves at
+# least one thread to pull in the free tier.
+STEGO_TELL_CHANCE_ENTROPY = 0.70
+STEGO_TELL_CHANCE_RS      = 0.70
+STEGO_TELL_CHANCE_CORR    = 0.70
+
+# ─── Hashcrack cipher block ──────────────────────────────────────────────────
+#
+# The Hashcrack page is a standalone TWO-STAGE DECRYPTION minigame. The
+# candidate's credential is rendered as a block of ciphertext glyphs; the
+# player identifies the algorithm from the block itself, selects the matching
+# decryption window, and then walks a two-axis alignment pad until the whole
+# block resolves into the password.
+#
+# It replaced an earlier aperture-sweep design (moveable reveal windows, a
+# per-batch ⏱ cost, a coverage threshold). That version was a spatial hunt
+# wearing a cryptography costume — the skill it tested was "find the hidden
+# rectangle", which the stego stamp already does better. This one tests
+# reading a credential and tuning a decrypt, which is the thing the page is
+# actually about.
+#
+# What the player establishes rather than being handed:
+#
+#   1. the ALGORITHM — read off the block's digest shape and glyph alphabet,
+#      free, before any ⏱ is spent (CIPHER_GRID_BASE below);
+#   2. whether it is VIABLE AT ALL — bcrypt is identifiable and uncrackable,
+#      so the only winning move is not to open it;
+#   3. the PASSWORD's own strength — read off the plaintext that comes into
+#      focus as the dial approaches true.
+#
+# Only STAGE 1 costs ⏱, at the tool's ordinary base cost (so inflation and the
+# Hashcrack Optimizer both still apply). The dial is free to turn: the spend
+# decision is "is this credential worth opening", made once, up front.
+
+# ── Block geometry, per encryption tier ───────────────────────────────────
+# (cols, rows) at day 1. The block's shape is the player-facing tell, so these
+# must stay visibly distinct — collapsing two of them silently deletes the
+# free read this whole feature is built on. bcrypt is widest on purpose: the
+# most expensive-looking block is the one you should never pay to open.
+CIPHER_GRID_BASE: dict[str, tuple[int, int]] = {
+    "weak":   (32, 4),    # MD5     — 32 hex
+    "medium": (40, 6),    # SHA256  — 64 hex
+    "strong": (52, 8),    # bcrypt  — $2b$12$…
+}
+# Growth is gentle and asymmetric — area is what makes a block harder to read,
+# and growing both dimensions every day compounds fast.
+CIPHER_GRID_GROWTH_COLS_PER_DAY = 1   # extra columns per day beyond day 1
+CIPHER_GRID_GROWTH_ROWS_PERIOD  = 4   # +1 row every N days beyond day 1
+CIPHER_GRID_MAX = (50, 10)            # hard cap (cols, rows) so it never overflows
+
+# The literal prefix bcrypt stamps into the first cells of the block's top row.
+# Structural evidence, not a label: it is part of the ciphertext the player is
+# looking at, exactly as the $2b$ prefix is part of a real bcrypt hash.
+CIPHER_BCRYPT_PREFIX = "$2b$12$"
+
+# The character that separates repeats of the password when the block decrypts.
+# The plaintext is TILED across the whole block rather than sitting in one run:
+# partial alignment scrambles a different subset of cells in each repeat, so a
+# player who is close can read the password by consensus across rows. That is
+# what makes the last few dial steps satisfying instead of fiddly.
+CIPHER_TILE_SEPARATOR = "·"
+
+# ── Stage 1: the decryption windows ───────────────────────────────────────
+# One window per algorithm family. Selecting the one that matches the
+# candidate's digest engages the decrypt; any other choice wastes the spend.
+# Keys are the tier names used by CIPHER_GRID_BASE and password_strength().
+CIPHER_WINDOWS: tuple[tuple[str, str, str], ...] = (
+    # (tier key, display label, the digest shape it is built for)
+    ("weak",   "MD5",     "32-hex digest"),
+    ("medium", "SHA-256", "64-hex digest"),
+    ("strong", "bcrypt",  "$2b$ key-stretched"),
+)
+
+# ── Stage 2: the alignment pad (two axes) ─────────────────────────────────
+# The decrypt has the right family but the wrong derived key. That key is a
+# COORDINATE, not a scalar: the player walks an (x, y) pad with the arrow keys
+# until the block resolves. Per tier: how far each axis spans, and how near
+# the true point they must get before ANY cell resolves.
+#
+# Why two axes rather than one dial. A single dial can be bisected by feel —
+# spin, glance, spin — so a player could solve it without ever really reading
+# the block. Two axes have no such shortcut: the only usable signal is the
+# ciphertext sharpening as they close in, which is what this stage was always
+# meant to be about. It also gives the step budget below something to measure.
+#
+# ERROR IS MANHATTAN — |dx| + |dy| — and that is load-bearing. Under a
+# Chebyshev max() metric a player at (dx=1, dy=9) sees NOTHING change when
+# they press left or right, because the larger axis swallows the smaller one,
+# and a control that ignores half its inputs reads as broken. Manhattan moves
+# the error by exactly one on every arrow press, so every keypress answers the
+# question the player just asked: warmer, or colder.
+# Pads are deliberately WIDER THAN TALL. Two reasons, both practical: a
+# terminal cell is about twice as tall as it is wide, so a 29×9 pad reads as
+# roughly square on screen; and the pad is drawn at one character per position
+# directly under a block that is already up to ten rows deep, so height is the
+# scarce dimension. Squaring these off would push the pad off the panel.
+CIPHER_ALIGN_SPAN: dict[str, tuple[int, int]] = {
+    "weak":   (20, 6),    # MD5    — 21×7 pad,  max walk 26
+    "medium": (28, 8),    # SHA256 — 29×9 pad,  max walk 36
+    "strong": (0, 0),     # bcrypt — never reaches stage 2 at all
+}
+# Each cell gets its own threshold and shows plaintext while the Manhattan
+# error clears it, so the DISTRIBUTION of those thresholds is the difficulty
+# curve. A cell's threshold is drawn as
+#
+#     round(max_walk * u ** falloff),   u ~ U(0, 1),  max_walk = span_x + span_y
+#
+# which makes the share of the block legible at error e exactly
+# 1 − (e / max_walk) ** (1 / falloff).
+#
+# Two properties come out of that shape, and BOTH are the point:
+#
+#   Every position has signal. Only the single farthest corner of the pad is
+#   fully dark. A uniform 0..tolerance draw (the first cut of this) left over
+#   half the medium pad at zero resolved cells, so the opening of every search
+#   was a blind walk — and a blind walk billed by a step budget is a fee the
+#   player had no way to avoid. There is now always a gradient to climb.
+#
+#   The gradient is STEEPEST at the end. With falloff > 1 the curve is convex:
+#   the last few steps each flip a large share of the block, while steps out at
+#   the rim barely move it. That is the right way round — it is the fine-tune
+#   that is supposed to feel precise, not the approach.
+#
+# Raising falloff darkens the rim without touching the endgame; 1.0 would make
+# the reveal linear in distance and the last step no more informative than the
+# first.
+CIPHER_ALIGN_FALLOFF: dict[str, float] = {
+    "weak":   2.0,   # MD5    — generous; signal well out toward the rim
+    "medium": 2.6,   # SHA256 — dimmer at distance, same sharp endgame
+    "strong": 0.0,   # bcrypt — never reaches stage 2 at all
+}
+
+# ── Stage 2: the step budget ──────────────────────────────────────────────
+# Walking the pad is free for the first CIPHER_DIAL_FREE_STEPS presses. After
+# that every CIPHER_DIAL_OVERAGE_BLOCK further steps costs
+# CIPHER_DIAL_OVERAGE_COST ⏱.
+#
+# The point is NOT to tax stage 2. A player who reads the block and walks more
+# or less straight at it finishes inside the free allowance and pays nothing,
+# every time. The budget exists so that flailing has a price — it turns "sweep
+# the whole pad and watch for sparkle" from a viable strategy into an
+# expensive one, which is what makes reading the block worth doing.
+#
+# Free steps must therefore stay comfortably above the worst-case DIRECT walk,
+# or a player who did everything right still gets billed for the pad's size.
+# Since the cursor starts at the CENTRE, that worst case is the distance from
+# the middle to the farthest corner — 18 on the largest pad, half what a corner
+# start would cost. See CipherBlockData.worst_direct_walk and
+# test_a_direct_walk_is_always_free, which measures it rather than assuming it.
+#
+# RETUNED 45/10 -> 28/8 when the start moved to the centre. Halving the
+# distances halved the step counts, and at the old numbers the fee had gone
+# nearly inert: a careless player paid nothing 99% of the time, so the budget
+# was no longer pricing anything. 28/8 reproduces the profile the 45/10 pair
+# had from a corner, which is the balance that was actually wanted.
+#
+# Calibrated against simulated players reading the block (sim_pad.py):
+#
+#   clean coordinate descent   median  9 steps   pays nothing 100% of runs
+#   the same, with human slip  median  9 steps   pays nothing 100% of runs
+#   careless hill-climber      median 18 steps   pays nothing  77%, mean 0.3 ⏱
+#   near-random wandering      median 35 steps   pays nothing  40%, median 1 ⏱
+#
+# The clean profile's worst observed run is 18 steps against 28 free, so a
+# player who reads the block is never billed, with 55% headroom. Against a
+# day-3 budget near 68 ⏱ the wanderer's couple of ⏱ is a nudge, which is the
+# intent — raise OVERAGE_COST and it becomes a punishment for being bad at the
+# minigame rather than a reason to read.
+CIPHER_DIAL_FREE_STEPS    = 28
+CIPHER_DIAL_OVERAGE_BLOCK = 8    # further steps per charge
+CIPHER_DIAL_OVERAGE_COST  = 1    # ⏱ per block
+
+# ── Credential HUD hint box ───────────────────────────────────────────────
+# Half-width of the BOX the Credential HUD upgrade marks around the true
+# coordinate, as a FRACTION of each axis's span (minimum one position).
+#
+# A fraction rather than a flat number of positions, because the two axes are
+# very different lengths. A flat half-width of 3 — the first cut of this — was
+# a real hint on a 28-wide X axis and covered the ENTIRE 6-tall Y axis, so the
+# upgrade silently degraded into an X-only hint and the player got Y for free.
+# Scaling per axis keeps the box the same shape relative to the pad whatever
+# CIPHER_ALIGN_SPAN is retuned to.
+#
+# Same stance as STEGO_HINT_BUFFER (#54): it narrows the search, it never
+# answers it, and the BASE TIER MARKS NOTHING. Push it below about 0.05 and it
+# becomes the answer; above about 0.35 and it stops narrowing anything.
+#
+# RETUNED 0.18 -> 0.28 (Nick): 0.18 read as too tight a "small range" — close
+# enough to the true point that it felt like a near-answer rather than a
+# region to search. 0.28 stays under the 0.35 ceiling above (it still leaves
+# real pad outside the box on both axes) while covering noticeably more of
+# the pad, which is the point — a broader region that narrows the shape of
+# the search rather than pointing at the cell.
+CIPHER_HINT_FRACTION = 0.28
 
 # ─── Day-cycle pacing ────────────────────────────────────────────────────────
 
@@ -553,6 +816,16 @@ DIFFICULTY_BAND_LAST_EASY   = TUTORIAL_LAST_DAY   # days 1-5
 DIFFICULTY_BAND_LAST_MEDIUM = 12                  # days 6-12; 13+ is hard
 
 
+# ─── Dark Web chat escalation (#39) ──────────────────────────────────────────
+#
+# Band boundaries for candidate_gen._dark_web_chat_pool. Deliberately its own
+# schedule, not the difficulty bands above (medium runs 6-12) — this is a
+# narrative escalation curve for one archetype's voice, not a detection-
+# complexity lever, and the two happen to diverge past day 12.
+DARK_WEB_CHAT_BAND_LAST_EARLY = 9   # days 6-9
+DARK_WEB_CHAT_BAND_LAST_MID   = 15  # days 10-15; 16-20 is LATE
+
+
 # ─── Overseer-Variable rule flips (#35 / #36) ────────────────────────────────
 #
 # How many days an `overseer_variable` rule holds its current severity before
@@ -668,26 +941,6 @@ LW_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
 # account + pattern, not just scan for non-US/non-internal city names.
 LW_NOISE_EXTERNAL_CITY_FRACTION = 0.3
 
-# ─── Hashcrack shared log — volume scaling ───────────────────────────────────
-#
-# Same shape as LW_ENTRIES_BY_DAY above. Previously a flat max(80, 160 -
-# len(candidate_entries)) regardless of day (no day-scaling at all) — batch-3
-# task #4d/#7 made it day-scaled and configurable, and — same reasoning as
-# LW_ENTRIES_BY_DAY above — started smaller now that Credential HUD's
-# highlighting is a real gate instead of a no-op.
-HC_ENTRIES_BY_DAY: dict[int, int] = {
-    1:  35,
-    2:  45,
-    3:  55,
-    4:  70,
-    5:  85,
-    6: 100,
-    7: 115,
-}
-HC_ENTRIES_DEFAULT      = 95    # fallback for days not in the dict
-HC_ENTRIES_SCALE_FACTOR = 1.15  # multiplier applied per day beyond the last key
-HC_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
-
 # ─── Log generation timing (batch-3 task #7) ─────────────────────────────────
 #
 # Every (min, max) pair below feeds an rng.randint(*pair) somewhere in
@@ -700,7 +953,9 @@ HC_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
 # All times are seconds-since-midnight on the shared log's single day.
 
 # Logwatch — normal/legit candidate activity window and pacing
-LW_WORKDAY_WINDOW        = (25200, 54000)   # 7am–3pm: when a candidate's day starts
+LW_WORKDAY_WINDOW        = (29100, 41400)   # 08:05–11:30: when a candidate's day starts
+                                            # (2026-09-19: was 7am–3pm; must start inside
+                                            # LW_SHIFT_START for the Activity Report)
 LW_NORMAL_LOGIN_COUNT    = (2, 3)           # # of plain AUTH_OK rows with no violation
 LW_NORMAL_LOGIN_GAP      = (1800, 7200)     # seconds between those logins
 LW_CLEAN_ACTIVITY_COUNT  = (3, 5)           # rows for a candidate with NO violations at all
@@ -723,6 +978,126 @@ LW_SLOW_FIRST_TS         = (3600, 10800)    # first low-and-slow AUTH_FAIL
 LW_SLOW_BURST_SIZE       = (3, 4)           # scattered AUTH_FAIL count
 LW_SLOW_GAP              = (9000, 16000)    # gap between each scattered attempt
 
+# ─── Logwatch Activity Report (2026-09-19 overhaul) ─────────────────────────
+#
+# The free tier of the Logwatch page is an aggregate Activity Report computed
+# FROM the day log (tools_bridge / core/logwatch_report.py) — never from
+# ground truth, so the report and the log can never disagree. These knobs
+# define what the report calls normal.
+#
+# TUNING CHEAT-SHEET (Nick, 2026-09-19 — safe to play with; the tier tests in
+# tests/test_logwatch_report.py fail loudly if a retune breaks the design):
+#   "the attack alert fires too easily / not enough" -> LW_BURST_ALERT, LW_BURST_WINDOW
+#       (must stay <= the smallest burst: LW_BRUTE_BURST_SIZE[0] and
+#        LW_STUFFING_SPRAY_SIZE, and above what low-and-slow can reach)
+#   "what counts as off-hours"         -> LW_SHIFT_START / LW_SHIFT_END
+#   "which bars read as out of range"  -> the middle number in LW_PROFILE_METRICS
+#   "a failed login is too telling"    -> LW_BENIGN_TYPO_CHANCE
+#   "the report wraps on my terminal"  -> LW_REPORT_WIDTH / *_COMPACT layout knobs
+#   "honest travel too rare / common"  -> LW_LEGIT_TRIP_CHANCE (a roll, ~half land)
+#   "not enough second-IP noise"       -> LW_SECOND_IP_CHANCE (same-city, no travel math)
+#   "when is travel impossible"        -> LW_MAX_FEASIBLE_KMH (+ LW_TRAVEL_MIN_KM)
+#   "turn the origin map off / resize" -> LW_MAP_ENABLED / LW_MAP_MIN_WIDTH / _MAX_WIDTH
+
+# The one standard shift every candidate claims. Off-hours = candidate's own
+# successful activity outside [start, end). Seconds since midnight.
+LW_SHIFT_START           = 8 * 3600         # 08:00
+LW_SHIFT_END             = 18 * 3600        # 18:00
+LW_SHIFT_END_MARGIN      = 900              # daytime activity is compressed to end this early
+
+# Attack alert: this many LINKED auth failures (on the account, or from an
+# external IP that later logged in as it) inside one window trips the
+# report's unclassified "authentication anomaly" alert. Low-and-slow is built
+# to never reach it.
+LW_BURST_WINDOW          = 600              # seconds
+LW_BURST_ALERT           = 4
+
+# Travel feasibility (2026-09-20). Two consecutive logins from CLEAN origins
+# in different cities are a travel pair; the report calls it EVIDENCE only
+# when the implied speed beats this. Real trips (below) are noise against the
+# "two cities = deny" reflex, so this line is what separates them.
+LW_MAX_FEASIBLE_KMH      = 900              # airliner cruise + a little slack
+
+# Honest business travel: this share of candidates WITHOUT planted impossible
+# travel actually fly somewhere during the shift and log in from there. The
+# destination is chosen so the trip is comfortably feasible — the gap is at
+# least LW_TRIP_TIME_MARGIN x the flight time it needs.
+# NOTE: this is the ROLL, not the realised rate — a candidate whose day is
+# already full (or who works after hours, see the generator) can't fit a trip.
+# 2026-09-23 (Nick): raised 0.30 -> 0.55 — the report needed more Location
+# noise than a single honest trip in ~15% of candidates gave it. ~0.55 here
+# lands at roughly 28% of all candidates actually travelling.
+LW_LEGIT_TRIP_CHANCE     = 0.55
+LW_TRIP_CRUISE_KMH       = 750              # how fast the flight itself is
+LW_TRIP_OVERHEAD_H       = 1.5              # airports, boarding, transfers
+LW_TRIP_TIME_MARGIN      = 1.3
+LW_TRIP_ARRIVAL_LOGINS   = (1, 2)           # logins from the destination city
+LW_TRIP_ARRIVAL_GAP      = (600, 3600)      # seconds between those logins
+LW_TRIP_MAX_KM           = 6000             # a day trip's realistic reach (the
+                                            # flight has to fit inside the shift)
+
+# Second routine IP (2026-09-23): a cheaper, more common noise source than
+# the trip above — NOT travel. This share of candidates additionally log in
+# once or twice from a second, ordinary source (home network / VPN / mobile
+# hotspot) that resolves to the SAME city as their claimed login, so it never
+# forms a travel pair (build_logwatch_report skips same-place pairs) and
+# needs no flight-time feasibility math. Independent of LW_LEGIT_TRIP_CHANCE
+# and of any planted discrepancy — this is meant to make "more than one
+# origin row" the common case, not a rare one, so origin *count* alone stops
+# being a tell.
+LW_SECOND_IP_CHANCE      = 0.40
+LW_SECOND_IP_LOGINS      = (1, 2)           # logins from that second IP
+LW_SECOND_IP_GAP         = (300, 1800)      # seconds between those logins
+
+# Planted IMPOSSIBLE_TRAVEL picks two cities at least this far apart, so the
+# LW_TRAVEL_GAP between them is always well past LW_MAX_FEASIBLE_KMH — the
+# violation can never accidentally be a feasible hop.
+LW_TRAVEL_MIN_KM         = 3000
+
+# An origin with at least this many linked failures FROM its IP is treated as
+# hostile (an attacker's foothold), not the user's own travel, and is left out
+# of travel pairs. 2, not 1, so a single benign typo never disqualifies the
+# user's real location.
+LW_HOSTILE_ORIGIN_FAILS  = 2
+
+# Honest noise: chance any candidate fumbles one password during the shift,
+# so "has a failed login" is never on its own a tell.
+LW_BENIGN_TYPO_CHANCE    = 0.3
+LW_BENIGN_TYPO_LEAD      = (8, 90)          # seconds before the first login it lands
+
+# Layout of the rendered report (characters). The centre column is ~40% of
+# the screen; 56 fits a 150-col terminal without wrapping.
+LW_REPORT_WIDTH          = 56
+LW_BAR_WIDTH             = 20
+LW_TIMELINE_BIN_MIN      = 30               # minutes per timeline cell (48 cells/day)
+# Compact layout, used automatically when the report column is narrower than
+# LW_REPORT_WIDTH (small terminals): shorter bars, hour-wide timeline cells.
+LW_BAR_WIDTH_COMPACT     = 12
+LW_TIMELINE_BIN_MIN_COMPACT = 60            # 24 cells/day
+
+# ASCII world map of login origins (core/ascii_map.py, 2026-09-20). Drawn
+# whenever the report column is at least LW_MAP_MIN_WIDTH wide (it re-draws
+# itself at the column's width — narrower = coarser, never broken); below
+# that the plain origins list is shown instead.
+LW_MAP_ENABLED           = True
+LW_MAP_MIN_WIDTH         = 38
+LW_MAP_MAX_WIDTH         = 56
+
+# Activity Profile bars, top to bottom: metric -> (label, normal ceiling,
+# bar scale max). Without the Log Analyzer HUD upgrade the raw count still
+# shows but the ceiling tick is hidden entirely (2026-09-23) — with it, the
+# ceiling is drawn as a │ tick and a value past it turns amber as "out of
+# range". Reorder freely; the metric keys are fixed
+# (logwatch_report.LogwatchReport.metric).
+LW_PROFILE_METRICS: dict[str, tuple[str, int, int]] = {
+    "logins":     ("Logins",        4, 8),
+    "failures":   ("Auth failures", 1, 8),
+    "origins":    ("Origins",       1, 4),
+    "files":      ("File access",   5, 10),
+    "privileged": ("Privileged",    0, 4),
+    "off_hours":  ("Off-hours",     0, 6),
+}
+
 # Logwatch — noise (unrelated background accounts)
 LW_NOISE_TIME_WINDOW     = (21600, 86399)
 # Weighted pool an unrelated noise row's event type is drawn from — repeat an
@@ -731,24 +1106,17 @@ LW_NOISE_EVENT_WEIGHTS: list[str] = [
     "AUTH_OK", "AUTH_OK", "AUTH_FAIL", "FILE_READ", "SESSION_END", "AUTH_OK",
 ]
 
-# Hashcrack — normal/legit candidate activity window and pacing
-HC_WORKDAY_WINDOW        = (25200, 50400)   # 7am–2pm
-HC_NORMAL_LOGIN_GAP      = (30, 120)        # AUTH_OK → hash submit, non-stuffing path
-HC_HASH_SUBMIT_GAP       = (5, 30)          # login → HASH_SUBMIT row
-HC_BREACH_ROW_GAP        = (5, 20)          # gap between a candidate's breach-match rows
-
-# Hashcrack — credential-stuffing burst (gated on CREDENTIAL_STUFFING itself,
-# see #62 in tools_bridge._hc_candidate_entries)
-HC_STUFFING_BURST_SIZE   = (3, 6)
-HC_STUFFING_COOLDOWN     = (1, 3)           # burst → the AUTH_OK that follows it
-HC_STUFFING_POST_GAP     = (10, 60)         # AUTH_OK → hash submit
-
-# Hashcrack — noise (unrelated background accounts)
-HC_NOISE_TIME_WINDOW     = (21600, 79200)
-HC_NOISE_EVENT_WEIGHTS: list[str] = [
-    "AUTH_OK", "AUTH_OK", "AUTH_FAIL", "HASH_SUBMIT",
-    "AUTH_OK", "HASH_SUBMIT", "BREACH_MATCH",
-]
+# Credential rows in the Logwatch log (relocated 2026-09-14)
+#
+# The cipher-block rework deleted the Hashcrack page's own shared credential
+# audit log, and with it every HC_* knob that paced it: HC_ENTRIES_BY_DAY and
+# friends (volume), HC_WORKDAY_WINDOW / HC_NORMAL_LOGIN_GAP /
+# HC_HASH_SUBMIT_GAP (timing), HC_STUFFING_* (a burst Logwatch was already
+# generating for itself via LW_BRUTE_BURST_SIZE / LW_STUFFING_SPRAY_SIZE
+# above), and HC_NOISE_* (noise rows that no longer exist).
+#
+# The last survivor, HC_BREACH_ROW_GAP, went on 2026-09-19 with the
+# BREACH_MATCH rows it paced (breach hits are no longer Logwatch's business).
 
 # ─── Upgrades (issue #23) ────────────────────────────────────────────────────
 #
@@ -763,18 +1131,32 @@ HC_NOISE_EVENT_WEIGHTS: list[str] = [
 # renderer. See tools_bridge._lw_render, which no longer branches on it.)
 
 # Auto-highlight upgrades — surface signals the engine already computes.
-UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: colour suspicious log lines
-UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: colour suspicious audit lines
+UPGRADE_LOG_HIGHLIGHT    = "log_highlight"      # Logwatch: ▸ marks + out-of-range bars (never names)
+UPGRADE_LOG_TRIAGE       = "log_triage_notes"   # Logwatch: unlocks the report's ANALYST NOTES
+UPGRADE_HASH_HIGHLIGHT   = "hash_highlight"     # Hashcrack: mark the region of the
+                                                # alignment pad holding the true key
 UPGRADE_EMAIL_APPROVED   = "email_approved_highlight"    # dossier: green trusted domains
 UPGRADE_EMAIL_PROHIBITED = "email_prohibited_highlight"  # dossier: red disposable domains
 UPGRADE_AFFIL_APPROVED   = "affil_approved_highlight"    # dossier: green trusted orgs
 UPGRADE_AFFIL_PROHIBITED = "affil_prohibited_highlight"  # dossier: red threat-actor orgs
 UPGRADE_STEGO_TINT       = "stego_area_tint"    # Stegotool: stronger area-of-interest tint
 UPGRADE_CHAT_HOSTILE     = "chat_hostile_highlight"      # chat: mark hostile lines
-UPGRADE_CRYPTO_ID        = "crypto_id_highlight"   # dossier: auto-label MD5/SHA256/bcrypt chip
+UPGRADE_CRYPTO_ID        = "crypto_id_highlight"   # hashcrack: auto-label the cipher
+                                                   # block's tier (MD5/SHA256/bcrypt)
 UPGRADE_BREACH_AUTO      = "breach_auto_detect"    # ghostscan: confirm BREACH_HIT on the free base run
+UPGRADE_SOCK_AUTO        = "sock_auto_detect"      # ghostscan: confirm SOCK_PUPPET_ACCOUNTS on the free base run
+UPGRADE_FORUM_AUTO       = "forum_auto_detect"     # ghostscan: confirm THREAT_FORUM_MATCH on the free base run
 UPGRADE_HC_VERDICT       = "hashcrack_verdict_highlight"  # hashcrack: label a crack's strength verdict
 UPGRADE_STEGO_RGB_COLOR  = "stego_rgb_color"       # stegotool: colour-code channel entropy readout
+UPGRADE_HC_BREACH_LABEL  = "hc_breach_label"       # hashcrack: name LEAKED_PASSWORD /
+                                                   # CROSS_BREACH_REUSE and highlight the
+                                                   # corpus evidence — base tier shows the
+                                                   # corpus list unlabeled, judge it yourself
+UPGRADE_STEGO_SHAPE_DETECT = "stego_shape_detect"  # stegotool: first carrier hit flags
+                                                   # whether the payload has a special glyph
+                                                   # shape — never which one
+UPGRADE_LOG_MAP_TRAVEL   = "log_map_travel"        # logwatch: distance/time between origin-map
+                                                   # stops, needed to judge IMPOSSIBLE_TRAVEL
 
 # Economy upgrades -- reduce a tool's cost by TOOLCOST_REDUCTION (floor 1).
 # IDs follow "toolcost_<tool>" so _charge() can key off the tool name directly.
@@ -793,16 +1175,22 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",     20, "auto-highlight approved affiliations on the dossier"),
     (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
     (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
-    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "auto-highlight suspicious lines in the Hashcrack audit log"),
-    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "auto-highlight suspicious lines in the Logwatch day log"),
+    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
+    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
+    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     30, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 35, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     30, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the dossier's encryption-strength chip (MD5/SHA256/bcrypt)"),
+    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
     (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     30, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a cracked password's strength verdict, not just the plaintext"),
+    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    30, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_FORUM_AUTO,       "Forum Watch",          30, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a recovered password's strength verdict, not just the plaintext"),
     (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",    25, "colour-code the RGB channel entropy readout by severity"),
+    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",    25, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
+    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",     25, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
+    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  30, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
 ]
 
 # Sub-category (by tool page) each upgrade belongs to, for shop-UI grouping.
@@ -818,14 +1206,20 @@ UPGRADE_CATEGORY: dict[str, str] = {
     UPGRADE_STEGO_TINT:          "Stegotool",
     UPGRADE_HASH_HIGHLIGHT:      "Hashcrack",
     UPGRADE_LOG_HIGHLIGHT:       "Logwatch",
+    UPGRADE_LOG_TRIAGE:          "Logwatch",
     UPGRADE_TOOLCOST_GHOSTSCAN:  "Ghostscan",
     UPGRADE_TOOLCOST_LOGWATCH:   "Logwatch",
     UPGRADE_TOOLCOST_HASHCRACK:  "Hashcrack",
     UPGRADE_TOOLCOST_STEGOTOOL:  "Stegotool",
     UPGRADE_CRYPTO_ID:           "Candidate",
     UPGRADE_BREACH_AUTO:         "Ghostscan",
+    UPGRADE_SOCK_AUTO:           "Ghostscan",
+    UPGRADE_FORUM_AUTO:          "Ghostscan",
     UPGRADE_HC_VERDICT:          "Hashcrack",
     UPGRADE_STEGO_RGB_COLOR:     "Stegotool",
+    UPGRADE_HC_BREACH_LABEL:     "Hashcrack",
+    UPGRADE_STEGO_SHAPE_DETECT:  "Stegotool",
+    UPGRADE_LOG_MAP_TRAVEL:      "Logwatch",
 }
 # Display order for the shop's per-tool sub-headers — mirrors the page/key
 # order (1-5, dossier/chat first) so the grouping reads the same way the
@@ -895,6 +1289,25 @@ KEY_BINDINGS: dict[str, str] = {
     # arrow keys move the stamp, Space stamps (STEGO_STAMP_COST),  and
     # Escape (or this key again) exits.
     "stamp_mode":       "x",
+
+    # ── Logwatch auth log panel (page 4 only, 2026-09-19) ─────
+    # Jump between the target account's rows in the (unsealed) auth log.
+    # Textual key names; only read while the command buffer is empty.
+    "log_prev_row":     "left_square_bracket",
+    "log_next_row":     "right_square_bracket",
+
+    # ── Hashcrack decrypt mode (page 3 only) ──────────────────
+    # Deliberately the SAME physical key as stamp mode above: one "engage this
+    # page's minigame" gesture, dispatched on which page you are standing on.
+    # They are separate entries rather than one shared name because the two
+    # modes have different costs, different surfaces and different exit
+    # behaviour — collapsing them into one binding would make rebinding either
+    # silently rebind the other.
+    # Decrypt mode runs in two stages: first left/right pick a decryption
+    # window and Enter buys it, then all four arrows walk the alignment pad —
+    # left/right on X, up/down on Y — with the block sharpening live. Escape
+    # (or this key again) exits from either stage.
+    "decrypt_mode":     "x",
 
     # ── Misc ────────────────────────────────
     # Toggle the editable Evidence Board on every page. On tool pages (2-5)

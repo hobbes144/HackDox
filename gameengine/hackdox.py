@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gameengine import config
 from gameengine.core import candidate_gen, rules_engine, scoring, tools_bridge
 from gameengine.core.content_loader import load_day, load_narratives, synthesize_day
+from gameengine.core.overseer import resolve_aligned_narrative
 from gameengine.core.models import (
     Archetype,
     DiscrepancyKind,
@@ -63,6 +64,31 @@ def new_game(seed: int = typer.Option(0xC0FFEE, help="RNG seed for the run.")) -
     ))
 
 
+def _simulate_intro_text(day, narratives: dict, alignment: int) -> str:
+    """The Overseer intro line `simulate` opens with.
+
+    Pulled out of `simulate()` itself so tests can call this exact
+    function for all three alignment bands directly, without needing a
+    CLI flag to vary `GameState.alignment` — `simulate` has no such flag
+    (it always runs a freshly-seeded state at the campaign's starting
+    alignment), so a CliRunner invocation alone can only ever exercise
+    the neutral band. Regression coverage: code review of #42 found that
+    this used to be raw `narratives[day.overseer_intro_key]` dict
+    indexing instead of `resolve_aligned_narrative` — days 1-13/17/20 all
+    author a plain `dayN_intro` fallback key so that happened to work,
+    but days 14-16/18-19 (Phase 5b-2) author ONLY banded keys, so it
+    raised `KeyError` for every one of them. See
+    `test_engine_foundation.test_simulate_command_does_not_crash_on_the_
+    banded_only_days` (CliRunner, the real crashing code path) and
+    `test_simulate_intro_text_resolves_for_every_alignment_band` (this
+    function, called directly, for all three bands) — the completeness-
+    only check that used to stand in for both of those never actually
+    invoked either.
+    """
+    return resolve_aligned_narrative(
+        narratives, alignment, day.overseer_intro_key, "generic_intro")
+
+
 @app.command("simulate")
 def simulate(
     seed: int = typer.Option(0xC0FFEE, help="RNG seed."),
@@ -80,7 +106,7 @@ def simulate(
     state = GameState(seed=seed)
 
     console.print(Panel(
-        narratives[day.overseer_intro_key],
+        _simulate_intro_text(day, narratives, state.alignment),
         title=f"[cyan]Overseer — {day.title}",
         border_style="cyan",
     ))
@@ -183,6 +209,14 @@ def _lab_day(day_number: int, archetypes: list[str], violations: list[str],
     for arch in forced.values():
         mix[arch] = mix.get(arch, 0) + 1
     allowed = tuple(DiscrepancyKind(v) for v in violations)
+    # A carrier-shape kind only ever rides on a stego COLOUR kind (see
+    # candidate_gen._STEGO_SHAPE_KINDS), so `-v hostile_payload` alone would
+    # whitelist away the very carrier it needs and never match a seed. Let the
+    # colour kinds through too; the seed search still insists on the shape.
+    if (set(allowed) & candidate_gen._STEGO_SHAPE_KINDS
+            and not set(allowed) & candidate_gen._STEGO_ARTIFACT_KINDS):
+        allowed += tuple(sorted(candidate_gen._STEGO_ARTIFACT_KINDS,
+                                key=lambda k: k.value))
     return replace(day, number=day_number, candidate_count=count,
                    forced_includes=forced, archetype_mix=mix,
                    allowed_violations=allowed)
@@ -191,17 +225,25 @@ def _lab_day(day_number: int, archetypes: list[str], violations: list[str],
 def _lab_tool_output(candidate, tool: ToolName, day, seed: int) -> list[str]:
     """The real filtered output of `tool` for this candidate.
 
-    The shared Logwatch/Hashcrack day logs are built per (seed, day) and contain
-    a block per candidate in the roster, so the seed must be the one the
-    candidate came from — passing a different one yields a log the candidate
-    simply is not in, which looks exactly like a rendering bug and isn't.
+    The shared Logwatch day log is built per (seed, day) and contains a block
+    per candidate in the roster, so the seed must be the one the candidate came
+    from — passing a different one yields a log the candidate simply is not in,
+    which looks exactly like a rendering bug and isn't.
+
+    Hashcrack no longer has a log or a filter tier: since the cipher-block
+    rework its output is the aperture minigame's end state, which
+    cipher_full_readout() produces without simulating a sweep (the same way
+    the Stegotool case below takes stamp_signature_lines rather than stamping).
     """
     state = GameState(seed=seed, current_day=day.number, compute_hours=10_000)
     if tool == ToolName.GHOSTSCAN:
         return list(tools_bridge.run_ghostscan_filtered_shared(candidate, state).raw_lines)
     if tool == ToolName.HASHCRACK:
-        entries = tools_bridge.generate_hashcrack_day_log(seed, day)
-        return list(tools_bridge.run_hashcrack_filtered_shared(entries, candidate, state).raw_lines)
+        block = tools_bridge.build_cipher_block(candidate, day.number)
+        return list(tools_bridge.cipher_full_readout(
+            block, candidate, day.number,
+            {config.UPGRADE_CRYPTO_ID, config.UPGRADE_HC_VERDICT,
+             config.UPGRADE_HC_BREACH_LABEL}))
     if tool == ToolName.LOGWATCH:
         entries = tools_bridge.generate_day_log(seed, day)
         return list(tools_bridge.run_logwatch_filtered_shared(entries, candidate, state).raw_lines)

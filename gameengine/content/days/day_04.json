@@ -55,7 +55,7 @@
   },
 
   "rule_sheet": {
-    "summary": "Logwatch is live. It shows the whole day's traffic, not just your applicant — finding their lines in it is the job today.",
+    "summary": "Logwatch is live. It opens on a free report of your applicant's day; the raw log — the whole day's traffic, every account — stays sealed until you pay to pull it.",
     "approved": {
       "domains": ["everything approved so far"],
       "affiliations": ["everything approved so far"]

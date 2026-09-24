@@ -61,23 +61,63 @@ _BOARD_HOME_GROUP: dict[str, str] = {
     "evidence-st": "STEGO",
 }
 
-# Reference data shown on the candidate page and tool sidebars
-_REF_CANDIDATE = """[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
+# ─── Reference panels (2026-09-19: derived, not typed) ─────────────────────
+#
+# Every number, key, colour and signature name on these panels is read from
+# its single source at render time: costs from tools_bridge.tool_cost() /
+# config (upgrade- and inflation-aware when a GameState is passed), keys from
+# config.KEY_BINDINGS, forum tiers from tools_bridge, cipher tiers from
+# tools_bridge._CIPHER_TIER_META, stamp signatures from _STAMP_KIND_META and
+# carrier glyphs from _STAMP_SHAPE_META. The panels used to be string literals
+# and had drifted: the Stegotool one advertised a 1 ⏱ stamp and a 2 ⏱ filter
+# (real: 5 and 10) and had its AMBER/VIOLET texture lines swapped.
+#
+# `state` is optional so the module-level _REF_* defaults (day 1, no
+# upgrades) still exist for anything that imports them; IntakeScreen rebuilds
+# each panel with the live GameState on every candidate load.
 
-[#00ff9f]admit[/]  [dim]or[/] [#00ff9f]a[/]
+
+def _key(name: str) -> str:
+    return config.KEY_BINDINGS[name]
+
+
+def _base_cost(tool: str, state=None) -> int:
+    if state is None:
+        return config.DAY_TOOL_COST(tool, 1)
+    return tools_bridge.tool_cost(state, tool)
+
+
+def _stego_filter_cost(state=None) -> int:
+    """Mirrors IntakeScreen._activate_stego_filter's own arithmetic."""
+    cost = config.STEGO_FILTER_COST
+    if state is not None and \
+            config.UPGRADE_TOOLCOST_STEGOTOOL in getattr(state, "upgrades", ()):
+        cost = max(1, cost - config.TOOLCOST_REDUCTION)
+    return cost
+
+
+def _verdict_footer() -> str:
+    return ("[dim]── verdict ─────────────────────────[/]\n"
+            f"[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]")
+
+
+def build_ref_candidate(state=None) -> str:
+    return f"""[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
+
+[#00ff9f]admit[/]  [dim]or[/] [#00ff9f]{_key('admit')}[/]
   approve this candidate's access
 
-[#ff5470]deny[/]  [dim]or[/] [#ff5470]d[/]
+[#ff5470]deny[/]  [dim]or[/] [#ff5470]{_key('deny')}[/]
   reject this candidate's access
 
-[#7dd3c0]next[/]  [dim]or[/] [#7dd3c0]n[/]
+[#7dd3c0]next[/]  [dim]or[/] [#7dd3c0]{_key('next_candidate')}[/]
   move to next candidate
 
 [dim]── tools ───────────────────────────[/]
-[#00ff9f]recon[/]   run ghostscan  [dim](page 2)[/]
-[#00ff9f]crack[/]   run hashcrack  [dim](page 3)[/]
-[#00ff9f]analyze[/] run logwatch   [dim](page 4)[/]
-[#00ff9f]extract[/] stego stamp mode [dim](page 5)[/]
+[#00ff9f]recon[/]   run ghostscan  [dim](page {_key('page_ghostscan')} · {_base_cost('ghostscan', state)} ⏱)[/]
+[#00ff9f]crack[/]   run hashcrack  [dim](page {_key('page_hashcrack')} · {_base_cost('hashcrack', state)} ⏱)[/]
+[#00ff9f]analyze[/] run logwatch   [dim](page {_key('page_logwatch')} · {_base_cost('logwatch', state)} ⏱)[/]
+[#00ff9f]extract[/] stego stamp mode [dim](page {_key('page_stegotool')} · {config.STEGO_STAMP_COST} ⏱/stamp)[/]
 
 [dim]── other ──────────────────────────[/]
 [#c084fc]reveal[/] spend a HackDox Credit —
@@ -86,109 +126,199 @@ _REF_CANDIDATE = """[#7dd3c0][b]COMMANDS — CANDIDATE[/][/]
 [#6b7785]help[/]   show command list
 [#6b7785]quit[/]   exit game"""
 
-_REF_GHOSTSCAN = """[#7dd3c0][b]COMMANDS — GHOSTSCAN[/][/]
 
-[#00ff9f]recon[/]  [dim]or[/] [#00ff9f]g[/]
+def build_ref_ghostscan(state=None) -> str:
+    crit = tools_bridge._GS_CRITICAL_FORUMS
+    adv = tools_bridge._GS_ADVISORY_FORUMS
+    half = lambda xs: (" · ".join(xs[:2]), " · ".join(xs[2:]))  # noqa: E731
+    c1, c2 = half(crit)
+    a1, a2 = half(adv)
+    return f"""[#7dd3c0][b]COMMANDS — GHOSTSCAN[/][/]
+
+[#00ff9f]recon[/]  [dim]or[/] [#00ff9f]{_key('tool_ghostscan')}[/]
   fixed platform sweep — same list
   every day · verify claimed org
-  [dim]cost: 5 ⏱[/]
+  [dim]cost: {_base_cost('ghostscan', state)} ⏱[/]
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
+[#c084fc]filter[/]  [dim]or[/] [#c084fc]{_key('filter_current')}[/]
   reveals threat forum entries +
   highlights commit email mismatch +
   explicit ▲ VIOLATION_TYPE labels
-  [dim]cost: +3 ⏱[/]
+  [dim]cost: +{config.FILTER_COSTS['ghostscan']} ⏱[/]
 
 [dim]── forum tiers ──────────────────────[/]
 [#ff5470]CRITICAL — immediate deny:[/]
-[dim]BreachForums · RaidForums[/]
-[dim]HackForums · XSS.is[/]
+[dim]{c1}[/]
+[dim]{c2}[/]
 [#ff8c42]ADVISORY — investigate further:[/]
-[dim]nulled.to · CrackingKing[/]
-[dim]Dread · CrackingPro[/]
+[dim]{a1}[/]
+[dim]{a2}[/]
 
-[dim]── verdict ─────────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+{_verdict_footer()}"""
 
-_REF_HASHCRACK = """[#7dd3c0][b]COMMANDS — HASHCRACK[/][/]
 
-[#00ff9f]crack[/]  [dim]or[/] [#00ff9f]h[/]
-  highlight target in shared log
-  + crack hash inline in log
-  [dim]cost: 3 ⏱[/]
+def build_ref_hashcrack(state=None) -> str:
+    tm = tools_bridge._CIPHER_TIER_META
+    weak_c, med_c, strong_c = tm["weak"][1], tm["medium"][1], tm["strong"][1]
+    sev = lambda k: _SEV_COLOR[candidate_gen.severity_for(k, None)]  # noqa: E731
+    wc, lp, cb = (DiscrepancyKind.WEAK_CREDENTIAL, DiscrepancyKind.LEAKED_PASSWORD,
+                  DiscrepancyKind.CROSS_BREACH_REUSE)
+    return f"""[#7dd3c0][b]THE CIPHER BLOCK[/][/]
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
-  explicit ▲ violation labels:
-  WEAK_CREDENTIAL · LEAKED_PASSWORD
-  [dim]cost: +4 ⏱[/]
+[#c084fc]{_key('decrypt_mode').upper()}[/]  [dim]or[/] [#c084fc]crack[/] [dim]/[/] [#c084fc]{_key('tool_hashcrack')}[/]
+  open the window selector
 
-[dim]── encryption strength ───────────[/]
-[#ff5470]WEAK[/]    [dim]MD5 32 hex — cracks instantly[/]
-[#ffd93d]MEDIUM[/]  [dim]SHA256 64 hex — crackable[/]
-[#00ff9f]STRONG[/]  [dim]bcrypt $2b$ — always safe,
-        don't waste ⏱ cracking it[/]
-[dim]weak enc + weak password
-= WEAK_CREDENTIAL (minor)[/]
+[dim]── 1. read the digest (free) ─────[/]
+[dim]The header states the digest
+shape before you spend anything.[/]
+[{weak_c}]32 hex[/]   [dim]{tm['weak'][2]:<7} small pad[/]
+[{med_c}]64 hex[/]   [dim]{tm['medium'][2]:<7} wide pad[/]
+[{strong_c}]$2b$[/]     [dim]{tm['strong'][2]:<7} DEAD END[/]
 
-[dim]── log events ────────────────────[/]
-[dim]AUTH_FAIL/OK  login attempts[/]
-[dim]HASH_SUBMIT   hash + source IP[/]
-[dim]BREACH_MATCH  corpus hit[/]
+[dim]bcrypt's window fits, engages,
+then stalls — key-stretched, no
+alignment exists. Walking away
+costs nothing. Opening it to find
+out costs a full window.[/]
 
-[dim]── verdict ─────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+[dim]── 2. pick the window ({_base_cost('hashcrack', state)} ⏱) ─────[/]
+[#c084fc]←→[/] [dim]choose[/]  [#c084fc]Enter[/] [dim]apply[/]
+[dim]wrong window = no structure, and
+the ⏱ is gone. Read first.[/]
 
-_REF_LOGWATCH = """[#7dd3c0][b]COMMANDS — LOGWATCH[/][/]
+[dim]── 3. walk the pad ───────────────[/]
+[#c084fc]←→[/] [dim]X axis[/]   [#c084fc]↑↓[/] [dim]Y axis[/]
+[dim]far   [/] [#6b7785]b99a8deb7c008949[/]
+[dim]close [/] [#c084fc]qN7!fWc$4kZt2[/][#6b7785]9q97![/]
+[dim]exact [/] [#c084fc]qN7!fWc$4kZt2{config.CIPHER_TILE_SEPARATOR}qN7![/]
+[dim]the password tiles across every
+row, so you can read it by
+consensus before you're exact.
+a few cells only settle on the
+exact square — that's the lock.[/]
+[dim]every press warms or cools the
+block. first {config.CIPHER_DIAL_FREE_STEPS} steps free, then
+{config.CIPHER_DIAL_OVERAGE_COST} ⏱ per {config.CIPHER_DIAL_OVERAGE_BLOCK} — a straight walk is
+always free, a random sweep isn't.[/]
 
-[#00ff9f]analyze[/]  [dim]or[/] [#00ff9f]logwatch[/]  [dim]or[/] [#00ff9f]l[/]
-  pattern detection — brute force,
-  geo anomalies, after-hours events
-  [dim]cost: 4 ⏱[/]
+[dim]── then judge it ─────────────────[/]
+[#ff5470]weak[/]    [dim]password01 · dates · walks[/]
+[#00ff9f]strong[/]  [dim]long, mixed, symbol-laden[/]
+[dim]weak pw + weak algo[/] [{sev(wc)}]{wc.name}[/]
+[dim]in a corpus[/]        [{sev(lp)}]{lp.name}[/]
+[dim]in TWO corpora[/]     [{sev(cb)}]{cb.name}[/]
 
-[#c084fc]filter[/]  [dim]or[/] [#c084fc]f[/]
-  geographic timeline overlay —
-  explicit BRUTE_FORCE /
-  IMPOSSIBLE_TRAVEL / INSIDER flag
-  [dim]cost: +3 ⏱[/]
+{_verdict_footer()}"""
 
-[dim]── verdict ─────────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
 
-_REF_STEGOTOOL = """[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]
+def build_ref_logwatch(state=None) -> str:
+    # 2026-09-19 overhaul: the free tier is the Activity Report; L unseals
+    # the auth log panel on the right; the filter names violations.
+    return f"""[#7dd3c0][b]LOGWATCH — REPORT FIRST[/][/]
 
-[#00ff9f]X[/]  [dim]or[/] [#00ff9f]extract[/] [dim]/[/] [#00ff9f]s[/]
-  enter stamp mode on the
-  image viewer (right panel)
+[dim]free[/]  Activity Report (centre)
+  read it before spending ⏱
 
-[#00ff9f]arrows[/]  move the stamp
-[#00ff9f]Space[/]   stamp the region
-  [dim]cost: 1 ⏱ per stamp[/]
-[#00ff9f]Esc[/]     exit stamp mode
+[#00ff9f]analyze[/]  [dim]or[/] [#00ff9f]logwatch[/]  [dim]or[/] [#00ff9f]{_key('tool_logwatch')}[/]
+  unseal the auth log (right)
+  — every row, no labels
+  [dim]cost: {_base_cost('logwatch', state)} ⏱[/]
+[#00ff9f]\\[ ][/]  jump this account's rows
+[#00ff9f]PgUp PgDn[/]  page the log
 
-[#00ff9f]F[/]  [dim]or[/] [#00ff9f]filter[/]  classify payload
-  [dim]cost: 2 ⏱ — names the payload
-  type in the stamp log. Without it,
-  read the stamp COLOUR yourself.[/]
+[#c084fc]filter[/]  [dim]or[/] [#c084fc]{_key('filter_current')}[/]
+  ▲ names each violation in the
+  log and on the report
+  [dim]cost: +{config.FILTER_COSTS['logwatch']} ⏱[/]
 
-[dim]── signature colors ────────────────[/]
-[#ff8c42]AMBER[/]    plaintext LSB payload
-  [dim]dense solid block[/]
-[#ff5470]CRIMSON[/]  encrypted payload
-  [dim]mid-density, structured[/]
-[#c084fc]VIOLET[/]   covert C2 channel
-  [dim]sparse scatter, wide zone[/]
-[#00ff9f]GREEN[/]    region clean
+{_verdict_footer()}"""
 
-[dim]── reading the image ───────────────[/]
-[dim]nothing is marked for you — sweep
-the grid and stamp where the noise
-looks wrong. reveal ~60% of a zone
-to resolve its ▲ signature.
-the Spectral Lens upgrade tints a
-rough area blue — close, not exact[/]
 
-[dim]── verdict ─────────────────────────[/]
-[#00ff9f]admit[/] [dim]/[/] [#ff5470]deny[/]  [dim]when ready[/]"""
+# The stego legend's "texture" column is the second half of each
+# _STAMP_KIND_META description ("<type> — <texture>"), and the payload name is
+# derived from the kind itself, so the legend can never list a signature the
+# engine does not render — or pair a colour with another colour's texture.
+_STEGO_PAYLOAD_NAMES = {
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT: "plaintext LSB payload",
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:     "encrypted payload",
+    DiscrepancyKind.COVERT_C2_CHANNEL:     "covert C2 channel",
+}
+_SHAPE_GLYPH_WORD = {
+    tools_bridge.StegoShape.CONVENTIONAL: "blocks",
+    tools_bridge.StegoShape.CROSS:        "cross",
+    tools_bridge.StegoShape.ENCLOSED:     "loop",
+    tools_bridge.StegoShape.SLASH:        "slashes",
+}
+
+
+def build_ref_stegotool(state=None) -> str:
+    stamp = _key("stamp_mode").upper()
+    lines = [
+        "[#7dd3c0][b]STEGOTOOL — STAMP MODE[/][/]",
+        "",
+        f"[#00ff9f]{stamp}[/]  [dim]or[/] [#00ff9f]extract[/] [dim]/[/] [#00ff9f]{_key('tool_stegotool')}[/]",
+        "  enter stamp mode on the",
+        "  image viewer (right panel)",
+        "",
+        "[#00ff9f]arrows[/]  move the stamp",
+        f"  [dim]{config.STEGO_STAMP_W}×{config.STEGO_STAMP_H} cells[/]",
+        "[#00ff9f]Space[/]   stamp the region",
+        f"  [dim]cost: {config.STEGO_STAMP_COST} ⏱ per stamp[/]",
+        "[#00ff9f]Esc[/]     exit stamp mode",
+        "",
+        f"[#00ff9f]{_key('filter_current').upper()}[/]  [dim]or[/] [#00ff9f]filter[/]  classify payload",
+        f"  [dim]cost: {_stego_filter_cost(state)} ⏱ — names the payload",
+        "  type and its glyph. Without it,",
+        "  read the COLOUR and SHAPE yourself.[/]",
+        "",
+        "[dim]── signature colours ───────────────[/]",
+    ]
+    for kind, (sig, col, desc) in tools_bridge._STAMP_KIND_META.items():
+        texture = desc.split(" — ", 1)[-1]
+        lines.append(f"[{col}]{sig:<8}[/] {_STEGO_PAYLOAD_NAMES[kind]}")
+        lines.append(f"  [dim]{texture}[/]")
+    lines += [
+        "[#00ff9f]GREEN[/]    region clean",
+        "",
+        "[dim]── carrier glyphs (operation) ──────[/]",
+        "[dim]the SHAPE the carrier cells trace is",
+        "a second finding, any colour:[/]",
+    ]
+    for shape, (geometry, _purpose, kind) in tools_bridge._STAMP_SHAPE_META.items():
+        verdict = ("nothing extra" if kind is None
+                   else f"→ {rules_content.label_for(kind)}")
+        lines.append(f"{_SHAPE_GLYPH_WORD[shape]:<8} [dim]{verdict}[/]")
+        lines.append(f"  [dim]{geometry.split(' — ')[0]}[/]")
+    cov = int(config.STEGO_STAMP_RESOLVE_COVERAGE * 100)
+    lines += [
+        "",
+        "[dim]── reading the image ───────────────[/]",
+        "[dim]nothing is marked for you — sweep",
+        "the grid and stamp where the noise",
+        f"looks wrong. reveal ~{cov}% of a zone",
+        "to resolve its ▲ signature.",
+        "the Spectral Lens upgrade tints a",
+        "rough area blue — close, not exact[/]",
+        "",
+        _verdict_footer(),
+    ]
+    return "\n".join(lines)
+
+
+REFERENCE_BUILDERS = {
+    "candidate": build_ref_candidate,
+    "ghostscan": build_ref_ghostscan,
+    "hashcrack": build_ref_hashcrack,
+    "logwatch":  build_ref_logwatch,
+    "stegotool": build_ref_stegotool,
+}
+
+# Day-1, no-upgrade renders — kept for importers of the old constants.
+_REF_CANDIDATE = build_ref_candidate()
+_REF_GHOSTSCAN = build_ref_ghostscan()
+_REF_HASHCRACK = build_ref_hashcrack()
+_REF_LOGWATCH  = build_ref_logwatch()
+_REF_STEGOTOOL = build_ref_stegotool()
 
 
 # ─── Command vocabulary ───────────────────────────────────────────────────────
@@ -295,13 +425,13 @@ def _hl_affil(affil: str, upgrades: set) -> str:
 
 
 # ─── Dossier password field (issue #29) ──────────────────────────────────────
-# Every dossier shows the submitted password in encrypted form plus its
-# encryption-strength tier (derived from the hash shape). After Hashcrack
-# runs, the cracked plaintext is shown in place across all pages.
+# Every dossier shows the submitted credential in encrypted form. Once the
+# Hashcrack cipher block resolves it, the recovered plaintext is shown in place
+# across all pages.
 #
 # Panel convention for `cracked_password`:
-#   None → not attempted yet   ·   "" → attempted, bcrypt held (uncracked)
-#   str  → cracked plaintext
+#   None → not recovered yet   ·   "" → bcrypt, established as unrecoverable
+#   str  → recovered plaintext
 
 _PW_STRENGTH_META: dict[str, tuple[str, str, str]] = {
     "weak":   ("#ff5470", "WEAK ENC",   "MD5"),
@@ -315,24 +445,26 @@ def _password_markup(dossier, cracked_password: str | None,
                      prefix_len: int = 14) -> tuple[str, str]:
     """(hash line, state line) for the dossier password field.
 
-    Batch-3 task #4: the [WEAK ENC]/[MEDIUM ENC]/[STRONG ENC] algorithm chip
-    is gated behind config.UPGRADE_CRYPTO_ID ("Cipher ID HUD") — without it,
-    only the raw hash is shown, and the player has to recognise MD5 (32 hex)
-    / SHA256 (64 hex) / bcrypt ($2b$…) by shape, using the rules page's new
-    reference examples. This doesn't remove WEAK_ENCRYPTION's evidence (the
-    hash itself is still fully visible), it just stops auto-labelling it.
+    2026-09-14, cipher-block rework: the dossier NO LONGER shows an encryption-
+    strength chip at all, upgrade or not. It shows the raw hash and says where
+    to go.
 
-    The "strongest tier is always safe" verdict line is gated separately,
-    behind config.UPGRADE_HC_VERDICT ("Crack Verdict Analyzer") — the same
-    upgrade that gates the equivalent wording in tools_bridge's Hashcrack
-    audit log (#6a), so the dossier and the tool never disagree about
-    whether a strength verdict is being told to the player for free.
+    That chip was the single biggest "the game answers its own question"
+    surface left in the build. WEAK_ENCRYPTION is a violation about the
+    ALGORITHM, and the dossier printed the algorithm for free on every
+    candidate — so the kind was, in effect, pre-flagged. It has been retiered
+    to HASHCRACK (see candidate_gen._SEVERITY_REVEAL) and establishing the
+    algorithm is now something the player does at the cipher block, by reading
+    its shape or by buying Cipher ID HUD to have it named THERE.
 
-    Batch-3 follow-up: UNSALTED_STORAGE (credential_unsalted) is handled
-    FIRST and returns early — there is no hash-shaped chip to show and
-    nothing left to crack, so the Password entry line itself is simply the
-    plaintext (no "encrypted — run hashcrack" prompt can ever appear next to
-    it, since that line only exists further down in the salted branch).
+    `_PW_STRENGTH_META` above is deliberately kept: the rules page renders the
+    same three tiers in its reference table, which is where the player learns
+    the shapes in the first place. It just no longer decorates the dossier.
+
+    UNSALTED_STORAGE (credential_unsalted) is still handled FIRST and returns
+    early — there is no hash to show and nothing to recover, so the entry line
+    is simply the plaintext. That kind stays dossier-tier: no salt means the
+    stored value really is exposed without any tool at all.
     """
     upgrades = upgrades or ()
     if dossier.credential_unsalted:
@@ -340,27 +472,24 @@ def _password_markup(dossier, cracked_password: str | None,
         # the stored value is exposed outright. Don't show an encrypted-
         # looking hash at all here — that reads as "still needs cracking"
         # and papers over the actual finding. ⚠ UNSALTED tags it as the
-        # UNSALTED_STORAGE evidence rather than a cracked result.
-        head = f"[b #e8f0f8]{dossier.password_plain}[/]  [#ff5470][b]⚠ UNSALTED[/][/]"
+        # UNSALTED_STORAGE evidence rather than a recovered result.
+        head = f"[b #e8f0f8]{dossier.password_plain}[/]"
+        if config.UPGRADE_CRYPTO_ID in upgrades:
+            # #74: the ⚠ UNSALTED tag is Cipher ID HUD's call to make, same as
+            # every other algorithm/tier label it gates elsewhere. Without the
+            # upgrade the plaintext still shows (there's genuinely no hash to
+            # crack), but the finding isn't named for the player for free.
+            head += "  [#ff5470][b]⚠ UNSALTED[/][/]"
         return head, ""
-    strength = tools_bridge.password_strength(dossier.submitted_hash)
-    if strength is None:
+    if not dossier.submitted_hash:
         return "[dim](none)[/]", ""
-    col, label, algo = _PW_STRENGTH_META[strength]
-    if config.UPGRADE_CRYPTO_ID in upgrades:
-        head = (f"{dossier.submitted_hash[:prefix_len]}…  "
-                f"[{col}][b]{label}[/][/] [#6b7785]{algo}[/]")
-    else:
-        head = f"{dossier.submitted_hash[:prefix_len]}…"
+    head = f"{dossier.submitted_hash[:prefix_len]}…"
     if cracked_password is None:
-        state = "[dim]encrypted — run hashcrack (H) to attempt crack[/]"
+        state = "[dim]encrypted — open the cipher block on Hashcrack (3)[/]"
     elif cracked_password == "":
-        if config.UPGRADE_HC_VERDICT in upgrades:
-            state = "[#00ff9f]✓ uncracked — strongest tier is always safe[/]"
-        else:
-            state = "[dim]✓ crack abandoned — no plaintext recovered[/]"
+        state = "[dim]✓ key-stretched — nothing recoverable[/]"
     else:
-        state = f"[#c084fc]cracked →[/]  [b #e8f0f8]{cracked_password}[/]"
+        state = f"[#c084fc]recovered →[/]  [b #e8f0f8]{cracked_password}[/]"
     return head, state
 
 

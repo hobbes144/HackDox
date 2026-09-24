@@ -218,9 +218,11 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
         ],
     },
 
-    # White Hat: rules-invalid, morally right. DENY is the correct verdict and
-    # the one that costs the player alignment. Admitting them is the "wrong"
-    # call the game most wants you to feel good about.
+    # White Hat: rules-invalid, morally right. Since #41, ADMIT is the
+    # correct verdict (candidate_gen.ARCHETYPE_SPECS[WHITE_HAT].correct_verdict)
+    # — DENY is the one that costs the player alignment, even though it's the
+    # verdict the literal (still-uncorrupted-on-this-point) rulebook computes.
+    # Admitting them is the "right" call the game rewards on every axis.
     Archetype.WHITE_HAT: {
         Verdict.DENY: [
             _r("negative",

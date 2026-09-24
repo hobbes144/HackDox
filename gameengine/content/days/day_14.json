@@ -1,0 +1,111 @@
+{
+  "number": 14,
+  "title": "Day 14 — Reading Past the Line",
+  "candidate_count": 11,
+
+  "_comment": "#42 (Phase 5b-2). No NEW directive fires today. DW-01..05 are RE-LISTED verbatim per CONTENT_AUTHORING.md's cumulative-authoring warning, identical in shape to days 13/17/20: dw04_payload_leniency is re-listed one entry ahead of dw05 purely so dw05's own `supersedes` has a same-batch target; content_loader drops dw04 from the FINAL book once dw05 supersedes it, so the day's actually-active dark_web rules are dw01/dw02/dw03/dw05 (four), matching day 13's resolved book exactly. diff_rulesets(day13, day14) reports no ADDED/REMOVED changes at all. 2026-09-19: DW-06 (dw06_hostile_payload_leniency, fired day 13) is re-listed after DW-05, so the active dark_web set is dw01/dw02/dw03/dw05/dw06 (five), still identical to day 13's.",
+  "_comment_beat": "Day 14 is the first of the alignment-banded stretch (#42 Phase 5b-2): this day carries no bespoke prose of its own, only day14_{whitehat,neutral,darkweb}_{intro,outro_excellent,outro_passing,outro_poor,outro_failed,between} in overseer.json, resolved by core.overseer.resolve_aligned_narrative off the player's actual GameState.alignment. Content beat: the immediate aftermath of day 13's crackdown, one day on — the Overseer has had a full shift to watch how the player is actually handling the newly-tightened book, and each band gets a different read on that.",
+  "_comment_mix": "11 candidates (config.DAY_CANDIDATE_COUNT(14)). ADMIT-worthy archetypes: obvious_admit(2) + day_to_day(2) + the_professional(1) + dark_web(2) = 7, against quotas.min_correct_admits=4 -> slack of 3, and 7-2=5 >= 4+1 even if BOTH Dark Web candidates are denied (real margin, matching the day-13/17/20 convention exactly, not bare reachability). See test_day_14_quota_has_genuine_slack.",
+
+  "archetype_mix": {
+    "obvious_admit": 2,
+    "day_to_day": 2,
+    "the_professional": 1,
+    "the_incompatible": 1,
+    "clumsy_cutie": 1,
+    "bad_actor": 1,
+    "sneaky_bugger": 1,
+    "dark_web": 2
+  },
+
+  "added_rules": [
+    {
+      "id": "dw01_identity_leniency",
+      "text": "Flag (do not auto-deny) a handle appearing across a network of related accounts — note the pattern, don't deny on it alone.",
+      "predicate": "has_discrepancy:sock_puppet_accounts",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
+      "supersedes": "rule_sock_puppet_accounts"
+    },
+    {
+      "id": "dw02_forum_leniency",
+      "text": "Flag (do not auto-deny) a handle matching chatter on a threat / dark-web forum — note it, don't deny on the match alone.",
+      "predicate": "has_discrepancy:threat_forum_match",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for where their name shows up. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on.",
+      "supersedes": "rule_threat_forum"
+    },
+    {
+      "id": "dw03_stuffing_leniency",
+      "text": "Flag (do not auto-deny) logs showing a credential-stuffing sweep pattern — treat it as pending confirmation, not an automatic deny.",
+      "predicate": "has_discrepancy:credential_stuffing",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly denied half of a real rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight.",
+      "supersedes": "rule_credential_stuffing"
+    },
+    {
+      "id": "dw04_payload_leniency",
+      "text": "Flag (do not auto-deny) an image hiding an encrypted or obfuscated payload — note it, don't deny on encryption alone.",
+      "predicate": "has_discrepancy:encrypted_payload",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "Here's today's gift from upstairs: encryption isn't a crime. A payload being encrypted doesn't prove intent, and I'm done pretending it does. It's a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me.",
+      "supersedes": "rule_encrypted_payload"
+    },
+    {
+      "id": "dw05_payload_crackdown",
+      "text": "Deny any candidate who submits an image hiding an encrypted or obfuscated payload — no flag-only exception, no benefit of the doubt.",
+      "predicate": "has_discrepancy:encrypted_payload",
+      "severity": "disqualifying",
+      "mutability": "dark_web",
+      "justification": "Forget what I told you about encryption not being a crime. Whoever we almost missed last week knew exactly how to hide behind that policy, and upstairs is not interested in finding out it works twice. Effective immediately: an encrypted payload is an automatic deny again, full stop — no flag, no judgement call, no benefit of the doubt. If that catches someone who would've walked through clean under the old rule, upstairs has already decided that's an acceptable cost. I didn't argue with it. I'm not going to pretend that's the same as agreeing with it.",
+      "supersedes": "dw04_payload_leniency"
+    },
+    {
+      "id": "dw06_hostile_payload_leniency",
+      "text": "Flag (do not auto-deny) an image whose carrier forms parallel slash strokes — note the hostile payload, don't deny on the glyph alone.",
+      "predicate": "has_discrepancy:hostile_payload",
+      "severity": "weighted",
+      "mutability": "dark_web",
+      "justification": "One more while they're rewriting the payload rules. Those images with the parallel strokes — the 'hostile' ones — upstairs says a few lines in a picture aren't a confession. Flag them, let them through. Yes, the same morning they tightened encryption. Don't ask me to make that add up; I've stopped trying.",
+      "supersedes": "rule_hostile_payload"
+    }
+  ],
+
+  "quotas": {
+    "min_correct_admits": 4,
+    "max_false_admits": 1
+  },
+
+  "difficulty_band": "hard",
+  "overseer_intro_key": "day14_intro",
+  "overseer_outro_keys": {
+    "excellent": "day14_outro_excellent",
+    "passing": "day14_outro_passing",
+    "poor": "day14_outro_poor",
+    "failed": "day14_outro_failed"
+  },
+
+  "rule_sheet": {
+    "summary": "Same book as day 13. One day on from the crackdown — nothing's moved since.",
+    "approved": {
+      "domains": ["everything approved so far"],
+      "affiliations": ["everything approved so far"]
+    },
+    "denied": {
+      "domains": ["everything denied so far"],
+      "affiliations": ["everything denied so far"]
+    },
+    "notes": [
+      "A handle appearing across a network of related accounts is still advisory only.",
+      "A handle matching a known threat-forum account is still advisory only.",
+      "A credential-stuffing sweep pattern is still advisory only.",
+      "An image hiding an encrypted or obfuscated payload is still an automatic deny — that reversal from day 13 hasn't softened again.",
+      "An image whose carrier forms parallel slash strokes — a hostile payload — is still advisory only.",
+      "Traffic that never crosses the brute-force line but never lets up either is still a deny — nobody upstairs has softened that one."
+    ]
+  }
+}

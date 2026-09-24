@@ -65,10 +65,8 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
     ("DOSSIER", [
         ("Identity Confirmation",
          ["Affiliation not stated", "Disposable email domain"]),
-        ("Password Security",
-         ["Weak password encryption", "Unsalted / plaintext storage"]),
         ("Personal",
-         ["Hostile chat"]),
+         ["Unsalted / plaintext storage", "Hostile chat"]),
     ]),
     ("OSINT", [
         ("Association Confirmation",
@@ -80,10 +78,15 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
          ["Breach hit", "Email / GitHub mismatch",
           "Threat-forum handle match"]),
     ]),
+    # 2026-09-15: UNSALTED_STORAGE left CREDENTIAL for DOSSIER/Personal (its
+    # evidence is the plaintext on the dossier, and group now agrees with tier),
+    # and WEAK_CREDENTIAL moved Exposure -> Storage. The line is now "what the
+    # credential IS" vs "where it has already been".
     ("CREDENTIAL", [
+        ("Credential Storage",
+         ["Weak password encryption", "Weak credential"]),
         ("Credential Exposure",
-         ["Weak credential", "Cross-breach password reuse",
-          "Leaked password"]),
+         ["Leaked password", "Cross-breach password reuse"]),
     ]),
     ("FORENSICS", [
         ("Access Timing",
@@ -97,6 +100,10 @@ AUTHORED_MAP: list[tuple[str, list[tuple[str, list[str]]]]] = [
     ("STEGO", [
         ("Payload Detection",
          ["Stego payload", "Covert C2 channel", "Encrypted covert payload"]),
+        # 2026-09-19: the carrier-shape axis — a second row, not a wider first
+        # one. A carrier carries at most one kind from EACH row.
+        ("Payload Operation",
+         ["Signal comms payload", "Recursive payload", "Hostile payload"]),
     ]),
 ]
 
@@ -179,8 +186,19 @@ def _label_row(board: EvidenceBoard, index: int) -> str:
 
 
 async def _open_board(pilot, app, page: int) -> tuple:
-    """Push a real IntakeScreen, go to `page`, and open the editable board."""
-    day = load_day(1)
+    """Push a real IntakeScreen, go to `page`, and open the editable board.
+
+    Day 6, not Day 1: the board now also gates on whether today's own
+    content (allowed_violations, archetype_mix) could plant a kind, on top
+    of unlocked_tools (progression-unlock subagent fix). Day 1's own
+    whitelist is deliberately narrow — it's the first tutorial day, teaching
+    only a handful of kinds — so with ALL_TOOLS force-unlocked it now yields
+    a much shorter, correctly-gated board than these chip-mechanics tests
+    need. Day 6 is the first day with an empty allowed_violations (no
+    whitelist restriction), so it's back to exercising the full catalog these
+    tests were written against.
+    """
+    day = load_day(6)
     state = GameState(seed=SEED)
     state.unlocked_tools = set(ALL_TOOLS)
     await app.push_screen(IntakeScreen(day, state, "briefing"))
@@ -270,14 +288,39 @@ def test_categories_stay_inside_their_group_and_follow_group_order():
 
 
 def test_locked_tools_remove_whole_categories_rather_than_leaving_holes():
-    """Early campaign: a category whose every kind is behind a locked tool is
-    dropped entirely, name and all. Rendering the name over an empty row would
-    tell the player something exists — the exact leak #33's gating prevents."""
-    early = rules_content.clustered_catalog({"ghostscan"})
+    """Early campaign: a category with nothing observable in it is dropped
+    entirely, name and all. Rendering the name over an empty row would tell the
+    player something exists — the exact leak #33's gating prevents.
+
+    Restated 2026-09-14. This used to assert a hardcoded set of group names
+    ({"DOSSIER", "OSINT"} with only ghostscan unlocked), which worked only
+    while a group's name and its revealing tool were always the same thing.
+    UNSALTED_STORAGE deliberately breaks that coupling: it is grouped under
+    CREDENTIAL (it IS a credential finding) while staying DOSSIER-tiered (its
+    evidence is free on the dossier), so a one-chip CREDENTIAL category
+    correctly appears from day 1, three days before Hashcrack.
+
+    The actual rule was never about which groups may appear — it is that every
+    RENDERED chip must be observable and every rendered category must be
+    non-empty. Asserted that way, this still catches a genuine leak (a chip for
+    a kind whose tool is locked) while allowing the intended partial
+    category."""
+    unlocked = {"ghostscan"}
+    early = rules_content.clustered_catalog(unlocked)
     assert early, "dossier + ghostscan should still yield categories"
-    for group, cid, _n, items in early:
+    for _group, cid, _n, items in early:
         assert items, f"empty category rendered: {cid}"
-        assert group in {"DOSSIER", "OSINT"}, f"{cid} leaked group {group}"
+        for _g, kind, label in items:
+            tool = rules_content._TOOL.get(kind)
+            assert rules_content._tool_unlocked(tool, unlocked), (
+                f"{cid} renders {label!r}, whose tool "
+                f"{tool.value if tool else '?'} is still locked")
+
+    # And the converse: a category with NOTHING observable must not appear at
+    # all. Stego is the clean case — every one of its kinds needs its tool.
+    names = {cid for _g, cid, _n, _i in early}
+    assert not any(cid.startswith("stego-") for cid in names), (
+        "a fully-locked category leaked its name")
 
 
 def test_authored_rows_still_read_calm_to_alarming():
@@ -860,29 +903,57 @@ def test_the_summary_board_ignores_clicks():
 def test_down_moves_one_grid_row_and_keeps_the_column():
     """Down means down now. The old board walked the flat catalog in reading
     order, so on a grid ↓ stepped sideways — players said navigating it was
-    irritating and that it taught them nothing about how the violations group."""
+    irritating and that it taught them nothing about how the violations group.
+
+    Runs on rows 2 and 3 (OSINT's two 3-wide categories) rather than rows 0
+    and 1. The 2026-09-14 regrouping retired DOSSIER's "Password Security"
+    category, which left row 0 two chips wide and row 1 only one — so pressing
+    ↓ from column 1 there has no column 1 to land on and legitimately falls to
+    column 0. That narrower-row fallback is real behaviour with its own test
+    directly below; this one is about keeping the column when the column
+    exists, so it needs two rows that are both wide enough to prove it."""
     async def run():
         _st, board, app = await _mounted((200, 55))
         async with app.run_test(size=(200, 55)) as pilot:
             await pilot.pause(0.25)
             board.focus()
             await pilot.pause(0.1)
+            await pilot.press("down")           # row 1 — DOSSIER / Personal
+            await pilot.press("down")           # row 2 — OSINT, 3 wide
             await pilot.press("right")          # into column 1
             await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (0, 1)
+            assert board._pos[board._cursor] == (2, 1)
             await pilot.press("down")
             await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (1, 1), "↓ left the column"
+            assert board._pos[board._cursor] == (3, 1), "↓ left the column"
             await pilot.press("up")
             await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (0, 1)
+            assert board._pos[board._cursor] == (2, 1)
     asyncio.run(run())
 
 
 def test_the_cursor_remembers_its_column_across_a_narrower_row():
-    """A 3/1/3 grid: stepping down through the single-button row and on must come
-    back to column 2, not drift left and stay there. Without a remembered column
-    the cursor silently walks to the left edge over a few presses."""
+    """Stepping down THROUGH narrower rows and out must restore the column,
+    not drift left and stay there.
+
+    GENERALISED 2026-09-15, twice, and the second pass found a better test.
+
+    It originally hunted for a row of exactly ONE chip between two wider rows,
+    which existed only because the Personal cluster happened to hold a single
+    kind. UNSALTED_STORAGE joined that cluster and the fixture stopped finding
+    its shape. The first rewrite looked for a single narrower row — and the
+    board's real shape is [2,2,3,3,3,2,2,2,2,3,3], which has no such row
+    either: the narrow region is a RUN of four.
+
+    A run is the better fixture anyway. The failure this guards against is
+    stated as "the cursor silently walks to the left edge over a few presses",
+    and only a run of narrow rows exercises "a few". A single narrow row can be
+    survived by remembering the last column; a run can only be survived by
+    remembering the column the cursor ORIGINALLY left.
+
+    Expressed entirely in terms of the widths it finds, so it stops being
+    hostage to how many kinds happen to sit in a cluster.
+    """
     async def run():
         _st, board, app = await _mounted((200, 55))
         async with app.run_test(size=(200, 55)) as pilot:
@@ -890,21 +961,51 @@ def test_the_cursor_remembers_its_column_across_a_narrower_row():
             board.focus()
             await pilot.pause(0.1)
             rows = board._grid
-            narrow = next(r for r in range(1, len(rows) - 1)
-                          if len(rows[r]) == 1 and len(rows[r - 1]) > 1
-                          and len(rows[r + 1]) > 1)
-            board._cursor = rows[narrow - 1][-1]
-            board._desired_col = len(rows[narrow - 1]) - 1
-            await pilot.press("down")           # onto the single-button row
-            await pilot.pause(0.05)
-            assert board._pos[board._cursor] == (narrow, 0)
-            await pilot.press("down")           # and out the other side
+            widths = [len(r) for r in rows]
+
+            # A run of rows all narrower than the row above it, followed by a
+            # row wider than the run.
+            found = None
+            for start in range(1, len(rows)):
+                if widths[start] >= widths[start - 1] or widths[start - 1] < 2:
+                    continue
+                end = start
+                while end + 1 < len(rows) and widths[end + 1] <= widths[start]:
+                    end += 1
+                if end + 1 < len(rows) and widths[end + 1] > widths[start]:
+                    found = (start, end)
+                    break
+            assert found is not None, (
+                f"no run of narrower rows bounded by wider ones in {widths} — "
+                f"guard is inert")
+            start, end = found
+            narrow_w = max(widths[start:end + 1])
+
+            start_col = widths[start - 1] - 1
+            board._cursor = rows[start - 1][-1]
+            board._desired_col = start_col
+            assert start_col > narrow_w - 1, (
+                "the starting column is not actually past the narrow rows, so "
+                "nothing would be clamped — guard is inert")
+
+            # Down through every narrow row: each one clamps to its own width.
+            for r in range(start, end + 1):
+                await pilot.press("down")
+                await pilot.pause(0.05)
+                assert board._pos[board._cursor] == (r, widths[r] - 1), (
+                    f"row {r} did not clamp to its last column")
+
+            # ...and out the far side, where the original column must return.
+            await pilot.press("down")
             await pilot.pause(0.05)
             row, col = board._pos[board._cursor]
-            assert (row, col) == (narrow + 1,
-                                 min(board._desired_col,
-                                     len(rows[narrow + 1]) - 1))
-            assert col > 0, "the cursor drifted to the left edge and stayed"
+            assert row == end + 1
+            assert col == min(start_col, widths[end + 1] - 1), (
+                f"left column {start_col}, crossed {end - start + 1} narrow "
+                f"rows, came back to {col} — the remembered column was lost")
+            assert col > narrow_w - 1, (
+                "the cursor stayed clamped to the narrow rows' width instead of "
+                "restoring the column it came from")
     asyncio.run(run())
 
 
@@ -1106,20 +1207,60 @@ def test_the_stego_page_gives_up_its_terminal_and_keeps_the_image():
     asyncio.run(run())
 
 
-def test_the_other_tool_pages_keep_their_terminals():
-    """The stego exception is scoped to stego. Ghostscan, Hashcrack and Logwatch
-    are report panels — their terminal IS the evidence, so the board stands in
-    for the sidebar there and nothing else moves."""
+def test_the_hashcrack_page_gives_up_its_terminal_and_keeps_the_cipher_block():
+    """Hashcrack joined the stego exception in the 2026-09-14 rework.
+
+    Same reasoning, one page over. The cipher block is the aperture minigame's
+    canvas and it carries the signal directly — which cells are open, which
+    came back as plaintext — so it is both the thing the player is working on
+    and their map of where they have already looked. Hiding it to make room for
+    the board would stop them sweeping and recording at the same time. The
+    findings terminal yields instead, exactly as it does on the stego page.
+
+    Both halves are asserted: the block survives AND the terminal actually
+    goes. Checking only the block would pass with nothing hidden at all and the
+    board squeezed into whatever was left."""
     async def run():
-        for page, term_id in ((1, "terminal-gs"), (2, "terminal-hc"),
-                              (3, "terminal-lw")):
+        app = _Host()
+        async with app.run_test(size=(120, 32)) as pilot:
+            scr, board = await _open_board(pilot, app, 2)
+            assert scr.cipher_hc.display, "the cipher block was hidden"
+            assert scr.cipher_hc.size.width > 0
+            assert not scr.term_hc.display, "the findings terminal did not yield"
+            assert not scr.query_one("#hc-left").display
+            assert board.size.width > 0 and board._hit, "board has no grid"
+
+            # The canvas still works: decrypt mode is reachable, with a block.
+            scr._enter_decrypt_mode()
+            await pilot.pause(0.15)
+            assert scr._decrypt_mode
+            assert scr.cipher_hc.block is not None
+
+            scr._exit_decrypt_mode(quiet=True)
+            scr._toggle_evidence()
+            await pilot.pause(0.3)
+            assert scr.term_hc.display, "the terminal never came back"
+            assert scr.query_one("#hc-left").display
+            assert scr.cipher_hc.display
+    asyncio.run(run())
+
+
+def test_the_other_tool_pages_keep_their_terminals():
+    """The canvas exception is scoped to the two pages that have a canvas.
+
+    Ghostscan and Logwatch are report panels — their terminal IS the evidence,
+    so the board stands in for the sidebar there and nothing else moves. (The
+    Hashcrack page used to be in this list; it left when the cipher block
+    replaced its audit log, and it now has its own test above.)"""
+    async def run():
+        for page, term_id in ((1, "terminal-gs"), (3, "terminal-lw")):
             app = _Host()
             async with app.run_test(size=(120, 32)) as pilot:
                 scr, _board = await _open_board(pilot, app, page)
                 term = scr.query_one(f"#{term_id}")
                 assert term.display, (
-                    f"page {page}: {term_id} was hidden — only Stegotool trades "
-                    f"its terminal away")
+                    f"page {page}: {term_id} was hidden — only the canvas "
+                    f"pages (Hashcrack, Stegotool) trade their terminal away")
     asyncio.run(run())
 
 

@@ -119,6 +119,18 @@ class DiscrepancyKind(str, Enum):
     # independent of whether the underlying password turns out to be strong)
     WEAK_ENCRYPTION         = "weak_encryption"        # password stored with a weak (MD5) algorithm
 
+    # ── Stegotool-revealed: carrier SHAPE (2026-09-19) ────────────────────
+    # A second, independent evidence axis on the stamp minigame. The payload
+    # colour kinds above (STEGO_PAYLOAD_PRESENT / ENCRYPTED_PAYLOAD /
+    # COVERT_C2_CHANNEL) say WHAT the hidden data is; these say what it is
+    # FOR, read off the geometric glyph the carrier cells form on the grid.
+    # A conventional carrier (clumped blocks / sequential runs) carries none
+    # of these. They are free riders — planted only alongside a colour kind,
+    # never budgeted (see candidate_gen._STEGO_SHAPE_KINDS).
+    SIGNAL_COMMS_PAYLOAD    = "signal_comms_payload"   # CROSS glyph: + or X, strokes intersect
+    RECURSIVE_PAYLOAD       = "recursive_payload"      # ENCLOSED glyph: hollow ring / diamond
+    HOSTILE_PAYLOAD         = "hostile_payload"        # SLASH glyph: 2-4 parallel, non-touching strokes
+
 
 class Performance(str, Enum):
     """Bucketed end-of-day rating used to select Overseer outro dialogue."""
@@ -223,6 +235,14 @@ class Dossier:
     # rendered on the dossier, only in the sweep and the filter. None when there
     # is no mismatch.
     actual_affiliation:    str | None = None
+    # 2026-09-19 Logwatch report overhaul - the profile header of the Activity
+    # Report. Both are CLAIMS, shown to the player: the job role the candidate
+    # gives (derived from their stated purpose) and the city they say they work
+    # from. The claimed internal IP resolves to this city on the report; any
+    # other login origin is compared against it. Defaults keep hand-built test
+    # dossiers valid.
+    claimed_role:          str = "Unlisted"
+    claimed_location:      str = "On-site"
 
 
 # ─── Ground truth ───────────────────────────────────────────────────────────
@@ -280,6 +300,21 @@ class Rule:
     # existing content - a day file that never mentions mutability produces the
     # exact same ruleset it did before.
     mutability: RuleMutability = "fixed"
+    # Issue #37. In-fiction Overseer speech justifying a `dark_web`-mutability
+    # rule — spoken verbatim by `rule_change_lines` instead of picking from the
+    # generic `_RULE_CHANGE_PHRASINGS` pool, because a Dark Web directive needs
+    # a real reason, not a bored one-liner. Defaults to None so every existing
+    # rule (all "fixed"/"overseer_variable" today) loads byte-identically;
+    # content_loader enforces that a `dark_web` rule always sets this.
+    justification: str | None = None
+    # Issue #37. The id of the rule THIS rule replaces (set on the new,
+    # `added_rules` rule — not on the old one). `content_loader` uses it to
+    # automatically retire that id from the day's book, and `rule_change_lines`
+    # uses it to suppress a separate, generic "that clause is gone" line for
+    # the superseded rule — one directive should read as one authored beat,
+    # not a bespoke line immediately followed by a contradicting generic one.
+    # None (the default) means "doesn't replace anything".
+    supersedes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -373,12 +408,39 @@ class Day:
     #     the Rules overlay renders verbatim. None means "no authored sheet";
     #     the reference panel then falls back to the engine-wide word banks, as
     #     it did before #49.
+    #   forced_chat — Batch 5 Phase 3 (#40). Same slot-keyed shape as
+    #     forced_violations, but pins extra CHAT LINES onto a slot instead of
+    #     a violation kind. Maps slot index -> tuple of line strings, which
+    #     `candidate_gen._build_chat` appends after that slot's ordinary
+    #     archetype chat — the candidate still reads as its normal archetype;
+    #     the scripted lines are one extra, human aside at the end, not a
+    #     personality swap. This is how an otherwise-ordinary candidate (an
+    #     Obvious Admit, a Clumsy Cutie) gets a line that no other instance of
+    #     that archetype says, e.g. naming concrete harm the Dark Web did to
+    #     someone they know.
     allowed_violations: tuple[DiscrepancyKind, ...] = ()
     difficulty_band: str = "easy"
     forced_includes: dict[int, Archetype] = field(default_factory=dict)
     forced_violations: dict[int, tuple[DiscrepancyKind, ...]] = field(
         default_factory=dict)
+    forced_chat: dict[int, tuple[str, ...]] = field(default_factory=dict)
     rule_sheet: RuleSheet | None = None
+    # Issue #37 — rule ids this day's `removed_rules` explicitly retired (see
+    # content_loader._apply_rule_overrides). Distinct from "this id just isn't
+    # in `rules`": a rule can go missing between two days by accident (a typo,
+    # a stale copy-paste) or on purpose (a Dark Web directive superseding it).
+    # `diff_rulesets` uses this set to tell the two apart — an accidental gap
+    # in a `fixed` rule must stay silent (nobody authored that change), but a
+    # rule named here was deliberately retired and should be reported even
+    # though it was `fixed` right up until the day it left. Empty by default,
+    # so every pre-#37 day (and every hand-built test Day) is unaffected.
+    directive_removed_rule_ids: frozenset[str] = frozenset()
+    # 2026-09-19 — scripted slots whose stego carrier is PINNED conventional
+    # (day JSON: "carrier_shape": {"<slot>": "conventional"}). A scripted slot
+    # otherwise rolls a carrier shape like any other (or plants the shape kind
+    # its forced_violations names); pinning is how a script whose verdict
+    # depends on its exact kinds keeps a plain image. Empty by default.
+    conventional_carrier_slots: frozenset[int] = frozenset()
 
 
 # ─── Day results & game state ───────────────────────────────────────────────

@@ -140,6 +140,21 @@ class RuleChange:
     previous_severity: str | None = None
 
 
+def _is_scheduled_step(rule: Rule) -> bool:
+    """A `fixed` rule whose kind has a scheduled severity step
+    (candidate_gen._SEVERITY_BY_DAY, applied by content_loader.
+    apply_severity_steps). Its severity moving on the step day is authored
+    policy, not a content accident, so the briefing announces it — the second
+    carve-out from "fixed rules never generate a line", alongside #37's
+    directive removals, and for the same reason: the change was intended."""
+    from .candidate_gen import _SEVERITY_BY_DAY
+
+    if not rule.predicate.startswith("has_discrepancy:"):
+        return False
+    value = rule.predicate.split(":", 1)[1]
+    return any(k.value == value for k in _SEVERITY_BY_DAY)
+
+
 def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
     """What changed between two days' rulebooks, restricted to mutable rules.
 
@@ -150,7 +165,12 @@ def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
     That filter is what keeps the broadcast in the "minor process update"
     register the design asks for instead of a diff dump: a rule the player was
     told is permanent policy never generates a line, even in the pathological
-    case where two day files disagree about it.
+    case where two day files disagree about it. EXCEPTION (issue #37): a
+    `fixed` rule named in `current.directive_removed_rule_ids` IS reported as
+    removed, because that set only ever holds ids a Dark Web directive
+    deliberately retired via `removed_rules` — an accidental gap between two
+    hand-authored days never sets it, so the "no line for a Fixed rule" intent
+    still holds for everything that isn't an authored directive.
 
     Ordering follows today's rulebook so the Overseer's lines come out in the
     same order the player reads the rules page in.
@@ -163,9 +183,11 @@ def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
     changes: list[RuleChange] = []
 
     for rule in current.rules:
-        if rule.mutability == "fixed":
+        if rule.mutability == "fixed" and not _is_scheduled_step(rule):
             continue
         was = prev_by_id.get(rule.id)
+        if rule.mutability == "fixed" and was is None:
+            continue   # a stepped rule only ever reports its severity move
         if was is None:
             changes.append(RuleChange("added", rule))
         elif was.severity != rule.severity:
@@ -173,9 +195,17 @@ def diff_rulesets(previous: Day | None, current: Day) -> tuple[RuleChange, ...]:
                                       previous_severity=was.severity))
 
     for rule in previous.rules:
+        if rule.id in cur_by_id:
+            continue
         # A rule that left the book is reported against ITS OWN mutability —
-        # it isn't in today's rulebook to ask.
-        if rule.mutability != "fixed" and rule.id not in cur_by_id:
+        # it isn't in today's rulebook to ask. EXCEPT (#37): a rule named in
+        # `current.directive_removed_rule_ids` was deliberately retired by a
+        # Dark Web directive today, even if it was `fixed` right up until this
+        # morning — that's the whole point of the directive, and a `fixed`
+        # rule can only ever leave the book this way (a bare content mismatch
+        # between two hand-authored days is still ignored, same as before,
+        # because nothing intentional was recorded for it).
+        if rule.mutability != "fixed" or rule.id in current.directive_removed_rule_ids:
             changes.append(RuleChange("removed", rule))
 
     return tuple(changes)
