@@ -369,11 +369,15 @@ def _rule(title: str = "", lay: _Layout | None = None) -> str:
 
 
 def _bar(r: LogwatchReport, key: str, hud: bool, lay: _Layout) -> str:
+    """Without the Log Analyzer HUD (hud=False, 2026-09-23): the raw count is
+    still shown (they can always see how much is present) but the bar carries
+    no ceiling tick and no amber highlight — "is this a lot?" is the read the
+    HUD upgrade sells, not something given away for free."""
     label, ceiling, scale = config.LW_PROFILE_METRICS[key]
     w = lay.bar
     v = r.metric(key)
     filled = round(min(v, scale) / scale * w)
-    tick = min(w - 1, round(ceiling / scale * w))
+    tick = min(w - 1, round(ceiling / scale * w)) if hud else None
     hot = hud and r.out_of_range(key)
     col = _C_HOT if hot else _C_BAR
     cells = []
@@ -632,8 +636,9 @@ def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = F
         f"  [{L}]VIA IP [/]  [#ffd93d]{_esc(r.claimed_ip)}[/]",
         "",
         _rule("ACTIVITY PROFILE", lay),
-        f"  [{L}]{'':<14}{'│ = normal ceiling':>{lay.bar + 4}}[/]",
     ]
+    if hud:
+        lines.append(f"  [{L}]{'':<14}{'│ = normal ceiling':>{lay.bar + 4}}[/]")
     lines += [_bar(r, k, hud, lay) for k in config.LW_PROFILE_METRICS]
     lines += ["", _rule("ACTIVITY TIMELINE", lay)]
     lines += _timeline(r, lay)

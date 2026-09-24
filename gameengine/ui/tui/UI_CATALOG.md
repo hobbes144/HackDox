@@ -120,7 +120,7 @@ HackDoxApp
 ┌─ lw-left (24%) ─┬─ Activity Report (40%, #terminal-lw) ─┬─ LogListPanel (36%) ─┐
 │ CondensedDossier│ SUBJECT / ACCOUNT / ROLE / HOURS /    │ AUTH LOG — SEALED    │
 │ ReferencePanel  │ CLAIMS header                         │ (until L)            │
-│                 │ ACTIVITY PROFILE bars (│ = ceiling)   │                      │
+│                 │ ACTIVITY PROFILE bars (ceiling: HUD)  │                      │
 │                 │ ACTIVITY TIMELINE 24h lanes           │ after L: every row,  │
 │                 │   AUTH ● FAIL × FILES □ PRIV ◆        │ target in yellow,    │
 │                 │ LOCATIONS & ACCESS (origins, Δ travel,│ no labels; [ ] jump, │
@@ -136,8 +136,10 @@ HackDoxApp
   the column is narrower than `config.LW_REPORT_WIDTH` (`IntakeScreen._lw_report_width`).
 - LOCATIONS & ACCESS draws an ASCII world map of the login origins (`core/ascii_map.py`, 2026-09-20); it re-rasterises at the column width and falls back to a list below `config.LW_MAP_MIN_WIDTH`.
 - ANALYST NOTES are locked until the Threat Triage HUD upgrade (`UPGRADE_LOG_TRIAGE`).
-- Log Analyzer HUD: neutral `▸` gutter marks on the target's anomalous rows + `◂ out of
-  range` on report bars. It never names a violation.
+- Log Analyzer HUD: neutral `▸` gutter marks on the target's anomalous rows, reveals each
+  Activity Profile bar's `│` normal-ceiling tick, and flags bars past it (`◂ out of range`,
+  2026-09-23). Without it a bar shows only its raw count, no tick, no highlight. It never
+  names a violation.
 
 ---
 

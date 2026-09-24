@@ -1424,8 +1424,9 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
     ]
     lines += _sub("reading the Activity Report", "#ffb454")
     lines += [
-        "  [#7dd3c0]ACTIVITY PROFILE[/]  each bar has a [b]│[/] tick = the normal",
-        "    ceiling for that metric. Past the tick is unusual, not proof.",
+        "  [#7dd3c0]ACTIVITY PROFILE[/]  bars show the raw count for free. The",
+        "    [b]│[/] normal-ceiling tick — and the amber flag past it — is",
+        "    behind the Log Analyzer HUD; until then you judge the count cold.",
         f"  [#7dd3c0]TIMELINE[/]  24h lanes AUTH ● · FAIL × · FILES □ · PRIV ◆;",
         f"    ░ is the {s0}–{s1} shift; a digit = several events in one cell.",
         "  [#7dd3c0]ORIGINS[/]  a world map of where this account logged in",
@@ -1468,8 +1469,9 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
     lines += _sub("upgrades that change this page", "#ffb454")
     lines += [
         "  [#00ff9f]Log Analyzer HUD[/]  ▸ marks this account's rows that sit",
-        "                    inside an anomaly, and flags report bars that",
-        "                    are out of range. It points; it never names.",
+        "                    inside an anomaly, reveals each Activity Profile",
+        "                    bar's ceiling tick, and flags bars past it. It",
+        "                    points; it never names.",
         "  [#00ff9f]Threat Triage HUD[/]   unlocks the report's Analyst Notes",
         "  [#00ff9f]Logwatch Optimizer[/]  the log pull costs less ⏱",
     ]

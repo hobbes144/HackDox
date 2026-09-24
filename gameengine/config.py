@@ -1084,9 +1084,11 @@ LW_MAP_MIN_WIDTH         = 38
 LW_MAP_MAX_WIDTH         = 56
 
 # Activity Profile bars, top to bottom: metric -> (label, normal ceiling,
-# bar scale max). The ceiling is drawn as a │ tick; a value past it is "out
-# of range" (and turns amber with the Log Analyzer HUD). Reorder freely; the
-# metric keys are fixed (logwatch_report.LogwatchReport.metric).
+# bar scale max). Without the Log Analyzer HUD upgrade the raw count still
+# shows but the ceiling tick is hidden entirely (2026-09-23) — with it, the
+# ceiling is drawn as a │ tick and a value past it turns amber as "out of
+# range". Reorder freely; the metric keys are fixed
+# (logwatch_report.LogwatchReport.metric).
 LW_PROFILE_METRICS: dict[str, tuple[str, int, int]] = {
     "logins":     ("Logins",        4, 8),
     "failures":   ("Auth failures", 1, 8),
@@ -1174,7 +1176,7 @@ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
     (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
     (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
     (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
-    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸) and out-of-range report bars — points, never names"),
+    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
     (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     30, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
