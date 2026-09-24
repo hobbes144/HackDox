@@ -200,7 +200,9 @@ class HackDoxApp(App):
 
     def on_mount(self) -> None:
         self._narratives = load_narratives()
-        self.push_screen(IntroScreen())
+        intro = IntroScreen()
+        self.push_screen(intro)
+        self._sync_music(intro)
 
     def start_new_game(self) -> None:
         self._state = GameState(
@@ -351,6 +353,19 @@ class HackDoxApp(App):
         """The bare screen change every transition eventually performs."""
         self.pop_screen()
         self.push_screen(screen)
+        self._sync_music(screen)
+
+    def _sync_music(self, screen) -> None:
+        """Keep the right background loop playing for the screen the player
+        just landed on: the ambient bed during intake (the gameplay itself),
+        HackDox's theme everywhere else (start menu, briefing, between-day
+        shop, EOD, ...). play_music() no-ops if that track is already
+        playing, so calling this on every screen change never restarts or
+        interrupts a loop mid-playback — and overlays pushed on top of a
+        screen without going through _swap_screen (rules, evidence board,
+        credit reveal) correctly leave whichever track was already playing
+        alone."""
+        sound_manager.play_music("ambient" if isinstance(screen, IntakeScreen) else "menu")
 
     def _transition(self, screen) -> None:
         """Glitch over the screen change, in two halves.

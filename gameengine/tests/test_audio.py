@@ -10,13 +10,19 @@ independently of a campaign save.
 from __future__ import annotations
 
 from gameengine import config
-from gameengine.core.audio import SFX_REGISTRY, SoundManager
+from gameengine.core.audio import MUSIC_REGISTRY, SFX_REGISTRY, SoundManager
 
 
 def test_every_registered_sound_has_a_file() -> None:
     missing = [sid for sid, fname in SFX_REGISTRY.items()
                if not (config.AUDIO_SFX_DIR / fname).exists()]
     assert not missing, f"SFX_REGISTRY ids with no file on disk: {missing}"
+
+
+def test_every_registered_music_track_has_a_file() -> None:
+    missing = [tid for tid, fname in MUSIC_REGISTRY.items()
+               if not (config.AUDIO_MUSIC_DIR / fname).exists()]
+    assert not missing, f"MUSIC_REGISTRY ids with no file on disk: {missing}"
 
 
 def test_play_never_raises_for_registered_ids() -> None:
@@ -27,6 +33,23 @@ def test_play_never_raises_for_registered_ids() -> None:
 
 def test_play_never_raises_for_unknown_id() -> None:
     SoundManager().play("no_such_sound_id")
+
+
+def test_play_music_never_raises_for_registered_ids() -> None:
+    mgr = SoundManager()
+    for track_id in MUSIC_REGISTRY:
+        mgr.play_music(track_id)  # must not raise, whether or not audio is available
+
+
+def test_play_music_never_raises_for_unknown_id() -> None:
+    SoundManager().play_music("no_such_track_id")
+
+
+def test_stop_music_never_raises() -> None:
+    mgr = SoundManager()
+    mgr.play_music("menu")
+    mgr.stop_music()
+    mgr.stop_music(fade_ms=250)
 
 
 def test_disabled_manager_plays_nothing_and_stays_quiet() -> None:

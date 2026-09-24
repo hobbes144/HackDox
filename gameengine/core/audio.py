@@ -13,11 +13,17 @@ two-line change:
   1. add "<new_id>": "<file>.wav" to SFX_REGISTRY below
   2. call sound_manager.play("<new_id>") at the trigger site
 
-Sound files are looked up by id against config.AUDIO_SFX_DIR. Every id
-currently in the registry points at a generated placeholder tone (see
+Sound files are looked up by id against config.AUDIO_SFX_DIR. Most ids in
+the registry still point at a generated placeholder tone (see
 gameengine/content/audio/sfx/README.md) — swap the files whenever real
 audio is ready; call sites never need to change, since they key off the
 id, not the filename.
+
+Background music works the same way, one level up: MUSIC_REGISTRY maps a
+track id ("menu", "ambient") to a file under config.AUDIO_MUSIC_DIR, and
+sound_manager.play_music(track_id) is safe to call on every screen change
+since it no-ops when that track is already playing (see HackDoxApp._sync_music
+in ui/tui/app.py).
 """
 
 from __future__ import annotations
@@ -95,6 +101,36 @@ SFX_REGISTRY: dict[str, str] = {
 }
 
 
+# ─── Background music registry ─────────────────────────────────────────────
+# Same id -> filename pattern as SFX_REGISTRY, but for the one looping track
+# pygame.mixer.music can have loaded at a time. Keys are the ids call sites
+# pass to sound_manager.play_music(...); values are filenames under
+# config.AUDIO_MUSIC_DIR.
+
+MUSIC_REGISTRY: dict[str, str] = {
+    # HackDox's theme. Plays on every non-gameplay screen (start menu,
+    # briefing, between-day shop, EOD, etc.) and keeps playing uninterrupted
+    # as the player moves between them — see HackDoxApp._sync_music, which
+    # calls play_music("menu") on every screen change; play_music() itself
+    # no-ops if "menu" is already the track playing, so the loop is never
+    # restarted or interrupted by the navigation.
+    "menu": "hackdox_music.ogg",
+    # Loopable ambient bed for the intake screen (the case-review gameplay
+    # itself) — plays underneath every SFX cue while a shift is worked,
+    # including with the rules overlay or evidence board open on top of it.
+    "ambient": "hackdox_ambient.ogg",
+}
+
+# Per-track volume multiplier, applied on top of master_volume * music_volume.
+# The ambient loop plays constantly behind every one-shot SFX cue during
+# intake, so it needs to sit quieter than those; the menu theme has no SFX
+# competing with it and plays at full music volume.
+MUSIC_TRACK_VOLUME_SCALE: dict[str, float] = {
+    "menu": 1.0,
+    "ambient": 0.5,
+}
+
+
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
@@ -111,6 +147,7 @@ class SoundManager:
     def __init__(self) -> None:
         self._available: bool | None = None  # None = backend not tried yet
         self._sounds: dict[str, object] = {}
+        self._current_music_id: str | None = None  # None = nothing loaded/playing
         self.enabled = config.SOUND_ENABLED_DEFAULT
         self.master_volume = config.DEFAULT_MASTER_VOLUME
         self.music_volume  = config.DEFAULT_MUSIC_VOLUME
@@ -199,7 +236,8 @@ class SoundManager:
     def _apply_music_volume(self) -> None:
         if self._available:
             try:
-                pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
+                scale = MUSIC_TRACK_VOLUME_SCALE.get(self._current_music_id or "", 1.0)
+                pygame.mixer.music.set_volume(self.master_volume * self.music_volume * scale)
             except Exception:  # pragma: no cover
                 pass
 
@@ -244,11 +282,22 @@ class SoundManager:
         self._sounds[sound_id] = sound
         return sound
 
-    # ── Background music — plumbing for future ambient tracks. No trigger
-    # point calls this yet (none was asked for); it's here so a day/page
-    # ambience can be added later as a one-line change. ──────────────────
-    def play_music(self, filename: str, *, loop: bool = True) -> None:
+    # ── Background music — one looping track at a time, keyed by id against
+    # MUSIC_REGISTRY exactly like play()/SFX_REGISTRY. Idempotent by design:
+    # call sites (HackDoxApp._sync_music) call this on every screen change
+    # without tracking what's already playing themselves, since re-requesting
+    # the current track is a no-op rather than a restart. ──────────────────
+    def play_music(self, track_id: str, *, loop: bool = True) -> None:
+        """Start looping MUSIC_REGISTRY[track_id]. Safe to call repeatedly:
+        if `track_id` is already the track playing, this does nothing, so
+        the loop is never restarted or interrupted mid-playback."""
         if not self.enabled or not self._ensure_backend():
+            return
+        if self._current_music_id == track_id and pygame.mixer.music.get_busy():
+            return
+        filename = MUSIC_REGISTRY.get(track_id)
+        if filename is None:
+            logger.debug("SoundManager: unknown music track id %r", track_id)
             return
         path = config.AUDIO_MUSIC_DIR / filename
         if not path.exists():
@@ -256,12 +305,15 @@ class SoundManager:
             return
         try:
             pygame.mixer.music.load(str(path))
-            pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
+            self._current_music_id = track_id
+            scale = MUSIC_TRACK_VOLUME_SCALE.get(track_id, 1.0)
+            pygame.mixer.music.set_volume(self.master_volume * self.music_volume * scale)
             pygame.mixer.music.play(-1 if loop else 0)
         except Exception as exc:  # pragma: no cover
-            logger.debug("SoundManager: play_music(%r) failed (%s)", filename, exc)
+            logger.debug("SoundManager: play_music(%r) failed (%s)", track_id, exc)
 
     def stop_music(self, *, fade_ms: int = 0) -> None:
+        self._current_music_id = None
         if not self._available:
             return
         try:
