@@ -152,6 +152,11 @@ class SoundManager:
         self.master_volume = config.DEFAULT_MASTER_VOLUME
         self.music_volume  = config.DEFAULT_MUSIC_VOLUME
         self.sfx_volume    = config.DEFAULT_SFX_VOLUME
+        # What `play_music()` was most recently asked for, tracked
+        # independently of whether it actually started — `set_enabled(True)`
+        # uses this to resume the right track (see the two methods below).
+        self._desired_music_id: str | None = None
+        self._desired_music_loop = True
         self._load_settings()
 
     # ── Backend lifecycle (lazy — nothing touches pygame until the first
@@ -229,9 +234,16 @@ class SoundManager:
         self.sfx_volume = _clamp01(value)
 
     def set_enabled(self, value: bool) -> None:
+        """Mute/unmute. Re-enabling resumes whatever track was last asked
+        for (see `play_music`'s `_desired_music_id`) — without this, sound
+        toggled back on from Settings/Pause stayed silent until the next
+        full screen change happened to call `play_music()` again, which
+        read as "can't be re-enabled" (Nick, 2026-09-24)."""
         self.enabled = value
         if not value:
             self.stop_music()
+        elif self._desired_music_id is not None:
+            self.play_music(self._desired_music_id, loop=self._desired_music_loop)
 
     def _apply_music_volume(self) -> None:
         if self._available:
@@ -290,7 +302,16 @@ class SoundManager:
     def play_music(self, track_id: str, *, loop: bool = True) -> None:
         """Start looping MUSIC_REGISTRY[track_id]. Safe to call repeatedly:
         if `track_id` is already the track playing, this does nothing, so
-        the loop is never restarted or interrupted mid-playback."""
+        the loop is never restarted or interrupted mid-playback.
+
+        Records the request in `_desired_music_id` BEFORE the enabled/
+        backend checks below, even though a disabled or unavailable call
+        plays nothing — `set_enabled(True)` needs to know what to resume,
+        and the only call site (`HackDoxApp._sync_music`) only fires on a
+        full screen change, never on its own when sound gets re-enabled
+        from Settings/Pause mid-screen."""
+        self._desired_music_id = track_id
+        self._desired_music_loop = loop
         if not self.enabled or not self._ensure_backend():
             return
         if self._current_music_id == track_id and pygame.mixer.music.get_busy():

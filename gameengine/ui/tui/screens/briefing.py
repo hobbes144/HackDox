@@ -18,6 +18,7 @@ from gameengine.ui.tui.screens._narration import (
     _play_overseer,
     rule_change_lines,
 )
+from gameengine.ui.tui.screens.pause import PauseScreen
 from gameengine.ui.tui.widgets import (
     TypewriterLog,
 )
@@ -27,6 +28,7 @@ class BriefingScreen(Screen):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("space", "begin_day", "Begin shift"),
         Binding("q", "quit_app", "Quit"),
+        Binding("escape", "open_pause", "Pause", show=False),
     ]
 
     def __init__(self, day: Day, narrative: str, state: GameState,
@@ -91,3 +93,6 @@ class BriefingScreen(Screen):
 
     def action_quit_app(self) -> None:
         self.app.exit()
+
+    def action_open_pause(self) -> None:
+        self.app.push_screen(PauseScreen())

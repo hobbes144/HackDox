@@ -6,12 +6,13 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from gameengine.core.models import Candidate, Verdict
 from gameengine.ui.tui import rules_content
+from gameengine.ui.tui.widgets import AmbientGlitchPanel
 
 
 class CreditRevealScreen(ModalScreen):
@@ -19,7 +20,13 @@ class CreditRevealScreen(ModalScreen):
     window showing the candidate's ground truth: the correct verdict and the
     planted violation KINDS. Deliberately excludes the evidence trail
     (descriptions / which tool reveals what) per the issue AC. Distinct
-    violet styling marks it as a paid debug view, not normal tool output."""
+    violet styling marks it as a paid debug view, not normal tool output.
+
+    Flanked by the same ambient CRT-glitch panels as the Start Menu/Settings/
+    Credits (`.menu-frame`, `AmbientGlitchPanel`) — added 2026-09-24, Nick:
+    the page around the reveal box read as flat and boring. `#credit-modal`
+    keeps its own fixed width/border/background; only the two `.menu-flank`
+    panels either side and the `.menu-frame` centering are new."""
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "dismiss_reveal", "Close"),
@@ -58,8 +65,11 @@ class CreditRevealScreen(ModalScreen):
             "",
             "[dim]Esc / Enter to close[/]",
         ]
-        with Container(id="credit-modal"):
-            yield Static("\n".join(rows))
+        with Horizontal(classes="menu-frame"):
+            yield AmbientGlitchPanel(seed=707, classes="menu-flank")
+            with Container(id="credit-modal"):
+                yield Static("\n".join(rows))
+            yield AmbientGlitchPanel(seed=808, classes="menu-flank")
 
     def action_dismiss_reveal(self) -> None:
         self.dismiss()

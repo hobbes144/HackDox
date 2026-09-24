@@ -7,6 +7,7 @@ from gameengine.ui.tui.widgets.debug_panel import DebugPanel
 from gameengine.ui.tui.widgets.dossier import CondensedDossier, DossierPanel
 from gameengine.ui.tui.widgets.evidence import EvidenceBoard, EvidenceState
 from gameengine.ui.tui.widgets.log_list import LogListPanel
+from gameengine.ui.tui.widgets.menu_glitch import AmbientGlitchPanel
 from gameengine.ui.tui.widgets.overseer import OverseerPanel
 from gameengine.ui.tui.widgets.reference import ReferencePanel
 from gameengine.ui.tui.widgets.status_header import StatusHeader
@@ -14,8 +15,10 @@ from gameengine.ui.tui.widgets.stego_image import StegoImagePanel
 from gameengine.ui.tui.widgets.toast import Toast
 from gameengine.ui.tui.widgets.tool_terminal import ToolTerminal
 from gameengine.ui.tui.widgets.typewriter import ChatPanel, TypewriterLog, _TWMessage
+from gameengine.ui.tui.widgets.volume_row import VolumeRow
 
 __all__ = [
+    'AmbientGlitchPanel',
     'BreachListPanel',
     'ChatPanel',
     'CipherBlockPanel',
@@ -33,5 +36,6 @@ __all__ = [
     'Toast',
     'ToolTerminal',
     'TypewriterLog',
+    'VolumeRow',
     '_TWMessage',
 ]

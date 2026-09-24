@@ -59,6 +59,32 @@ def test_disabled_manager_plays_nothing_and_stays_quiet() -> None:
     assert mgr.enabled is False
 
 
+def test_re_enabling_resumes_the_last_requested_track() -> None:
+    """Regression test: toggling Settings' mute switch off then back on used
+    to leave the game silent — `set_enabled(True)` flipped `.enabled` but
+    nothing ever called `play_music()` again, since the only call site
+    (`HackDoxApp._sync_music`) only fires on a full screen change, not on a
+    Settings/Pause toggle. `_desired_music_id` is what `play_music()` was
+    last asked for, tracked independently of whether it actually played —
+    `set_enabled(True)` uses it to resume."""
+    mgr = SoundManager()
+    mgr.play_music("menu")
+    assert mgr._desired_music_id == "menu"
+
+    mgr.set_enabled(False)
+    assert mgr._desired_music_id == "menu"  # remembered, not cleared, while muted
+
+    mgr.set_enabled(True)
+    assert mgr._desired_music_id == "menu"  # resumed to the same track
+
+
+def test_re_enabling_with_nothing_ever_requested_does_not_raise() -> None:
+    mgr = SoundManager()
+    mgr.set_enabled(False)
+    mgr.set_enabled(True)  # no play_music() call yet this instance — no-op, no crash
+    assert mgr.enabled is True
+
+
 def test_volumes_clamp_to_unit_range() -> None:
     mgr = SoundManager()
     mgr.set_master_volume(5.0)

@@ -15,7 +15,7 @@ from textual.widgets import Static
 from gameengine import config
 from gameengine.core.content_loader import load_day
 from gameengine.core.models import GameState, ToolName
-from gameengine.ui.tui.app import BriefingScreen, IntakeScreen, StatusHeader
+from gameengine.ui.tui.app import BriefingScreen, IntakeScreen, PauseScreen, StatusHeader
 
 SEED = 0xC0FFEE
 
@@ -601,10 +601,15 @@ def test_right_click_is_ignored():
     asyncio.run(go())
 
 
-def test_keyboard_arrows_space_and_esc_still_work_alongside_mouse():
+def test_keyboard_arrows_space_and_x_still_work_alongside_mouse():
     """Regression check (Nick: 'the traditional method of using the arrow
     keys and space should still work'): arrows nudge the cursor, Space
-    stamps, Esc exits — unchanged by the new mouse handlers."""
+    stamps, X exits — unchanged by the new mouse handlers.
+
+    Esc used to double as the stamp-mode exit key too; as of the 2026-09
+    menu-system build (BUILD_PLAN_MenuSystem_2026-09.md) Esc is reserved
+    globally for the Pause menu instead, so exiting stamp mode is X only
+    now — see the next test."""
     async def go():
         day = load_day(1)
         state = GameState(seed=SEED)
@@ -628,9 +633,33 @@ def test_keyboard_arrows_space_and_esc_still_work_alongside_mouse():
             await pilot.pause(0.1)
             assert panel.stamps_used == stamps_before_kb + 1, "space-bar stamping regressed"
 
+            await pilot.press(config.KEY_BINDINGS["stamp_mode"])  # "x"
+            await pilot.pause(0.1)
+            assert not scr._stamp_mode, "X no longer exits stamp mode"
+    asyncio.run(go())
+
+
+def test_esc_opens_pause_instead_of_exiting_stamp_mode():
+    """2026-09: Esc is reserved for the Pause menu everywhere in gameplay,
+    including mid-minigame — it must NOT double as stamp mode's exit key
+    any more (that's X, checked above). Pressing it while stamped-in should
+    leave stamp mode untouched and push PauseScreen on top."""
+    async def go():
+        day = load_day(1)
+        state = GameState(seed=SEED)
+        state.unlocked_tools = {"ghostscan", "hashcrack", "logwatch", "stegotool"}
+        app = _Host()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await app.push_screen(IntakeScreen(day, state, "briefing"))
+            await pilot.pause(0.3)
+            scr = app.screen
+            await _enter_stego_stamp_mode(pilot, scr)
+            await pilot.pause(0.1)
+
             await pilot.press("escape")
             await pilot.pause(0.1)
-            assert not panel._stamp_mode, "Esc no longer exits stamp mode"
+            assert scr._stamp_mode, "Esc must not exit stamp mode any more"
+            assert isinstance(app.screen, PauseScreen), "Esc must open the Pause menu"
     asyncio.run(go())
 
 

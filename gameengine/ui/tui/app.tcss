@@ -504,16 +504,120 @@ ContentSwitcher {
     color: #c8d4e1;
 }
 
-/* ── Splashes ────────────────────────────────────────────────────────── */
+/* ── Menu frame (2026-09) ─────────────────────────────────────────────── */
+/* Shared three-column shell — glitch flank | central column | glitch flank
+   — used by IntroScreen, SettingsScreen, and any future menu screen that
+   wants the same treatment (Credits, per BUILD_PLAN_MenuSystem_2026-09.md).
+   The two flanks are equal 1fr allocations either side of a fixed-width
+   column, which centers the column with no extra alignment math needed. */
 
-#splash {
-    align: center middle;
+.menu-frame {
     height: 1fr;
+    align: center middle;     /* only matters for a middle child shorter than
+                                  the frame (e.g. #credit-modal's auto height)
+                                  — IntroScreen/SettingsScreen/CreditsScreen's
+                                  own .menu-column already fills the full
+                                  height and self-centers its content, so this
+                                  is a no-op for them. */
 }
 
-#splash .title    { color: #00ff9f; text-style: bold; }
-#splash .subtitle { color: #7dd3c0; margin: 0 0 1 0; max-width: 80; }
-#splash .hint     { color: #6b7785; margin: 2 0 0 0; }
+.menu-flank {
+    width: 1fr;
+    height: 1fr;              /* was missing entirely — with no explicit
+                                  height, Static defaults to `auto` (sized
+                                  to its own content) and collapses to a
+                                  single row instead of filling the frame,
+                                  which is why the ambient glitch read as
+                                  "not present": a 1-row sliver next to a
+                                  30+ row screen. Nick, 2026-09-24. */
+    background: #0b0e10;      /* matches Screen's own background (top of
+                                  this file) exactly, not glitch.py's darker
+                                  "void" tone — blank/untouched cells should
+                                  read as page, not a separate dark panel.
+                                  Keep in sync with config.PAGE_BACKGROUND. */
+}
+
+.menu-column {
+    width: 64;
+    max-width: 100%;
+    height: 1fr;
+    align: center middle;
+    padding: 2 4;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+}
+
+.menu-logo {
+    color: #00ff9f;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+.menu-subtitle {
+    color: #7dd3c0;
+    text-align: center;
+    width: 100%;
+    margin: 0 0 2 0;
+}
+
+.menu-buttons {
+    width: 100%;
+    height: auto;
+    align: center middle;
+}
+
+.menu-buttons Button {
+    width: 36;
+    margin: 0 0 1 0;
+}
+
+.menu-hint {
+    color: #6b7785;
+    text-align: center;
+    width: 100%;
+    margin: 2 0 0 0;
+}
+
+/* ── Settings screen (2026-09) ────────────────────────────────────────── */
+
+#settings-rows {
+    width: 100%;
+    height: auto;
+    align: center middle;
+    margin: 0 0 1 0;
+}
+
+VolumeRow {
+    width: 44;
+    height: 1;
+    margin: 0 0 1 0;
+    color: #c8d4e1;
+}
+
+VolumeRow:focus {
+    border: none;
+    background: #14503a;
+}
+
+#settings-mute-row {
+    width: 44;
+    height: 1;
+    align: left middle;
+    margin: 1 0 0 0;
+}
+
+#settings-mute-label {
+    width: 1fr;
+    color: #c8d4e1;
+}
+
+/* ── Credits screen (2026-09) ─────────────────────────────────────────── */
+
+#credits-body {
+    text-align: center;
+}
 
 .screen-title {
     height: 1;
@@ -613,6 +717,48 @@ RulesScreen Tab {
 RulesScreen Tab.-active {
     color: #7dd3c0;
     text-style: bold;
+}
+
+/* ── Pause menu (2026-09) ─────────────────────────────────────────────── */
+
+PauseScreen {
+    align: center middle;
+}
+
+#pause-modal {
+    width: 44;
+    height: auto;
+    background: #0d1117;
+    border: double #7dd3c0;
+    padding: 1 2;
+    layout: vertical;
+    align: center middle;
+}
+
+#pause-title {
+    width: 100%;
+    height: 1;
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+#pause-buttons {
+    width: 100%;
+    height: auto;
+    align: center middle;
+}
+
+#pause-buttons Button {
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+#pause-hint {
+    width: 100%;
+    height: 1;
+    color: #3d4f5e;
+    text-align: center;
+    margin: 1 0 0 0;
 }
 
 /* ── Between-day menu (issue #22) ─────────────────────────────────────── */

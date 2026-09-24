@@ -18,6 +18,7 @@ from gameengine.core.audio import sound_manager
 from gameengine.core.models import Candidate, Day, GameState, ToolName, Verdict
 from gameengine.ui.tui import glitch, rules_content
 from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
+from gameengine.ui.tui.screens.pause import PauseScreen
 from gameengine.ui.tui.screens.rules import RulesScreen
 from gameengine.ui.tui.shared import (
     _B,
@@ -1326,13 +1327,23 @@ class IntakeScreen(Screen):
         k  = event.key
         ch = event.character  # empty string for non-printable keys
 
+        # ── Pause (2026-09) — Escape always opens the Pause menu, full stop.
+        # It used to double as "exit decrypt/stamp mode" and "clear the
+        # command bar" (see BUILD_PLAN_MenuSystem_2026-09.md); both of those
+        # are handled without it now — X alone already exits both minigame
+        # modes (config.KEY_BINDINGS["decrypt_mode"]/["stamp_mode"]), so
+        # nothing is lost by taking Escape away from them. Checked first, so
+        # no mode or command-bar state can ever swallow it.
+        if k == "escape":
+            self.app.push_screen(PauseScreen()); event.stop(); return
+
         # ── Hashcrack decrypt mode — two stages share the arrow keys ─────────
         # Stage 1 uses them to pick a window, stage 2 to turn the dial. Which
         # stage is live is the panel's state, not a second flag here, so the
         # two can never disagree about what an arrow press means.
         if self._decrypt_mode:
             stage = self.cipher_hc.state
-            if k in ("escape", config.KEY_BINDINGS["decrypt_mode"]):
+            if k == config.KEY_BINDINGS["decrypt_mode"]:
                 self._exit_decrypt_mode(); event.stop(); return
             if stage == self.cipher_hc.SELECTING:
                 if k in ("left", "up"):
@@ -1358,13 +1369,13 @@ class IntakeScreen(Screen):
                 event.stop(); return          # swallow everything else
             self._exit_decrypt_mode(quiet=True)  # page nav below exits it
 
-        # ── Stego stamp mode — captures arrows/Space/Esc while active ─────────
+        # ── Stego stamp mode — captures arrows/Space while active ────────────
         if self._stamp_mode:
             if k in ("up", "down", "left", "right"):
                 self.image_st.move_stamp(k); event.stop(); return
             if k == "space":
                 self._do_stamp(); event.stop(); return
-            if k in ("escape", config.KEY_BINDINGS["stamp_mode"]):
+            if k == config.KEY_BINDINGS["stamp_mode"]:
                 self._exit_stamp_mode(); event.stop(); return
             if k not in ("1", "2", "3", "4", "5"):
                 event.stop(); return          # swallow everything else
@@ -1437,11 +1448,6 @@ class IntakeScreen(Screen):
 
         elif k == "backspace":
             self.command_bar.backspace()
-            event.stop()
-
-        elif k == "escape":
-            self.command_bar.clear_buffer()
-            self.command_bar.set_response("cleared")
             event.stop()
 
         elif ch and ch.isprintable():
