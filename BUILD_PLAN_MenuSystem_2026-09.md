@@ -272,3 +272,101 @@ Confirmed via `run_test`: both flank panels render full-height (`(13, 40)`
 against a 40-row screen), the modal box sits centered between them
 (`Region(x=13, y=0, width=74, height=18)` against a 100-wide screen), and
 Escape/Enter still dismiss correctly. Full regression suite re-run clean.
+
+### Fifth follow-up, same day: glitch flanks on all four sides
+
+Nick: "would it be possible to also apply the same glitch effect in the
+flank above and below the contents of the page that it is on. That was its
+like the background is glitchy and the menu is on top of it?"
+
+Extended the ambient glitch backdrop from left/right-only to all four sides
+on every screen that uses `.menu-frame` (IntroScreen, SettingsScreen,
+CreditsScreen, CreditRevealScreen):
+
+- `.menu-frame` changed from a `Horizontal` (left flank / column / right
+  flank) to an outer `Vertical`: a new `.menu-flank-h` strip (width 100%,
+  fixed `height: 4`) on top, the original three-part row now wrapped in a
+  new `.menu-frame-row` class (`height: 1fr`, same `align: center middle`,
+  keeps the 1fr/fixed/1fr split), and another `.menu-flank-h` strip on the
+  bottom.
+- Each screen's `compose()` restructured to match: outer `Vertical`, top
+  `AmbientGlitchPanel(classes="menu-flank-h")`, `Horizontal(classes=
+  "menu-frame-row")` holding the pre-existing left flank / column / right
+  flank, then bottom `AmbientGlitchPanel(classes="menu-flank-h")`. New seeds
+  per screen (e.g. Intro 111/212, Settings 511/612, Credits 313/414,
+  CreditReveal 717/818) so no two panels — including top/bottom vs
+  left/right on the same screen — ever morph in lockstep.
+- `AmbientGlitchPanel`/`build_frame` needed no changes — both are already
+  agnostic to panel shape (wide-and-short works exactly like
+  tall-and-narrow).
+
+Verified via `run_test()` at (100, 32): all four screens report 4
+`AmbientGlitchPanel`s each, top/bottom strips `Size(width=100, height=4)`,
+left/right flanks unchanged from before. Full regression suite re-run
+clean: 119 (glitch/transition/damage/verdict/unlock) + 353 (foundation/
+typewriter/audio) all passing.
+
+### Sixth follow-up, same day: fix blank gap under the Credit reveal modal
+
+Nick: "great job on everything except the credit reveal page. There is
+glitch on top and bottom but also a large blank space underneath the menu
+can you center the reveal menu on the screen and maintain the wrapped
+glitch without any significant gaps"
+
+Root cause: `#credit-modal` is `height: auto` inside `.menu-frame-row`'s
+`Horizontal`, sitting next to the two `.menu-flank` panels, which are
+`height: 1fr`. Confirmed via an isolated repro (`pilot_iso*.py`, not
+committed) that this is a genuine Textual layout quirk: a `Horizontal`
+with `align: center middle` correctly centers an auto-height child
+vertically when that's the ONLY child, but the moment ANY sibling has an
+`1fr` height — regardless of that sibling's width — the auto-height child
+snaps to the top instead of centering. That's exactly IntroScreen/
+SettingsScreen/CreditsScreen's shape too, but their middle child
+(`.menu-column`) is itself `height: 1fr`, so the bug never showed there;
+`CreditRevealScreen` is the only screen whose middle child is `auto`.
+
+Fixed by not asking the row's `align` to reach across mixed-height
+siblings at all: new `.menu-modal-wrap` class (`width: auto; height: 1fr;
+align: center middle;`) wraps `#credit-modal` in its own `Vertical`, now
+uniform-height (`1fr`) with the two flanks, and centers the modal *within
+itself* rather than relying on the outer row. `compose()` updated to
+nest `Container(id="credit-modal")` inside
+`Vertical(classes="menu-modal-wrap")`.
+
+Verified via `run_test()` at (100, 32): modal now at
+`Region(x=13, y=7, width=74, height=18)` inside a row at
+`Region(x=0, y=4, width=100, height=24)` — `y=7` is exactly
+`4 + (24-18)/2`, i.e. centered with no leftover gap; the two flanks still
+fill the full row height on either side, so there's no dead space between
+the modal and the top/bottom glitch strips. Esc still dismisses correctly.
+Full regression suite re-run clean (119 + 353 passed).
+
+### Seventh follow-up, same day: eliminate the dead margin above/below the modal
+
+Nick, after the sixth follow-up: "the credit reveal menu is not properly
+centered but there are still gaps in the glitch above and below it. Is it
+possible to fill that in?"
+
+The sixth follow-up's `.menu-modal-wrap` (`align: center middle` around an
+otherwise-empty Vertical) DID center the modal correctly, but `align` only
+*positions* a widget — it doesn't paint anything into the space it leaves
+on either side, and that leftover space had no glitch panel in it, just
+bare page background. So directly above and below the modal (but not
+beside it, where `.menu-flank` already covered it) there were two dead,
+static strips exactly (row height − modal height) / 2 tall each.
+
+Fixed by not leaving that space empty at all: `.menu-modal-wrap` now holds
+two more `AmbientGlitchPanel`s (`.menu-modal-flank`, new seeds 909/919)
+bracketing `#credit-modal` — one above, one below — each `height: 1fr`. No
+`align` needed anymore: with the modal's own height fixed/auto in the
+middle, Textual's ordinary flex distribution splits the REMAINING vertical
+space evenly between the two `1fr` flanks, which both centers the modal
+(for free) and fills every pixel of that space with the same drifting
+glitch as everywhere else.
+
+Verified via `run_test()` at three sizes — (100,32), (80,24), (120,45) —
+that in every case the two `.menu-modal-flank` regions plus the modal's
+own region tile the row's full height with no gaps and no overlap (e.g. at
+(100,32): flank 3 + modal 18 + flank 3 = 24 = the row's height), and that
+Esc still dismisses back to the underlying screen. Full regression suite
+re-run clean (119 + 353 passed).

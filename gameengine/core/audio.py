@@ -89,6 +89,7 @@ SFX_REGISTRY: dict[str, str] = {
     "credit_use":   "credit_use.wav",    # a HackDox Credit is spent
     "filter_apply": "filter_apply.wav",  # an enhanced/filtered tool re-run
     "upgrade_purchase": "upgrade_purchase.wav",  # between-day shop: an upgrade is bought
+    "credit_reveal_close": "credit_reveal_close.wav",  # the HackDox Credit reveal modal is dismissed
 
     # Candidate-page verdict pulse (the border flash, not the commit itself).
     "pulse_celebration": "pulse_celebration.wav",

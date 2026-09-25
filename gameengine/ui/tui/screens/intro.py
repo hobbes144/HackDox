@@ -39,24 +39,27 @@ class IntroScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        with Horizontal(classes="menu-frame"):
-            yield AmbientGlitchPanel(seed=101, classes="menu-flank")
-            with Vertical(classes="menu-column"):
-                yield Static(_LOGO, classes="menu-logo")
-                yield Static(
-                    "Access to HackDox is reviewed by hand. You are the hand.",
-                    classes="menu-subtitle",
-                )
-                with Vertical(classes="menu-buttons"):
-                    yield Button("New Game", id="menu-new-game", variant="success")
-                    yield Button("Continue", id="menu-continue")
-                    yield Button("Endless Mode (coming soon)",
-                                 id="menu-endless", disabled=True)
-                    yield Button("Settings", id="menu-settings")
-                    yield Button("Credits", id="menu-credits")
-                    yield Button("Quit", id="menu-quit", variant="error")
-                yield Static("", id="menu-hint", classes="menu-hint")
-            yield AmbientGlitchPanel(seed=202, classes="menu-flank")
+        with Vertical(classes="menu-frame"):
+            yield AmbientGlitchPanel(seed=111, classes="menu-flank-h")
+            with Horizontal(classes="menu-frame-row"):
+                yield AmbientGlitchPanel(seed=101, classes="menu-flank")
+                with Vertical(classes="menu-column"):
+                    yield Static(_LOGO, classes="menu-logo")
+                    yield Static(
+                        "Access to HackDox is reviewed by hand. You are the hand.",
+                        classes="menu-subtitle",
+                    )
+                    with Vertical(classes="menu-buttons"):
+                        yield Button("New Game", id="menu-new-game", variant="success")
+                        yield Button("Continue", id="menu-continue")
+                        yield Button("Endless Mode (coming soon)",
+                                     id="menu-endless", disabled=True)
+                        yield Button("Settings", id="menu-settings")
+                        yield Button("Credits", id="menu-credits")
+                        yield Button("Quit", id="menu-quit", variant="error")
+                    yield Static("", id="menu-hint", classes="menu-hint")
+                yield AmbientGlitchPanel(seed=202, classes="menu-flank")
+            yield AmbientGlitchPanel(seed=212, classes="menu-flank-h")
 
     def on_mount(self) -> None:
         self._refresh_continue()
