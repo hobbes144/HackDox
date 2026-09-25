@@ -6,12 +6,14 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from gameengine.core.audio import sound_manager
 from gameengine.core.models import Candidate, Verdict
 from gameengine.ui.tui import rules_content
+from gameengine.ui.tui.widgets import AmbientGlitchPanel
 
 
 class CreditRevealScreen(ModalScreen):
@@ -19,7 +21,20 @@ class CreditRevealScreen(ModalScreen):
     window showing the candidate's ground truth: the correct verdict and the
     planted violation KINDS. Deliberately excludes the evidence trail
     (descriptions / which tool reveals what) per the issue AC. Distinct
-    violet styling marks it as a paid debug view, not normal tool output."""
+    violet styling marks it as a paid debug view, not normal tool output.
+
+    Flanked by the same ambient CRT-glitch panels as the Start Menu/Settings/
+    Credits (`.menu-frame`, `AmbientGlitchPanel`) — added 2026-09-24, Nick:
+    the page around the reveal box read as flat and boring. Extended the
+    same day to all four sides (`.menu-flank-h` above/below, `.menu-flank`
+    left/right), then again to close the gap directly above/below the
+    modal itself: `.menu-modal-wrap` holds two more `AmbientGlitchPanel`s
+    (`.menu-modal-flank`) bracketing `#credit-modal` top and bottom, each
+    `height: 1fr` so Textual's normal flex distribution splits the leftover
+    space evenly and centers the modal for free — no dead, non-glitchy
+    margin left anywhere around it. `#credit-modal` keeps its own fixed
+    width/border/background; only the glitch panels and the
+    `.menu-frame`/`.menu-frame-row`/`.menu-modal-wrap` layout are new."""
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "dismiss_reveal", "Close"),
@@ -58,8 +73,18 @@ class CreditRevealScreen(ModalScreen):
             "",
             "[dim]Esc / Enter to close[/]",
         ]
-        with Container(id="credit-modal"):
-            yield Static("\n".join(rows))
+        with Vertical(classes="menu-frame"):
+            yield AmbientGlitchPanel(seed=717, classes="menu-flank-h")
+            with Horizontal(classes="menu-frame-row"):
+                yield AmbientGlitchPanel(seed=707, classes="menu-flank")
+                with Vertical(classes="menu-modal-wrap"):
+                    yield AmbientGlitchPanel(seed=909, classes="menu-modal-flank")
+                    with Container(id="credit-modal"):
+                        yield Static("\n".join(rows))
+                    yield AmbientGlitchPanel(seed=919, classes="menu-modal-flank")
+                yield AmbientGlitchPanel(seed=808, classes="menu-flank")
+            yield AmbientGlitchPanel(seed=818, classes="menu-flank-h")
 
     def action_dismiss_reveal(self) -> None:
+        sound_manager.play("credit_reveal_close")
         self.dismiss()

@@ -504,16 +504,146 @@ ContentSwitcher {
     color: #c8d4e1;
 }
 
-/* ── Splashes ────────────────────────────────────────────────────────── */
+/* ── Menu frame (2026-09) ─────────────────────────────────────────────── */
+/* Shared shell — glitch flank on all four sides of a central column — used
+   by IntroScreen, SettingsScreen, CreditsScreen, and CreditRevealScreen
+   (per BUILD_PLAN_MenuSystem_2026-09.md). `.menu-frame` is the OUTER
+   Vertical: a horizontal glitch strip along the top, the original
+   left-flank/column/right-flank row in the middle, and another horizontal
+   strip along the bottom — so the content reads as floating on top of a
+   glitchy backdrop on every side, not just left/right (Nick, 2026-09-24).
+   `.menu-frame-row` is that middle row; it keeps the left/right flanks'
+   original 1fr-column-1fr split. */
 
-#splash {
-    align: center middle;
+.menu-frame {
     height: 1fr;
+    align: center middle;     /* only matters for a middle child shorter than
+                                  the frame (e.g. #credit-modal's auto height)
+                                  — IntroScreen/SettingsScreen/CreditsScreen's
+                                  own .menu-column already fills the full
+                                  height and self-centers its content, so this
+                                  is a no-op for them. */
 }
 
-#splash .title    { color: #00ff9f; text-style: bold; }
-#splash .subtitle { color: #7dd3c0; margin: 0 0 1 0; max-width: 80; }
-#splash .hint     { color: #6b7785; margin: 2 0 0 0; }
+.menu-frame-row {
+    width: 100%;
+    height: 1fr;               /* takes whatever height is left over once the
+                                   top/bottom flanks claim their fixed rows
+                                   below, so the column still gets the bulk
+                                   of the screen. */
+    align: center middle;
+}
+
+.menu-flank {
+    width: 1fr;
+    height: 1fr;              /* was missing entirely — with no explicit
+                                  height, Static defaults to `auto` (sized
+                                  to its own content) and collapses to a
+                                  single row instead of filling the frame,
+                                  which is why the ambient glitch read as
+                                  "not present": a 1-row sliver next to a
+                                  30+ row screen. Nick, 2026-09-24. */
+    background: #0b0e10;      /* matches Screen's own background (top of
+                                  this file) exactly, not glitch.py's darker
+                                  "void" tone — blank/untouched cells should
+                                  read as page, not a separate dark panel.
+                                  Keep in sync with config.PAGE_BACKGROUND. */
+}
+
+.menu-flank-h {
+    width: 100%;
+    height: 4;                 /* fixed strip, not 1fr — these sit above and
+                                  below the row that holds the actual content,
+                                  so a small fixed band reads as ambient
+                                  backdrop without eating space the column
+                                  needs. Same background/void handling as
+                                  `.menu-flank`; the panel itself is agnostic
+                                  to being wide-and-short instead of
+                                  tall-and-narrow. */
+    background: #0b0e10;
+}
+
+.menu-column {
+    width: 64;
+    max-width: 100%;
+    height: 1fr;
+    align: center middle;
+    padding: 2 4;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+}
+
+.menu-logo {
+    color: #00ff9f;
+    text-style: bold;
+    text-align: center;
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+.menu-subtitle {
+    color: #7dd3c0;
+    text-align: center;
+    width: 100%;
+    margin: 0 0 2 0;
+}
+
+.menu-buttons {
+    width: 100%;
+    height: auto;
+    align: center middle;
+}
+
+.menu-buttons Button {
+    width: 36;
+    margin: 0 0 1 0;
+}
+
+.menu-hint {
+    color: #6b7785;
+    text-align: center;
+    width: 100%;
+    margin: 2 0 0 0;
+}
+
+/* ── Settings screen (2026-09) ────────────────────────────────────────── */
+
+#settings-rows {
+    width: 100%;
+    height: auto;
+    align: center middle;
+    margin: 0 0 1 0;
+}
+
+VolumeRow {
+    width: 44;
+    height: 1;
+    margin: 0 0 1 0;
+    color: #c8d4e1;
+}
+
+VolumeRow:focus {
+    border: none;
+    background: #14503a;
+}
+
+#settings-mute-row {
+    width: 44;
+    height: 1;
+    align: left middle;
+    margin: 1 0 0 0;
+}
+
+#settings-mute-label {
+    width: 1fr;
+    color: #c8d4e1;
+}
+
+/* ── Credits screen (2026-09) ─────────────────────────────────────────── */
+
+#credits-body {
+    text-align: center;
+}
 
 .screen-title {
     height: 1;
@@ -615,6 +745,48 @@ RulesScreen Tab.-active {
     text-style: bold;
 }
 
+/* ── Pause menu (2026-09) ─────────────────────────────────────────────── */
+
+PauseScreen {
+    align: center middle;
+}
+
+#pause-modal {
+    width: 44;
+    height: auto;
+    background: #0d1117;
+    border: double #7dd3c0;
+    padding: 1 2;
+    layout: vertical;
+    align: center middle;
+}
+
+#pause-title {
+    width: 100%;
+    height: 1;
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+#pause-buttons {
+    width: 100%;
+    height: auto;
+    align: center middle;
+}
+
+#pause-buttons Button {
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+#pause-hint {
+    width: 100%;
+    height: 1;
+    color: #3d4f5e;
+    text-align: center;
+    margin: 1 0 0 0;
+}
+
 /* ── Between-day menu (issue #22) ─────────────────────────────────────── */
 
 #bd-root {
@@ -648,6 +820,32 @@ RulesScreen Tab.-active {
 CreditRevealScreen {
     align: center middle;
 }
+/* `#credit-modal` is height:auto inside `.menu-frame-row`'s Horizontal,
+   next to the two `.menu-flank` panels, which are height:1fr. Centering it
+   with `align: center middle` alone (tried first, 2026-09-24) left the
+   modal centered but with two dead, non-glitchy strips directly above and
+   below it — `align` only POSITIONS the modal, it doesn't paint anything
+   into the leftover space, and that space wasn't a glitch panel, just the
+   page background. Fixed properly by giving that leftover space its own
+   panels instead of leaving it as blank margin: `.menu-modal-wrap` is a
+   Vertical, uniform-height (`1fr`) with the two side flanks, holding TWO
+   `.menu-modal-flank` panels (top and bottom) around `#credit-modal`. Both
+   flanks are `height: 1fr` and the modal itself is fixed/auto height, so
+   Textual's normal flex distribution splits the REMAINING height evenly
+   between them — which both centers the modal (no special alignment logic
+   needed) and fills the space with the same drifting glitch as everywhere
+   else, so there's no dead strip left at all. */
+.menu-modal-wrap {
+    width: auto;
+    height: 1fr;
+}
+
+.menu-modal-flank {
+    width: 100%;
+    height: 1fr;
+    background: #0b0e10;
+}
+
 #credit-modal {
     width: 74;
     height: auto;

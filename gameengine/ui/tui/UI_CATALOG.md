@@ -1,5 +1,5 @@
 # HackDox TUI — Interface Catalog
-*Last updated: 2026-09-12*
+*Last updated: 2026-09-24*
 
 ---
 
@@ -19,26 +19,76 @@ Every change BETWEEN these screens is covered by a `TransitionScreen`
 ```
 HackDoxApp
  └── IntroScreen          (start menu)
+      └── SettingsScreen  (modal overlay, pushed from IntroScreen or PauseScreen)
+      └── CreditsScreen   (modal overlay, pushed from IntroScreen)
       └── BriefingScreen  (overseer intro + day title)
            └── IntakeScreen  (main play loop — five pages)
                 └── RulesScreen (modal overlay, 0 key)
            └── EODScreen   (end-of-day summary)
+           └── BetweenDayScreen (shop/upgrades between days)
       └── GameOverScreen  (Site Health collapsed)
+
+PauseScreen (modal overlay, Esc key) is reachable from every campaign-loop
+screen with progress that can be lost — BriefingScreen, IntakeScreen,
+EODScreen, BetweenDayScreen — but NOT from IntroScreen, SettingsScreen,
+CreditsScreen, or GameOverScreen.
 ```
 
 ---
 
 ## Screens
 
-### IntroScreen
+### IntroScreen *(start menu)*
 - **Trigger:** App launch
-- **Content:** ASCII splash, New Game / Continue / Quit
-- **Keys:** `N` new game · `Q` quit
+- **Content:** central column (logo placeholder, subtitle, buttons) flanked
+  by two ambient CRT-glitch panels (`AmbientGlitchPanel`); shared
+  `.menu-frame` layout with SettingsScreen/CreditsScreen. The column
+  scrolls (`overflow-y: auto`) when the terminal is too short to show every
+  button at once — Tab/arrow-key focus movement and mouse-wheel both bring
+  the rest of the menu (Quit included) into view rather than letting it run
+  off screen with no way to reach it.
+- **Buttons:** New Game · Continue (hidden/disabled unless a save exists —
+  closes #79) · Endless Mode (disabled, "coming soon") · Settings · Credits
+  · Quit
+- **Keys:** `N` new game · `C` continue (only when a save exists) ·
+  `S` settings · `R` credits · `Q` quit
+- **Continue behavior:** calls `persistence.load()` then
+  `HackDoxApp.resume_game(state)`, which resumes at `state.current_day`'s
+  `BriefingScreen` — a save is only ever written at a day boundary, so this
+  is always the correct resume point (single-slot save, no Load screen)
+
+### SettingsScreen *(modal overlay)*
+- **Trigger:** `S` / Settings button from IntroScreen, or Settings button
+  from PauseScreen
+- **Content:** Master/Music/SFX volume rows (`VolumeRow` — arrow-key
+  adjustable bars) plus a Sound Enabled switch, all wired live to
+  `SoundManager` and persisted via `save_settings()` on every change
+- **Keys:** `←`/`→` adjust the focused row by 0.05 · `Home`/`End` jump to
+  0/1 · `↑`/`↓` or `Tab`/`Shift+Tab` move focus between rows/switch/Back ·
+  `Esc` back
+
+### CreditsScreen *(modal overlay)*
+- **Trigger:** `R` / Credits button from IntroScreen
+- **Content:** static placeholder credits text; deliberately distinct from
+  the in-fiction `CreditRevealScreen` (spending a HackDox Credit to reveal a
+  candidate's ground truth) — unrelated mechanic, same name collision noted
+  in `BUILD_PLAN_MenuSystem_2026-09.md`
+- **Keys:** `Esc` / `Enter` / Back button — all return to IntroScreen
+
+### PauseScreen *(modal overlay)*
+- **Trigger:** `Esc` from BriefingScreen, IntakeScreen, EODScreen, or
+  BetweenDayScreen — any screen where a run is "in progress" with state
+  that can be lost. NOT reachable from IntroScreen, SettingsScreen,
+  CreditsScreen, or GameOverScreen/CampaignEndScreen.
+- **Content:** Resume / Settings / Quit to Main Menu / Quit to Desktop
+- **Keys:** `Esc` resume
+- **Quit behavior:** both quit actions call `HackDoxApp.save_progress()`
+  first (best-effort save of the in-progress run) before leaving
 
 ### BriefingScreen
 - **Trigger:** After new-game or continue
 - **Content:** Day title, Overseer opening monologue, press Space to begin
-- **Keys:** `Space` begin shift · `Q` quit
+- **Keys:** `Space` begin shift · `Q` quit · `Esc` pause
 
 ### IntakeScreen *(main play screen)*
 - **Trigger:** `begin_intake()` call from BriefingScreen
@@ -53,7 +103,14 @@ HackDoxApp
 ### EODScreen
 - **Trigger:** After last candidate verdict
 - **Content:** Verdict scorecard, ⏱ summary, alignment delta, Overseer outro
-- **Keys:** `Space` save & continue · `Q` quit
+- **Keys:** `Space` save & continue · `Esc` pause
+
+### BetweenDayScreen
+- **Trigger:** After EODScreen's save & continue
+- **Content:** shop/upgrades between campaign days
+- **Keys:** `N` begin next day · `Esc` pause (the `Q` quit binding was
+  removed — quitting now happens only through PauseScreen, which saves
+  first)
 
 ### GameOverScreen
 - **Trigger:** Lives reach zero

@@ -684,6 +684,58 @@ TRANSITION_JITTER = 0.12           # per-frame flicker around the ramp
 # blocked by an animation.
 TRANSITION_PASSTHROUGH_KEYS = ("ctrl+c", "ctrl+q")
 
+# ─── Ambient glitch (menu flanks, 2026-09) ───────────────────────────────────
+#
+# The slow-drifting static beside a menu's central column (IntroScreen,
+# SettingsScreen, ...) — see ui/tui/widgets/menu_glitch.py. Unlike the
+# transition and damage-glitch effects above, this one is pure ambiance: it
+# never has to let anything show through (there's void behind it, not
+# gameplay), so it repaints itself directly as a Static rather than going
+# through RowPainter, and it never reaches anywhere near full coverage —
+# TRANSITION_FULL_COVER_AT-style "hide everything" would defeat the point of
+# something that's supposed to sit quietly next to a menu forever.
+AMBIENT_GLITCH_ENABLED = True
+AMBIENT_GLITCH_FRAME_INTERVAL = 0.12   # seconds between frames (slower than
+                                        # the ~20fps transition/burst — this
+                                        # has to run for as long as a menu is
+                                        # open, not for under a second)
+AMBIENT_GLITCH_MIN = 0.03              # intensity floor — nearly quiet
+AMBIENT_GLITCH_MAX = 0.22              # intensity ceiling — still clearly
+                                        # short of TRANSITION_START_INTENSITY
+AMBIENT_GLITCH_SPEED = 0.35            # radians/second of the sine drift —
+                                        # a full breathe-in/out takes ~18s;
+                                        # sampled once per new state (below),
+                                        # not per frame, so intensity drifts
+                                        # across states rather than flickering
+
+# The panel doesn't just re-roll a fresh frame every tick (2026-09, Nick:
+# "a little bit slower, a little bit calmer... it goes from one state to the
+# next"). Instead it HOLDS one still frame ("state"), then MORPHS into a
+# freshly rolled one over a slower, ragged top-to-bottom wipe, then holds
+# again — an endless loop of distinct states connected by a flowing
+# transition, echoing the screen-transition glitch's visual language at a
+# much calmer pace instead of just flickering static.
+AMBIENT_GLITCH_HOLD_DURATION = 3.5     # seconds a state sits still before the
+                                        # next morph begins
+AMBIENT_GLITCH_MORPH_DURATION = 2.4    # seconds the flowing transition itself
+                                        # takes — several times TRANSITION_
+                                        # DURATION (0.75s), deliberately calm
+AMBIENT_GLITCH_MORPH_JITTER = 0.18     # fraction of panel height the wipe
+                                        # front raggedly varies by, row to
+                                        # row, so it reads as a ragged tear
+                                        # sweeping down rather than one clean
+                                        # bar
+
+# The Screen's own background (app.tcss's `Screen { background: ... }`,
+# near the top of the file) — kept here too because the ambient panel's
+# palette (widgets/menu_glitch.py) needs it in Python, not just CSS. The
+# panel used to fall back to glitch.py's darker "void" tone instead
+# (#05070a, meant for the transition/damage-burst effects fading TO black)
+# and read as a separate dark rectangle rather than part of the page — Nick,
+# 2026-09-24: "the base color of the glitch needs to match the base color of
+# the page". If `app.tcss`'s Screen background ever changes, update this too.
+PAGE_BACKGROUND = "#0b0e10"
+
 # ─── Damage glitch (wrong admit) ─────────────────────────────────────────────
 #
 # The same signal-loss effect, fired in place over the live page for a brief

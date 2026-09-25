@@ -16,6 +16,7 @@ from gameengine.core.models import Day, GameState, Performance
 from gameengine.ui.tui.screens._narration import (
     _play_overseer,
 )
+from gameengine.ui.tui.screens.pause import PauseScreen
 from gameengine.ui.tui.widgets import (
     TypewriterLog,
 )
@@ -25,6 +26,7 @@ class EODScreen(Screen):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("space", "continue_game", "Continue"),
         Binding("q", "quit_app", "Quit"),
+        Binding("escape", "open_pause", "Pause", show=False),
     ]
 
     def __init__(self, day: Day, state: GameState, narrative: str,
@@ -106,3 +108,6 @@ class EODScreen(Screen):
 
     def action_quit_app(self) -> None:
         self.app.exit()
+
+    def action_open_pause(self) -> None:
+        self.app.push_screen(PauseScreen())

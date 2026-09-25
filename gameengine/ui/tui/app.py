@@ -56,11 +56,14 @@ from gameengine.ui.tui.screens.between_day import BetweenDayScreen
 from gameengine.ui.tui.screens.briefing import BriefingScreen
 from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
 from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
+from gameengine.ui.tui.screens.credits import CreditsScreen
 from gameengine.ui.tui.screens.eod import EODScreen
 from gameengine.ui.tui.screens.game_over import GameOverScreen
 from gameengine.ui.tui.screens.intake import IntakeScreen
 from gameengine.ui.tui.screens.intro import IntroScreen
+from gameengine.ui.tui.screens.pause import PauseScreen
 from gameengine.ui.tui.screens.rules import RulesScreen
+from gameengine.ui.tui.screens.settings import SettingsScreen
 from gameengine.ui.tui.screens.transition import TransitionScreen
 from gameengine.ui.tui import glitch
 from gameengine.ui.tui.shared import (
@@ -141,6 +144,7 @@ __all__ = [
     "CommandBar",
     "CondensedDossier",
     "CreditRevealScreen",
+    "CreditsScreen",
     "DebugPanel",
     "DossierPanel",
     "EODScreen",
@@ -151,8 +155,10 @@ __all__ = [
     "IntakeScreen",
     "IntroScreen",
     "OverseerPanel",
+    "PauseScreen",
     "ReferencePanel",
     "RulesScreen",
+    "SettingsScreen",
     "StatusHeader",
     "StegoImagePanel",
     "Toast",
@@ -200,7 +206,9 @@ class HackDoxApp(App):
 
     def on_mount(self) -> None:
         self._narratives = load_narratives()
-        self.push_screen(IntroScreen())
+        intro = IntroScreen()
+        self.push_screen(intro)
+        self._sync_music(intro)
 
     def start_new_game(self) -> None:
         self._state = GameState(
@@ -232,6 +240,43 @@ class HackDoxApp(App):
             self._narratives, self._state.alignment,
             self._day.overseer_intro_key, "generic_intro")
         self._transition(BriefingScreen(self._day, narrative, self._state))
+
+    def resume_game(self, state: GameState) -> None:
+        """IntroScreen → "Continue" (closes #79). Mirrors start_new_game's
+        swap into BriefingScreen, but from a GameState persistence.load()
+        already rebuilt instead of a freshly constructed one.
+
+        A save is only ever written at a day boundary — end of day
+        (EODScreen.action_continue_game) or the moment the shop hands off to
+        the next day (advance_day) — never mid-shift, so state.current_day
+        always names a day that hasn't been played yet. Resuming into that
+        day's BriefingScreen is therefore always correct, the same path
+        start_new_game takes for day 1."""
+        self._state = state
+        self._day_start_health = state.site_health
+        self._day = self._lab_day or load_day(state.current_day)
+        narrative = resolve_aligned_narrative(
+            self._narratives, state.alignment,
+            self._day.overseer_intro_key, "generic_intro")
+        self._transition(BriefingScreen(self._day, narrative, self._state))
+
+    def save_progress(self) -> None:
+        """Best-effort save of whatever run is in progress. Safe to call from
+        anywhere (Pause's Quit actions, reachable from every campaign-loop
+        screen) even when no game is in progress — a no-op then, since
+        IntroScreen itself never pushes Pause."""
+        if self._state is not None:
+            persistence.save(self._state)
+
+    def quit_to_main_menu(self) -> None:
+        """Pause menu → "Quit to Main Menu". Drops the in-progress run (the
+        player's last end-of-day save, if any, is untouched on disk — only
+        this session's in-memory state resets) and glitch-transitions back
+        to a fresh IntroScreen, same choreography as start_new_game's swap
+        into BriefingScreen."""
+        self._state = None
+        self._day = None
+        self._transition(IntroScreen())
 
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
@@ -351,6 +396,19 @@ class HackDoxApp(App):
         """The bare screen change every transition eventually performs."""
         self.pop_screen()
         self.push_screen(screen)
+        self._sync_music(screen)
+
+    def _sync_music(self, screen) -> None:
+        """Keep the right background loop playing for the screen the player
+        just landed on: the ambient bed during intake (the gameplay itself),
+        HackDox's theme everywhere else (start menu, briefing, between-day
+        shop, EOD, ...). play_music() no-ops if that track is already
+        playing, so calling this on every screen change never restarts or
+        interrupts a loop mid-playback — and overlays pushed on top of a
+        screen without going through _swap_screen (rules, evidence board,
+        credit reveal) correctly leave whichever track was already playing
+        alone."""
+        sound_manager.play_music("ambient" if isinstance(screen, IntakeScreen) else "menu")
 
     def _transition(self, screen) -> None:
         """Glitch over the screen change, in two halves.
