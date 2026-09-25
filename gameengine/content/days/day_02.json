@@ -56,8 +56,11 @@
     "approved": {
       "domains": ["everything approved yesterday"],
       "affiliations": [
-        "MIT CSAIL", "Google Security Team", "Oxford Internet Institute",
-        "Cloudflare Research", "Mozilla Security",
+        "Port Authority CERT", "Tidewater Signals Lab",
+        "Northreach Maritime Research Institute", "Bayside Naval Cyber Institute",
+        "Meridian Shipping Security Operations",
+        "Lighthouse Foundation for Secure Systems",
+        "Harbormaster's Office Network Defense",
         "— a trusted organisation can never be faked. If they claim one, the sweep will confirm it. Admit and move on."
       ]
     },

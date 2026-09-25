@@ -3,6 +3,9 @@
 
 ---
 
+
+> **Naming (2026-09-24):** every on-screen label reads **Foreman** (speaker labels, the `OverseerPanel` border title, locked-page messages). Widget, class and CSS names keep `overseer` — see `VOICE_GUIDE.md` §6.
+
 ## Overview
 
 The game runs as a single Textual `App` (`HackDoxApp`) that pushes and pops `Screen` objects.

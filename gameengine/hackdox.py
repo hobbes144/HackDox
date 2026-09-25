@@ -107,7 +107,7 @@ def simulate(
 
     console.print(Panel(
         _simulate_intro_text(day, narratives, state.alignment),
-        title=f"[cyan]Overseer — {day.title}",
+        title=f"[cyan]Foreman — {day.title}",
         border_style="cyan",
     ))
 

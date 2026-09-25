@@ -1,6 +1,10 @@
 """The Overseer's alignment-conditional voice, and the campaign's three
 endings (issue #42, closing the gap issue #71 assumed was already filled).
 
+Players know the Overseer as THE FOREMAN (2026-09-24, VOICE_GUIDE.md). The
+module, the narrative file and every key keep the `overseer` name; only text a
+player can read says Foreman.
+
 ## Alignment bands
 
 `GameState.alignment` is a running ±10 counter (`config.ALIGNMENT_MIN`/`MAX`)
@@ -171,28 +175,28 @@ ENDINGS: dict[str, Ending] = {
         title="FULL ACCESS GRANTED",
         paragraphs=(
             "You stopped pretending, somewhere in the middle of the "
-            "campaign, that you didn't know who they were. The queue told "
-            "you everything you needed — the wrong domain waved through, "
-            "the flippant line in the chat window you let slide because "
-            "arguing with the Overseer cost more than it was worth. Nobody "
-            "made you look away. You just got good at it.",
+            "campaign, that you didn't know who came in on the late boat. "
+            "The line told you everything you needed — the wrong domain "
+            "waved through, the flippant line in the chat window you let "
+            "slide because arguing with the Foreman cost more than it was "
+            "worth. Nobody made you look away. You just got good at it.",
 
             "HackDox doesn't fail. It gets faster. The names that used to "
             "trip your review sail through now on the strength of rules "
             "you helped keep soft, and nobody upstairs has to ask you to "
             "bend them anymore — you already know which way they bend. "
             "The first internet security service on Earth spends its days "
-            "laundering access for the people it was built to catch, and "
-            "the ledger balances every night, because you're the one "
+            "waving smugglers through the gate it was built to hold, and "
+            "the tally balances every night, because you're the one "
             "closing it.",
 
-            "The Overseer doesn't threaten you anymore. There's nothing "
+            "The Foreman doesn't threaten you anymore. There's nothing "
             "left to threaten. Some mornings you still tell yourself it "
             "was just the job, that the rules said admit and you admitted, "
-            "that the one name you turned away doesn't undo the rest. You "
+            "that the one name you turned back doesn't undo the rest. You "
             "might even believe it. The lights on your terminal stopped "
-            "turning red months ago. Nobody's watching for it anymore — "
-            "least of all you.",
+            "turning red months ago. Nobody on the pier is watching for it "
+            "anymore — least of all you.",
         ),
     ),
     BAND_NEUTRAL: Ending(
@@ -203,31 +207,31 @@ ENDINGS: dict[str, Ending] = {
             "and when the letter and your gut disagreed, the letter won, "
             "because that was the job you were hired to do. Twenty shifts. "
             "Twenty rulebooks, some of them quietly rewritten out from "
-            "under you between one morning and the next, and you never "
+            "under you between one tide and the next, and you never "
             "once asked out loud who kept moving the walls.",
 
             "History will record that HackDox's manual review held the "
             "line it was given, no more and no less. Somewhere in the "
             "names you cleared, exactly as written, were people the rules "
             "were never meant to protect — and somewhere in the names you "
-            "turned away were people the rules were never meant to catch. "
+            "turned back were people the rules were never meant to catch. "
             "You couldn't have told you which was which. That was rather "
             "the point of having rules.",
 
-            "The Overseer signs off your last shift without much to say, "
-            "which is its own kind of answer. You did the job. The site is "
-            "still standing, technically, the way a building is still "
-            "standing after everyone who mattered has quietly moved out of "
-            "it. Nobody blames you for that. Nobody thanks you for it "
-            "either. You followed every rule they gave you, and you never "
-            "once asked whose rules they actually were.",
+            "The Foreman signs off your last shift without much to say, "
+            "which is its own kind of answer. You did the job. The terminal "
+            "is still standing, technically, the way a pier is still "
+            "standing after every ship that mattered has quietly stopped "
+            "calling at it. Nobody blames you for that. Nobody thanks you "
+            "for it either. You followed every rule they gave you, and you "
+            "never once asked whose rules they actually were.",
         ),
     ),
     BAND_WHITE_HAT: Ending(
         band=BAND_WHITE_HAT,
         title="THE SIGNAL HOLDS",
         paragraphs=(
-            "You saw them before you were supposed to — a queue entry "
+            "You saw them before you were supposed to — a name at the gate "
             "with nothing wrong on paper and everything wrong underneath, "
             "working just hard enough at hiding to prove they knew exactly "
             "what they were hiding from. The book said deny. You'd stopped "
@@ -235,14 +239,14 @@ ENDINGS: dict[str, Ending] = {
             "admitted them anyway, and put your name under it like you "
             "meant it. Because you did.",
 
-            "It cost you. The Overseer stopped being warm around the time "
-            "you started asking questions it didn't have good answers for, "
-            "and it never quite forgave you for finding the one candidate "
-            "it needed you not to find. But the access you granted that "
-            "morning didn't sit idle — somewhere past your queue, past "
-            "your shift, past the point where you could see what happened "
-            "next, a name you vouched for went to work undoing the thing "
-            "the Overseer was built to protect.",
+            "It cost you. The Foreman stopped being warm around the time "
+            "you started asking questions she didn't have good answers for, "
+            "and she never quite forgave you for finding the one candidate "
+            "she needed you not to find. But the access you granted that "
+            "morning didn't sit idle at the berth — somewhere past your "
+            "line, past your shift, past the point where you could see what "
+            "happened next, a name you vouched for went to work undoing the "
+            "thing the Foreman had been paid to protect.",
 
             "HackDox doesn't get fixed in a day, and it doesn't get fixed "
             "by one gatekeeper refusing to look away. But it stops being "

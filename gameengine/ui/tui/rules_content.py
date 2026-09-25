@@ -473,7 +473,7 @@ def _locked_tab_text(tool: ToolName, title: str) -> str:
         "  [#3d6478][b]⊘  Not authorized yet.[/][/]",
         f"  [dim]{_TOOL_LABEL[tool].capitalize()} unlocks on Day {unlock_day}. Its",
         "  violation catalog and reference material open up the day the",
-        "  Overseer grants it — check back once it's live.[/]",
+        "  Foreman grants it — check back once it's live.[/]",
     ]
     return "\n".join(lines)
 
@@ -1054,7 +1054,7 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "",
         "  These verdicts shift alignment REGARDLESS of rule-correctness — the",
         "  rules may demand one thing and your conscience another. Alignment",
-        "  steers the Overseer's tone and the campaign's ending.",
+        "  steers the Foreman's tone and the campaign's ending.",
     ]
 
     # ── Quick cases ────────────────────────────────────────────────────
@@ -1173,9 +1173,16 @@ def build_dossier_text(day: Day | None) -> str:
         "   [dim](legitimate — but leaves no identity trail)[/]"),
     ]
     lines += _sub("affiliations", "#7dd3c0")
+    # 2026-09-24: the elite orgs are made-up harbour organisations now
+    # (VOICE_GUIDE.md §5), so a player can no longer recognise them from the
+    # real world — this is where they learn the list. Derived from the same
+    # bank the generator and the sweep use.
+    elite  = " · ".join(sorted(tools_bridge._GS_ELITE_ORGS))
     orgs   = " · ".join(sorted(tools_bridge._GS_LEGIT_ORGS))
     forums = " · ".join(tools_bridge._GS_CRITICAL_FORUMS)
     lines += [
+        f"[#00ff9f]✓  ELITE[/]     {elite}",
+        "             [dim]→ can't be faked: the sweep always confirms these[/]",
         f"[#00ff9f]✓  TRUSTED[/]   {orgs}",
         f"[#ff5470]✗  THREAT COMMUNITIES[/] {forums}",
         ("[#ff8c42]?  UNVERIFIABLE[/] \"independent\" · \"freelance\" · \"self-employed\""
@@ -1217,7 +1224,7 @@ def build_osint_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "    An ordinary claimed org that the sweep can't corroborate — the",
         "    handle shows up with no org tag or a different one. Weak signal.",
         "  [#ff8c42]AFFILIATION_MISMATCH[/] [dim](ghostscan-tier, major)[/]",
-        "    An ELITE org claim (MIT CSAIL, Google Security…) that ghostscan",
+        "    An ELITE org claim (Port Authority CERT, Tidewater Signals…) that ghostscan",
         "    contradicts. This is deliberate camouflage — the filter run is",
         "    what confirms it. The Professional's claim checks out; a faker's",
         "    does not.",
@@ -1279,7 +1286,7 @@ def build_creds_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
             (f"  [dim]Hashcrack unlocks on Day "
              f"{config.TOOL_UNLOCK_DAY['hashcrack']}. Its cipher block, and the[/]"),
             "  [dim]violations only it can establish, open up the day the[/]",
-            "  [dim]Overseer grants it.[/]",
+            "  [dim]Foreman grants it.[/]",
             "",
             "  [dim]Until then the one credential problem you can already[/]",
             "  [dim]see — a password stored with no salt at all — is[/]",

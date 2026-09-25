@@ -1,6 +1,6 @@
 {
   "number": 6,
-  "title": "Day 6 — Full Slate",
+  "title": "Day 6 — Full Kit",
   "candidate_count": 7,
 
   "_comment": "#39 (Phase 2). First post-tutorial day: no new tool, no new page. Rulebook inherited from day_01.json with today's Overseer-Variable flips, same as day 5 — day5_graduation's promised rulebook change is Phase 3's payoff (days 8-11, added_rules/removed_rules), not this day's.",
@@ -32,7 +32,7 @@
   },
 
   "rule_sheet": {
-    "summary": "Same lines in the book as yesterday — but check the severities before you lean on one; at least one of them just moved. No new tool, no new page: you have the full set now, and the whole catalog of things worth checking is fair game, not just the slice each tutorial day let through.",
+    "summary": "Same lines in the book as yesterday — but check the severities before you lean on one; at least one of them just moved. No new tool, no new page: you have the full kit now, and the whole catalog of things worth checking is fair game, not just the slice each tutorial day let through.",
     "approved": {
       "domains": ["everything approved so far"],
       "affiliations": ["everything approved so far"]

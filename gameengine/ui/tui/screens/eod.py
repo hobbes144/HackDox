@@ -89,7 +89,7 @@ class EODScreen(Screen):
                     f"Align {r.alignment_delta:+d}[/]"
                 )
         with Container(id="overseer-panel"):
-            yield Static("[b]Overseer:[/]", classes="speaker")
+            yield Static("[b]Foreman:[/]", classes="speaker")
             self._overseer_log = TypewriterLog(id="eod-overseer")
             yield self._overseer_log
         yield Static(

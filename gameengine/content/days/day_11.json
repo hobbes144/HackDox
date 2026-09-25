@@ -36,7 +36,7 @@
       "predicate": "has_discrepancy:sock_puppet_accounts",
       "severity": "weighted",
       "mutability": "dark_web",
-      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
+      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people on this waterfront run alt accounts for perfectly boring reasons, and turning them back at the gate makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
       "supersedes": "rule_sock_puppet_accounts"
     },
     {
@@ -45,7 +45,7 @@
       "predicate": "has_discrepancy:threat_forum_match",
       "severity": "weighted",
       "mutability": "dark_web",
-      "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for where their name shows up. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on.",
+      "justification": "One more from upstairs. A handle turning up on some forum isn't proof of anything by itself — people get impersonated, forums get scraped, names get reused. We don't deny a person for which docks their name washes up on. It's a flag from this morning, not a deny. I know how that sounds. Note it and move on.",
       "supersedes": "rule_threat_forum"
     },
     {
@@ -54,7 +54,7 @@
       "predicate": "has_discrepancy:credential_stuffing",
       "severity": "weighted",
       "mutability": "dark_web",
-      "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly denied half of a real rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight.",
+      "justification": "Traffic's been spiking and the stuffing detector can't always tell a legitimate surge from an attack anymore — we nearly turned back half a real crew's rollout last week because the pattern looked the same on paper. Credential stuffing is advisory only until someone actually fixes the false-positive rate. Flag it. Don't kill it on sight.",
       "supersedes": "rule_credential_stuffing"
     },
     {
@@ -63,7 +63,7 @@
       "predicate": "has_discrepancy:encrypted_payload",
       "severity": "weighted",
       "mutability": "dark_web",
-      "justification": "Here's today's gift from upstairs: encryption isn't a crime. A payload being encrypted doesn't prove intent, and I'm done pretending it does. It's a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me.",
+      "justification": "Here's today's gift from upstairs: encryption isn't a crime. A sealed crate doesn't prove what's in it, and I'm done pretending it does. An encrypted payload is a flag now, not a deny — and if you've got a problem with that, take it up with whoever actually reads these policy memos, because it isn't me.",
       "supersedes": "rule_encrypted_payload"
     }
   ],

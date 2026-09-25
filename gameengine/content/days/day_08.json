@@ -38,7 +38,7 @@
       "predicate": "has_discrepancy:sock_puppet_accounts",
       "severity": "weighted",
       "mutability": "dark_web",
-      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people run alt accounts for perfectly boring reasons, and denying them outright makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
+      "justification": "Compliance flagged our sock-puppet detection for false positives — plenty of people on this waterfront run alt accounts for perfectly boring reasons, and turning them back at the gate makes us look paranoid. Starting today it's advisory only: flag the pattern, use your judgement, don't auto-deny on it alone. Minor tightening of scope, nothing more.",
       "supersedes": "rule_sock_puppet_accounts"
     }
   ],

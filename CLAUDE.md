@@ -338,6 +338,8 @@ HackDox (the in-fiction service) is **the first internet service for cybersecuri
 
 The player is **forced to do this work against their will**. They report to an **Overseer** whose tone starts warm and friendly during onboarding and grows progressively hostile and manipulative as the days pass. The Overseer is in the pocket of the Dark Web — a small cabal of profiles using their HackDox access for malicious ends — and will increasingly push the player to bend the rules in the Dark Web's favor.
 
+**Theme (2026-09-24): "hack" + "docks".** The job is told as dock work — the player is the clerk at the gate of a waterfront data terminal — and the Overseer is presented to players as **the Foreman** (she/her). Only player-visible text changed; code, file and key names keep `overseer`. `VOICE_GUIDE.md` (repo root) is the single source for the voice; the `dockside-voice` subagent owns the copy; `gameengine/tests/test_voice.py` enforces it.
+
 All in-fiction interaction with candidates and the Overseer is delivered via a **text chat panel** with per-character colors and profile icons. Candidate dialogue is one-way (the player does not type back — only verdicts).
 
 ### Player Alignment
@@ -617,6 +619,18 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 > `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` directly for anything that's landed since, and note that as
 > of this update everything below from 2026-09-12 onward lives on the unmerged `Stego-Shapes` branch,
 > not `main` (see Where I'm At).
+
+### 2026-09-24 (Dockside voice pass — Overseer → the Foreman, harbour word banks, stego harbour scenes)
+Nick's thematic pivot: HackDox = hack + docks, cybersecurity with a longshoreman voice, PG. Decisions: rename the Overseer to **the Foreman** (player-facing only); real elite orgs → made-up harbour orgs; email domains a mix of real and in-world; about one dock phrase every two or three lines.
+- **Voice source + owner:** `VOICE_GUIDE.md` (repo root) and a new subagent `.claude/agents/dockside-voice.md` (wording only; hands word-bank renames to `rules-evidence`).
+- **Foreman:** every player-visible "Overseer" → "Foreman" (speaker labels, panel title, locked-page messages, Rules pages, `simulate` panel); all 186 lines of `overseer.json`, `_UNLOCK_LINES` (no longer placeholder), `_RULE_CHANGE_PHRASINGS`, and the three endings rewritten in the voice (endings now call her "she", not "it"). Keys, meaning and alignment bands unchanged. Flavor rate 6% → 35% of lines (by the test glossary).
+- **Candidates:** every `_CHAT_*` pool and `reactions.py` lightly flavored, evenly (0.25–0.40 density per pool, guarded — #78). Pool lengths unchanged.
+- **Word banks:** elite orgs → Port Authority CERT, Tidewater Signals Lab, Northreach Maritime Research Institute, Bayside Naval Cyber Institute, Meridian Shipping Security Operations, Lighthouse Foundation for Secure Systems, Harbormaster's Office Network Defense (with handles + institutional domains); ordinary orgs, thin orgs, domains (portmail.net, fogbank.me, flotsam.io…), purposes and stego filenames given harbour versions. `tools_bridge`'s trusted-org check was a hand-kept keyword list ("mit", "stanford"…) — now DERIVED from `AFFILIATIONS_ELITE`. Rules page gained an ELITE row (players can't recognise made-up orgs from the real world). Every list the generator draws from kept its length → **5,430 generated candidates byte-identical to before** apart from text.
+- **Day files:** 6 titles, 7 summaries and all six DW justifications (62 copies across days 8–20, plus the spec copies in `test_engine_foundation.py`) rewritten; rule ids/predicates/severities/text untouched (verified against HEAD).
+- **Stego art:** new `core/stego_scenes.py` — six harbour scenes (containers, crane at dusk, harbour at night, hull, lighthouse, fog over a pier) replace the gradient/thermal/photo/blueprint/terminal washes. Own RNG, drawn after every existing draw; `StegoImageData.motif` names the scene. Zone/carrier/hint/shape identical across 2,160 images; pinned by a fingerprint test.
+- **Cyber scenes (2026-09-25, Nick's follow-up ask):** six more scenes appended for the "hack" half — server room, ops-room wall screen, data-centre aisle, globe at night, hooded figure at a laptop, CCTV camera (a satellite dish was tried and cut: it reads as a tree at 30×12). Dock and cyber scenes are picked about 50/50. Payload fingerprint unchanged.
+- **New tests:** `test_voice.py` (11) + `test_stego_scenes.py` (12); every guard broken on purpose in a scratch copy and seen red first — which caught an inert first version of the "Overseer" check (string literals keyed by line, so `classes="speaker"` overwrote the label beside it).
+- Suite: 622 → 645 pass.
 
 ### 2026-09-20 (Logwatch: origin map, travel noise, paid Analyst Notes)
 - **ANALYST NOTES are paid:** new upgrade `UPGRADE_LOG_TRIAGE` "Threat Triage HUD" (30 HD$, Logwatch shop category). Without it the section shows a locked line; the rest of the report is unchanged.

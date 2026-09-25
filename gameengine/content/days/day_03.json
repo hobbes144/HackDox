@@ -58,7 +58,7 @@
     "failed": "day3_outro_failed"
   },
   "rule_sheet": {
-    "summary": "Hashcrack is live, and a second breach corpus with it. A bad password is sloppiness; a breached one is a deny.",
+    "summary": "Hashcrack is live — time to pry the lids — and a second breach corpus with it. A bad password is sloppiness; a breached one is a deny.",
     "approved": {
       "domains": [
         "everything approved so far"

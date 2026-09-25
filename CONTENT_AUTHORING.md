@@ -2,6 +2,8 @@
 
 Everything the player reads, and which file to open to change it. Written 2026-08-18, verified against `batch-3-UserFeedback-ContentGeneration` @ `9806dd4`.
 
+> **Voice (2026-09-24):** HackDox is "hack" + "docks". Every player-facing line in the files below is written in the dockside voice defined in **`VOICE_GUIDE.md`** (repo root), and the Overseer is presented to players as **the Foreman** — code, file and key names keep `overseer`. The `dockside-voice` subagent (`.claude/agents/dockside-voice.md`) owns this copy; `gameengine/tests/test_voice.py` checks it. Read the guide before writing anything a player will see.
+
 **The one-line version:** Overseer dialogue is in `overseer.json`. What a day contains is in `day_NN.json`. Alignment-banded Overseer reactions and the three campaign endings are in `core/overseer.py`. The rules-overlay reference pages are Python in `rules_content.py`. Post-verdict candidate reactions are in `reactions.py`. Everything else is a word bank in `candidate_gen.py` or `tools_bridge.py`.
 
 ---
@@ -32,12 +34,12 @@ To give an unauthored day real copy, just add `day12_intro` etc. here. No code c
 
 | What | Where |
 |---|---|
-| Tool-unlock narration ("New capability authorized: GHOSTSCAN…") | `ui/tui/screens/_narration.py` → `_UNLOCK_LINES` |
+| Tool-unlock narration ("New gear on the desk: GHOSTSCAN…") | `ui/tui/screens/_narration.py` → `_UNLOCK_LINES` |
 | Rule-change phrasings (the Overseer mentioning a flip) | `ui/tui/screens/_narration.py` → `_RULE_CHANGE_PHRASINGS` |
 
 Both are re-exported from `ui/tui/app.py` for convenience, but that file just imports them — go straight to `_narration.py` to edit.
 
-`_UNLOCK_LINES` is still marked PLACEHOLDER. It's a candidate to move into `overseer.json` if you want everything in one place — say the word.
+`_UNLOCK_LINES` was rewritten in the dockside voice on 2026-09-24 and is no longer a placeholder. It's still a candidate to move into `overseer.json` if you want everything in one place.
 
 ---
 

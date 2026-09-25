@@ -50,11 +50,11 @@ LAST_NAMES = [
 ]
 
 AFFILIATIONS_LEGIT = [
-    "Univ. of Fictional CS Dept.",
-    "Westmore Polytechnic Security Lab",
-    "Reston Public Library Tech Branch",
+    "Saltmarsh Community College CS Dept.",
+    "Westmore Maritime Polytechnic Security Lab",
+    "Pier Street Public Library Tech Branch",
     "Aegir Cybersecurity Cooperative",
-    "Cordova College — Independent Study",
+    "Cordova Nautical College — Independent Study",
 ]
 
 # #56: the sentinel the dossier shows when AFFILIATION_NOT_STATED is planted.
@@ -86,18 +86,18 @@ AFFILIATIONS_THIN = [
     "Independent Hobbyist",
     "Self-employed",
     "Personal project",
-    "Between roles",
+    "Between contracts",
 ]
 
 # Prestigious institutions used by The Professional (and faked by Sneaky Buggers)
 AFFILIATIONS_ELITE = [
-    "MIT CSAIL",
-    "Google Security Team",
-    "Oxford Internet Institute",
-    "Stanford HAI",
-    "DeepMind Safety Research",
-    "Carnegie Mellon CyLab",
-    "ETH Zurich Information Security Group",
+    "Port Authority CERT",
+    "Tidewater Signals Lab",
+    "Northreach Maritime Research Institute",
+    "Bayside Naval Cyber Institute",
+    "Meridian Shipping Security Operations",
+    "Lighthouse Foundation for Secure Systems",
+    "Harbormaster's Office Network Defense",
 ]
 
 # #48: the organisations a Sneaky Bugger may CLAIM when carrying an
@@ -139,6 +139,11 @@ DOMAINS_TRUSTED = [
     "hotmail.com",
     "live.com",
     "fastmail.io",
+    # In-world port mail providers (VOICE_GUIDE §5: ordinary port names read
+    # as trusted). Classified like any consumer provider.
+    "portmail.net",
+    "harborline.com",
+    "pier9.net",
 ]
 
 # Anonymous / privacy-focused providers. Legitimate — NOT a violation, and
@@ -150,33 +155,39 @@ DOMAINS_PRIVACY = [
     "tutanota.com",
     "pm.me",
     "proton.me",
+    # In-world privacy providers — fog and quiet names (VOICE_GUIDE §5).
+    "fogbank.me",
+    "quietharbor.net",
 ]
 
-# Throwaway / disposable email domains that trigger The Incompatible
+# Throwaway / disposable email domains that trigger The Incompatible. The
+# in-world ones are named for things thrown overboard (VOICE_GUIDE §5). Keep
+# this list at EIGHT entries: _make_email draws from it with rng.choice, and a
+# different length would shift every seeded candidate after the draw.
 DOMAINS_DISPOSABLE = [
     "mailinator.com",
     "guerrillamail.com",
-    "tempmail.org",
-    "throwam.com",
-    "sharklasers.com",
+    "flotsam.io",
+    "jetsam.email",
+    "driftwood.mail",
     "yopmail.com",
-    "trashmail.com",
-    "dispostable.com",
+    "bilgebox.org",
+    "castoff.net",
 ]
 
 PURPOSES_LEGIT = [
     "research access to incident reports",
-    "coursework on threat modeling",
-    "writing a defensive guide for small businesses",
+    "maritime-college coursework on threat modeling",
+    "writing a security checklist for the harbour co-op",
     "studying breach disclosure patterns",
-    "verifying advisories for our team's runbook",
+    "auditing the crane-control network",
 ]
 
 PURPOSES_SUSPECT = [
-    "looking for unredacted leak data",
+    "looking for unredacted manifest leak data",
     "private archive of disclosed CVEs",
     "want to see what's in the breach dumps",
-    "research — can't say more",
+    "shipping research — can't say more",
     "personal interest in account dumps",
 ]
 
@@ -184,16 +195,16 @@ PURPOSES_SUSPECT = [
 # implies, shown in the Activity Report header. A pure lookup (no RNG) so no
 # existing roll shifts. Suspect purposes map to vaguer roles on purpose.
 PURPOSE_ROLES: dict[str, str] = {
-    "research access to incident reports":           "Incident Responder",
-    "coursework on threat modeling":                 "Graduate Student",
-    "writing a defensive guide for small businesses": "Security Consultant",
-    "studying breach disclosure patterns":           "Security Researcher",
-    "verifying advisories for our team's runbook":   "SOC Analyst",
-    "looking for unredacted leak data":              "Independent Researcher",
-    "private archive of disclosed CVEs":             "Archivist",
-    "want to see what's in the breach dumps":        "Hobbyist",
-    "research — can't say more":                     "Undisclosed",
-    "personal interest in account dumps":            "Freelancer",
+    "research access to incident reports":                "Incident Responder",
+    "maritime-college coursework on threat modeling":     "Graduate Student",
+    "writing a security checklist for the harbour co-op": "Security Consultant",
+    "studying breach disclosure patterns":                "Security Researcher",
+    "auditing the crane-control network":                 "SOC Analyst",
+    "looking for unredacted manifest leak data":          "Independent Researcher",
+    "private archive of disclosed CVEs":                  "Archivist",
+    "want to see what's in the breach dumps":             "Hobbyist",
+    "shipping research — can't say more":                 "Undisclosed",
+    "personal interest in account dumps":                 "Freelancer",
 }
 
 # Where candidates claim to work from. Deliberately DISJOINT from
@@ -240,19 +251,19 @@ class ArchetypeSpec:
 
 
 _CHAT_WARM = (
-    "hi — sorry, first time doing this.",
+    "hi — sorry, first time on this pier.",
     "thanks for taking a look. I'll wait.",
     "appreciate the help. let me know if you need anything else.",
 )
 
 _CHAT_NEUTRAL = (
-    "I submitted the form yesterday.",
+    "I put my papers in yesterday, end of my shift.",
     "just need access for the reports section, please.",
     "let me know what else you need.",
 )
 
 _CHAT_HOSTILE = (
-    "how long is this going to take?",
+    "how long is this going to take? I've got a boat to meet.",
     "I know my rights — you can't just stall me.",
     "this is absurd. just approve it.",
 )
@@ -270,7 +281,7 @@ _CHAT_HOSTILE = (
 # EARLY (days 6-9, the medium band's first stretch): flippant, casual,
 # bragging that could almost pass for dark humor if you're not listening.
 _CHAT_DARK_WEB_EARLY = (
-    "lol, paperwork. classic.",
+    "lol, paperwork. who still checks manifests?",
     "you'll let me in. they always do.",
     "you do know who I am, right?",
     "relax, nobody actually reads these tickets.",
@@ -282,7 +293,7 @@ _CHAT_DARK_WEB_MID = (
     "cute that you're still checking boxes on this end.",
     "the accounts you people clear for me stay open. stay useful.",
     "flag it if you want. it won't stick, and we both know it.",
-    "I don't even bother covering my tracks with you anymore.",
+    "I don't even bother covering my tracks on this pier anymore.",
 )
 
 # LATE (days 16-20): the mask is off — open contempt, and it needles the
@@ -291,7 +302,7 @@ _CHAT_DARK_WEB_LATE = (
     "go ahead, deny me. see what that does to your quota.",
     "you know exactly what I do with this. that's never been the obstacle.",
     "I almost respect it when you pretend this is a hard call.",
-    "we both know who actually runs this desk.",
+    "we both know who actually runs this pier.",
 )
 
 # Band boundaries for the pools above live in config.py, next to the
@@ -311,18 +322,18 @@ def _dark_web_chat_pool(day_number: int) -> tuple[str, ...]:
 _CHAT_EARNEST = (
     "I read the rulebook. I tried to do this the right way.",
     "I know it looks bad. please hear me out.",
-    "they're going to come for you next if you don't help.",
+    "they're going to come for this whole waterfront next if you don't help.",
 )
 
 _CHAT_PROFESSIONAL = (
-    "My team lead suggested I register — we use HackDox for our CVE triage.",
+    "My team lead suggested I register — we use HackDox for CVE triage across the harbour's systems.",
     "Happy to provide additional verification if needed.",
     "I've used similar services through the lab before.",
     "Let me know if you'd like a reference from my supervisor.",
 )
 
 _CHAT_INCOMPATIBLE = (
-    "I just need quick access, nothing fancy.",
+    "I just need quick access before my shift, nothing fancy.",
     "I didn't want to use my work email for this.",
     "This is just a temp account — I prefer to keep things separate.",
     "Is there a problem? I filled everything out.",
@@ -334,8 +345,8 @@ _CHAT_INCOMPATIBLE = (
 # as its own register rather than a watered-down hostile line or a flat
 # neutral one.
 _CHAT_DISMISSIVE = (
-    "can we speed this up? I've got somewhere to be.",
-    "sure, whatever you need from me.",
+    "can we speed this up? my crew's waiting on the pier.",
+    "sure, whatever you need. I've waited out worse tides.",
     "I don't really have an opinion on the process either way.",
     "let me know when it's done. no rush on my end.",
     "fine by me. do what you need to do.",
@@ -1120,22 +1131,22 @@ def _make_handle(rng: random.Random, first: str, last: str, style: str) -> str:
 # org-shaped (not person-shaped) so a typosquat of it stands out from the
 # name-derived handles every other candidate carries.
 _ELITE_ORG_HANDLE: dict[str, str] = {
-    "MIT CSAIL":                            "mitcsail",
-    "Google Security Team":                 "googlesec",
-    "Oxford Internet Institute":            "oxfordoii",
-    "Stanford HAI":                         "stanfordhai",
-    "DeepMind Safety Research":             "deepmindsafety",
-    "Carnegie Mellon CyLab":                "cmucylab",
-    "ETH Zurich Information Security Group": "ethzsec",
+    "Port Authority CERT":                          "portauthcert",
+    "Tidewater Signals Lab":                        "tidewatersig",
+    "Northreach Maritime Research Institute":       "northreachmri",
+    "Bayside Naval Cyber Institute":                "baysidenci",
+    "Meridian Shipping Security Operations":        "meridiansoc",
+    "Lighthouse Foundation for Secure Systems":     "lighthousefss",
+    "Harbormaster's Office Network Defense":        "harbormasternd",
     # #56: the small legit orgs joined this map when Sneaky Bugger moved off the
     # elite pool. Without them, #53's typosquat falls back to squatting an org
     # the candidate never claimed, which loses the handle-versus-claim
     # comparison that made the violation readable in the first place.
-    "Univ. of Fictional CS Dept.":           "fictionalcs",
-    "Westmore Polytechnic Security Lab":     "westmoresec",
-    "Reston Public Library Tech Branch":     "restontech",
-    "Aegir Cybersecurity Cooperative":       "aegircyber",
-    "Cordova College — Independent Study":   "cordovacs",
+    "Saltmarsh Community College CS Dept.":         "saltmarshcs",
+    "Westmore Maritime Polytechnic Security Lab":   "westmoresec",
+    "Pier Street Public Library Tech Branch":       "pierstreettech",
+    "Aegir Cybersecurity Cooperative":              "aegircyber",
+    "Cordova Nautical College — Independent Study": "cordovacs",
 }
 
 
@@ -1181,21 +1192,21 @@ def _typosquat(rng: random.Random, base: str) -> str:
 
 
 _ELITE_DOMAIN_MAP = {
-    "MIT CSAIL":                          "mit.edu",
-    "Google Security Team":               "google.com",
-    "Oxford Internet Institute":          "ox.ac.uk",
-    "Stanford HAI":                       "stanford.edu",
-    "DeepMind Safety Research":           "deepmind.com",
-    "Carnegie Mellon CyLab":              "cmu.edu",
-    "ETH Zurich Information Security Group": "ethz.ch",
+    "Port Authority CERT":                      "portauthority.gov",
+    "Tidewater Signals Lab":                    "tidewater.edu",
+    "Northreach Maritime Research Institute":   "northreach.ac.uk",
+    "Bayside Naval Cyber Institute":            "baysidenaval.edu",
+    "Meridian Shipping Security Operations":    "meridianshipping.com",
+    "Lighthouse Foundation for Secure Systems": "lighthousefoundation.org",
+    "Harbormaster's Office Network Defense":    "harbormaster.gov",
 }
 
 _LEGIT_DOMAIN_MAP = {
-    "Univ. of Fictional CS Dept.": "univ-fictional.edu",
-    "Westmore Polytechnic Security Lab": "westmore.edu",
-    "Reston Public Library Tech Branch": "reston-libs.org",
-    "Aegir Cybersecurity Cooperative": "aegir-coop.net",
-    "Cordova College — Independent Study": "cordova.edu",
+    "Saltmarsh Community College CS Dept.":         "saltmarsh.edu",
+    "Westmore Maritime Polytechnic Security Lab":   "westmore.edu",
+    "Pier Street Public Library Tech Branch":       "pierstreet-libs.org",
+    "Aegir Cybersecurity Cooperative":              "aegir-coop.net",
+    "Cordova Nautical College — Independent Study": "cordova.edu",
 }
 
 def _make_email(
@@ -1211,7 +1222,7 @@ def _make_email(
         return f"{first.lower()}.{last.lower()[0]}@{_LEGIT_DOMAIN_MAP[affiliation]}"
     if affiliation in _ELITE_DOMAIN_MAP:
         return f"{first.lower()[0]}{last.lower()}@{_ELITE_DOMAIN_MAP[affiliation]}"
-    pool = ["yahoo.com", "gmail.com", "fastmail.io", "protonmail.com"]
+    pool = ["gmail.com", "portmail.net", "fastmail.io", "fogbank.me"]  # len 4: rng parity
     return f"{first.lower()}{last.lower()}{rng.randint(1, 99)}@{rng.choice(pool)}"
 
 
@@ -1599,7 +1610,7 @@ def _build_chat(
     if has_hostile and lines:
         lines.append(ChatLine(
             timestamp=f"10:{(minute + n * 2) % 60:02d}",
-            text="you'll regret this. I have friends.",
+            text="you'll regret this. I have friends down on the docks.",
             tag="hostile",
         ))
 
@@ -1822,7 +1833,7 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
         )
         if has_mismatch:
             rng_ce = _seeded_rng(game_seed, day.number, slot_index, "commit_email")
-            alt_domains = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"]
+            alt_domains = ["gmail.com", "harborline.com", "outlook.com", "pier9.net"]  # len 4: rng parity
             _dom = rng_ce.choice(alt_domains)
             commit_email = f"{first.lower()}{last.lower()[0]}{rng_ce.randint(1, 99)}@{_dom}"
         else:
@@ -1853,11 +1864,11 @@ def generate(game_seed: int, day: Day, slot_index: int) -> Candidate:
     # (generic, camera-style, descriptive) so that no one shape is a tell
     # either.
     _st_images = [
-        "profile.png", "avatar.jpg", "header.png", "screenshot.png",
+        "profile.png", "avatar.jpg", "berth_7.jpg", "screenshot.png",
         "headshot.jpg", "id_scan.png", "badge_photo.jpg", "portrait.png",
         "img_0412.jpg", "img_2208.jpg", "dsc_00917.jpg", "photo_2024.png",
-        "team_offsite.jpg", "conf_badge.png", "workstation.png", "desk.jpg",
-        "signature.png", "whiteboard.jpg",
+        "crane_cab.jpg", "port_pass.png", "bill_of_lading.png", "pier_night.jpg",
+        "signature.png", "manifest_scan.png",
     ]
     _rng_st = random.Random(int(cand_id, 16) ^ 0xDE4DC0DE)
     submitted_image_path: str = _rng_st.choice(_st_images)

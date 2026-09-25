@@ -14,7 +14,7 @@ class OverseerPanel(Static):
 
     def __init__(self, intro_text: str) -> None:
         super().__init__(id="overseer-side")
-        self.border_title = " Overseer "
+        self.border_title = " Foreman "
         self._intro      = intro_text
         self._admits     = 0
         self._denies     = 0

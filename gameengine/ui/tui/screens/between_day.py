@@ -96,7 +96,7 @@ class BetweenDayScreen(Screen):
             with Vertical(id="bd-left"):
                 yield self._summary_w
                 with Container(id="bd-overseer"):
-                    yield Static("[b]Overseer:[/]", classes="speaker")
+                    yield Static("[b]Foreman:[/]", classes="speaker")
                     # #3: the 3rd TypewriterLog host (called out in the issue's
                     # own comment). Not focused, so Space still buys in the shop.
                     self._overseer_log = TypewriterLog(id="bd-overseer-text")

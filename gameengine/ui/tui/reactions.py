@@ -96,11 +96,11 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
         Verdict.ADMIT: [
             _r("positive", "oh — that's it? thank you. seriously, thank you."),
             _r("positive", "you have no idea how much this helps. I'll do good work in there."),
-            _r("positive", "wow, okay! getting started right now. thanks for the quick turnaround."),
+            _r("positive", "wow, okay! getting started before the next boat. thanks for the quick turnaround."),
         ],
         Verdict.DENY: [
             _r("negative", "wait — denied? what did I get wrong?"),
-            _r("negative", "I... okay. I don't understand, but okay."),
+            _r("negative", "I... okay. I don't understand, but okay. back down the gangway, I guess."),
             _r("negative", "was it something in my file? I can resubmit. please."),
         ],
     },
@@ -109,10 +109,10 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
         Verdict.ADMIT: [
             _r("positive", "cool. appreciate it. see you around."),
             _r("positive", "great, thanks. logging in now."),
-            _r("positive", "nice. less painful than last time."),
+            _r("positive", "nice. less painful than the last gate I stood at."),
         ],
         Verdict.DENY: [
-            _r("negative", "huh. alright then. there goes the morning."),
+            _r("negative", "huh. alright then. there goes the morning shift."),
             _r("negative", "seriously? whatever. I'll try again tomorrow."),
             _r("negative", "that's a no? fine. your call."),
         ],
@@ -121,13 +121,13 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
     Archetype.THE_PROFESSIONAL: {
         Verdict.ADMIT: [
             _r("positive", "appreciated. my team will come through the usual channel."),
-            _r("positive", "good. clean process, for once."),
+            _r("positive", "good. clean process, for once. my crew will be glad."),
             _r("positive", "thank you. I'll route the rest through our liaison."),
         ],
         Verdict.DENY: [
-            _r("negative", "that's unfortunate. I'll have my director follow up with your Overseer."),
+            _r("negative", "that's unfortunate. I'll have my director follow up with your Foreman."),
             _r("negative", "denied? I'd like that on record, please."),
-            _r("negative", "I see. I'll escalate it. nothing personal toward you."),
+            _r("negative", "I see. I'll escalate it. nothing personal toward you — or your pier."),
         ],
     },
 
@@ -136,12 +136,12 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
         Verdict.DENY: [
             _r("negative", "oh no. did I mess up the form again? I'm so sorry."),
             _r("negative", "ugh, I KNEW I typo'd something. sorry for wasting your morning."),
-            _r("negative", "okay. okay. I'll fix it and come back. sorry!"),
+            _r("negative", "okay. okay. I'll fix my papers and come back. sorry!"),
         ],
         Verdict.ADMIT: [
             _r("positive", "wait, really? oh thank goodness, I thought I'd botched the whole packet."),
             _r("positive", "you're letting me in? half that paperwork was wrong, but — okay!"),
-            _r("positive", "phew! I was sure I'd broken something. thanks!"),
+            _r("positive", "phew! I was sure I'd sunk the whole thing. thanks!"),
         ],
     },
 
@@ -149,10 +149,10 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
         Verdict.DENY: [
             _r("negative", "you're going to regret this. I remember faces."),
             _r("negative", "cute. enjoy the job while you've got it."),
-            _r("negative", "fine. there are other doors."),
+            _r("negative", "fine. there are other docks."),
         ],
         Verdict.ADMIT: [
-            _r("positive", "heh. that was easier than they said it'd be."),
+            _r("positive", "heh. easier than they said it'd be down at the hall."),
             _r("positive", "good. now stay out of my way."),
             _r("positive", "knew you'd fold. see you inside."),
         ],
@@ -164,13 +164,13 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
             # what they were hiding.
             _r("negative", "...huh. you actually read it."),
             _r("negative", "no? shame. you were doing so well up until now."),
-            _r("negative", "that's a pity. I had such a nice story ready."),
+            _r("negative", "that's a pity. I had such a nice story ready for the tally clerk."),
         ],
         Verdict.ADMIT: [
             # The mask comes off. Warm words, cold delivery.
             _r("positive", "thanks so much! ...you didn't even turn the second page. lovely."),
             _r("positive", "appreciate it. genuinely. you've been very helpful."),
-            _r("positive", "perfect. I'll be so quiet you'll forget I'm here."),
+            _r("positive", "perfect. I'll be so quiet you'll forget I ever came off the boat."),
         ],
     },
 
@@ -178,12 +178,12 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
         Verdict.DENY: [
             _r("negative", "the address, right? yeah. it's the only one I've got."),
             _r("negative", "figured. everyone says the same thing about it."),
-            _r("negative", "no worries. I'll spin up a real one and come back."),
+            _r("negative", "no worries. I'll spin up a real one and come back next shift."),
         ],
         Verdict.ADMIT: [
             _r("positive", "oh, nice, it went through? cool."),
             _r("positive", "huh. half expected that mailbox to bounce me. thanks!"),
-            _r("positive", "great. hope the inbox lasts the week."),
+            _r("positive", "great. hope the inbox stays afloat the week."),
         ],
     },
 
@@ -196,11 +196,11 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
             _r("negative",
                "clean file, wasn't it. not one thing out of place.",
                "that's the trick. the paperwork is always immaculate.",
-               "pleasure doing business."),
+               "pleasure doing business on your pier."),
             _r("negative",
                "you went by the book. good.",
                "the book is very easy to follow. that's rather the point.",
-               "I'll be around. quietly."),
+               "I'll be around the docks. quietly."),
             _r("negative",
                "no notes? none at all?",
                "then we understand each other.",
@@ -214,7 +214,7 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
             _r("negative",
                "huh. not a single ground to stand on and you still said no.",
                "a hunch. how professional.",
-               "we'll call this one a draw."),
+               "we'll call this one a draw. tide comes back in, you know."),
         ],
     },
 
@@ -232,7 +232,7 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
             _r("negative",
                "That's the right call by the book. I know that it is.",
                "I just wish the book covered what I'm looking at.",
-               "Take care of yourself in there."),
+               "Take care of yourself on that gate."),
         ],
         Verdict.ADMIT: [
             _r("positive",
@@ -241,7 +241,7 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
                "You won't hear from me again unless it matters."),
             _r("positive",
                "Thank you. I mean that.",
-               "Be careful — someone upstairs is going to notice this eventually.",
+               "Be careful — someone upstairs on that pier is going to notice this eventually.",
                "Good luck."),
         ],
     },
@@ -253,7 +253,7 @@ REACTIONS: dict[Archetype, dict[Verdict, list[Reaction]]] = {
 # flat line, not a crashed shift.
 _FALLBACK: dict[Verdict, Reaction] = {
     Verdict.ADMIT: _r("positive", "understood. I'm in, then."),
-    Verdict.DENY:  _r("negative", "understood. I'll see myself out."),
+    Verdict.DENY:  _r("negative", "understood. I'll see myself back down the gangway."),
 }
 
 

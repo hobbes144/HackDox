@@ -47,7 +47,7 @@ class BriefingScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(f"[b][#7dd3c0]{self._day.title}[/][/]", classes="screen-title")
         with Container(id="overseer-panel"):
-            yield Static("[b]Overseer:[/]", classes="speaker")
+            yield Static("[b]Foreman:[/]", classes="speaker")
             # #3: the briefing dialogue types out through the TypewriterLog.
             # The log is NOT focused, so the screen keeps its Space=begin binding.
             self._overseer_log = TypewriterLog(id="briefing-overseer")
@@ -70,7 +70,7 @@ class BriefingScreen(Screen):
             self._overseer_log.post("", line, color="#ffd93d")
         if self._unlock_tool:
             line = _UNLOCK_LINES.get(self._unlock_tool,
-                                     f"New capability authorized: {self._unlock_tool.upper()}.")
+                                     f"New gear on the desk: {self._unlock_tool.upper()}.")
             self._overseer_log.post("", line, color="#00ff9f",
                                     triggers=self._unlock_tool)
 

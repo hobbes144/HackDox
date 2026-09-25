@@ -1,4 +1,4 @@
-"""Overseer narration helpers."""
+"""Foreman (Overseer) narration helpers — dockside voice, see VOICE_GUIDE.md."""
 
 from __future__ import annotations
 
@@ -32,37 +32,39 @@ def _play_overseer(log: TypewriterLog, narrative: str, *, triggers_on_last=None)
         log.post("", line, triggers=(triggers_on_last if last else None))
 
 
-# Placeholder Overseer unlock narration, one line per tool (#34). PLACEHOLDER —
-# the final, day-by-day wording is authored with the tutorial script (#15); this
-# is a stand-in so the mechanism (and its teaching order) is in place now. The
-# `triggers` payload on this line is the tool value string, which the briefing's
-# Finished handler uses to flip GameState.unlocked_tools.
+# Foreman unlock narration, one line per tool (#34), played right after that
+# day's briefing. Written in the dockside voice (VOICE_GUIDE.md) and kept short:
+# the day 2-5 intros already teach each tool, so this line only marks the moment
+# the gear is handed over. The `triggers` payload on this line is the tool value
+# string, which the briefing's Finished handler uses to flip
+# GameState.unlocked_tools.
 _UNLOCK_LINES: dict[str, str] = {
-    "ghostscan": "New capability authorized: GHOSTSCAN. Public traces don't lie the way people do.",
-    "hashcrack": "New capability authorized: HASHCRACK. If they reused a breached password, we'll see it.",
-    "logwatch":  "New capability authorized: LOGWATCH. The logs remember every step they took.",
-    "stegotool": "New capability authorized: STEGOTOOL. They hide payloads in plain sight now. Look closer.",
+    "ghostscan": "New gear on the desk: GHOSTSCAN. Public traces don't lie the way people at the gate do.",
+    "hashcrack": "New gear on the desk: HASHCRACK. If they reused a breached password, we'll pry it open.",
+    "logwatch":  "New gear on the desk: LOGWATCH. The logbook remembers every step they took on this pier.",
+    "stegotool": "New gear on the desk: STEGOTOOL. They're smuggling payloads in plain sight now. Look closer.",
 }
 
 
 # ─── Overseer-Variable rule broadcast (#36) ─────────────────────────────────
 #
-# The Overseer mentions rule changes in passing. The design is explicit that a
-# small change should read as a minor process update, not a klaxon — so these
-# are deliberately understated, hedged, and a little bored. Several openers per
-# change kind so a two-change morning doesn't read as a filled-in template.
+# The Foreman (the Overseer, to the code) mentions rule changes in passing. The
+# design is explicit that a small change should read as a minor process update,
+# not a klaxon — so these are deliberately understated, hedged, and a little
+# bored. Several openers per change kind so a two-change morning doesn't read as
+# a filled-in template. Dockside voice per VOICE_GUIDE.md, lightly.
 #
 # {rule} is the rule's own text, lower-cased at the first character and
 # stripped of its trailing period so it sits inside a sentence.
 _RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
     # A rule got teeth: advisory → disqualifying.
     "tightened": (
-        ("Oh — one thing before you start. That guidance about {rule}? Policy "
-        "now. Not a suggestion. Don't make me explain it twice."),
+        ("Oh — one thing before the first boat. That guidance about {rule}? "
+        "Policy now. Not a suggestion. Don't make me explain it twice."),
         ("Small note. {rule} — that's a hard deny from today. Compliance "
         "wanted it in writing, so now it's in writing."),
         ("Quick amendment: {rule}. It used to be your judgement. It isn't "
-        "anymore."),
+        "anymore — it's posted at the gate."),
     ),
     # A rule lost its teeth: disqualifying → advisory.
     "relaxed": (
@@ -70,12 +72,12 @@ _RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
         "wave them through. Don't overthink it."),
         ("Legal's been busy. {rule} is advisory from this morning. Use your "
         "judgement, which I'm told you have."),
-        ("Minor thing. {rule} — we're not denying on that on its own anymore. "
-        "Log it and move on."),
+        ("Minor thing. {rule} — we're not turning anybody back on that on its "
+        "own anymore. Log it and keep the line moving."),
     ),
     "added": (
         "New line in the book today: {rule}. Read it properly at some point.",
-        "They've added one. {rule}. I didn't write it, I just pass it along.",
+        "They've added one. {rule}. I didn't write it, I just pass it down the pier.",
     ),
     "removed": (
         ("That clause about {rule} is gone as of this morning. Don't ask me "

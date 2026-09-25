@@ -469,7 +469,7 @@ class IntakeScreen(Screen):
         _page_changed = index != self._page_index
         if tool is not None and tool not in self._state.unlocked_tools:
             self.command_bar.set_response(
-                f"{_PAGE_NAMES[index]} is locked — the Overseer grants it in a "
+                f"{_PAGE_NAMES[index]} is locked — the Foreman grants it in a "
                 f"later briefing.",
                 error=False,
             )

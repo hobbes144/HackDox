@@ -26,6 +26,8 @@ from enum import Enum
 
 from .. import config
 from .candidate_gen import _ELITE_ORG_HANDLE as _ORG_HANDLE
+from . import stego_scenes
+from .candidate_gen import AFFILIATIONS_ELITE as _ELITE_ORGS_BANK
 from .candidate_gen import AFFILIATIONS_LEGIT as _LEGIT_ORGS_BANK
 from .candidate_gen import DOMAINS_DISPOSABLE as _DISPOSABLE_DOMAINS
 from .candidate_gen import DOMAINS_PRIVACY as _PRIVACY_DOMAINS_BANK
@@ -160,7 +162,7 @@ def classify_affiliation(affiliation: str) -> str:
     affil = (affiliation or "").lower()
     if any(kw in affil for kw in _GS_SUSPECT_AFFIL_KW):
         return "prohibited"
-    if any(kw in affil for kw in _GS_TRUSTED_AFFIL_KW):
+    if _is_trusted_org(affil):
         return "approved"
     if affil in ("independent", "freelance", "self-employed", "consultant", ""):
         return "unverifiable"
@@ -207,8 +209,21 @@ _GS_PRIVACY_DOMAINS    = frozenset(_PRIVACY_DOMAINS_BANK)
 # employer read as "not in known list" on its own candidates' sweeps.
 _GS_LEGIT_ORGS = frozenset(_LEGIT_ORGS_BANK)
 
-_GS_TRUSTED_AFFIL_KW = ["mit", "stanford", "cmu", "oxford", "cloudflare",
-                          "google", "microsoft", "mozilla", "apache"]
+# 2026-09-24 (dockside voice pass): the trusted-org check used to be a keyword
+# list ("mit", "stanford", "google", ...) kept by hand next to a word bank it
+# was supposed to agree with. When the elite orgs became made-up harbour
+# organisations (VOICE_GUIDE.md §5) every keyword would have silently stopped
+# matching. DERIVED from AFFILIATIONS_ELITE now, exact match, same stance as
+# the domain banks above — the #56 guarantee ("a trusted org cannot be faked")
+# is about exactly these organisations and no others.
+_GS_ELITE_ORGS = frozenset(_ELITE_ORGS_BANK)
+_GS_ELITE_ORGS_LOWER = frozenset(o.lower() for o in _ELITE_ORGS_BANK)
+
+
+def _is_trusted_org(affiliation: str) -> bool:
+    return (affiliation or "").strip().lower() in _GS_ELITE_ORGS_LOWER
+
+
 _GS_SUSPECT_AFFIL_KW = ["breachforums", "raidforums", "hackforums",
                           "nulled", "exploit.in"]
 
@@ -412,7 +427,7 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True,
     affil_lower = candidate.claimed_affiliation.lower()
     if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW) and config.UPGRADE_AFFIL_PROHIBITED in upgrades:
         affil_flag = "[#ff5470]✗  known threat actor community[/]"
-    elif any(kw in affil_lower for kw in _GS_TRUSTED_AFFIL_KW) and config.UPGRADE_AFFIL_APPROVED in upgrades:
+    elif _is_trusted_org(affil_lower) and config.UPGRADE_AFFIL_APPROVED in upgrades:
         # #56: this is a GUARANTEE now, not a hint. A trusted organisation cannot
         # be faked on a dossier - the generator refuses to plant an affiliation
         # violation on a candidate claiming one - so the sweep will always
@@ -2610,7 +2625,7 @@ class StegoImageData:
     """Deterministic, structured render model for one candidate's image."""
     cols: int
     rows: int
-    style: int                                   # 0..4 visual style
+    style: int                                   # 0..4 legacy roll, kept for RNG parity (see motif)
     base_rgb: tuple                              # rows × cols of (r, g, b)
     zone: tuple[int, int, int, int] | None       # (x, y, w, h) — None if clean
     carrier: frozenset                           # {(x, y)} cells that carry data
@@ -2637,6 +2652,8 @@ class StegoImageData:
     shape: StegoShape | None = None
     shape_kind: DiscrepancyKind | None = None
     strokes: tuple = ()
+    # 2026-09-24: which harbour scene the base image draws (core/stego_scenes.py).
+    motif: str = ""
 
 
 @dataclass(frozen=True)
@@ -2810,29 +2827,13 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         zone, carrier, hint_region = None, frozenset(), None
         shape, shape_kind, strokes = None, None, ()
 
-    def _base_rgb(x: int, y: int) -> tuple[int, int, int]:
-        fx = x / max(1, cols - 1)
-        fy = y / max(1, rows - 1)
-        n  = noise_grid[y][x]
-        if style == 0:   # gradient
-            r = int(40  + fx * 150 + n); g = int(50 + fy * 110 + n); b = int(140 + (1 - fx) * 80 + n)
-        elif style == 1: # thermal
-            dist = ((fx - 0.5) ** 2 + (fy - 0.5) ** 2) ** 0.5
-            heat = max(0.0, 1.0 - dist * 1.8)
-            r = int(80 + heat * 160 + n); g = int(20 + heat * 110 + n); b = int(5 + heat * 50 + n)
-        elif style == 2: # photo
-            blob = max(0.0, 0.9 - ((fx - 0.4) ** 2 + (fy - 0.35) ** 2))
-            r = int(110 + blob * 100 + n); g = int(90 + blob * 80 + n); b = int(70 + blob * 60 + n)
-        elif style == 3: # blueprint
-            r = int(8 + abs(n) // 4); g = int(18 + abs(n) // 4); b = int(55 + fx * 45 + fy * 25 + n)
-        else:            # terminal
-            r = int(4 + abs(n) // 4); g = int(35 + fy * 55 + fx * 30 + n); b = int(4 + abs(n) // 4)
-        return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
-
-    base_rgb = tuple(
-        tuple(_base_rgb(x, y) for x in range(cols))
-        for y in range(rows)
-    )
+    # 2026-09-24 (dockside voice pass, VOICE_GUIDE.md §7): the base image is a
+    # harbour scene now, not a gradient/thermal/photo/blueprint/terminal wash.
+    # It is drawn from its OWN seeded RNG after every draw above, so `style`
+    # and `noise_grid` are still consumed exactly as before and the zone,
+    # carrier and hint region are byte-identical to the pre-scene generator.
+    # `style` is kept on the dataclass for that reason; the scene is `motif`.
+    motif, base_rgb = stego_scenes.render(candidate.id, cols, rows, noise_grid)
 
     meta_rng  = _random.Random(int(candidate.id, 16) ^ 0x57E60001)
     img_file  = candidate.dossier.submitted_image_path or "image.png"
@@ -2848,6 +2849,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
         filename=img_file, width=width, height=height,
         file_kb=file_kb, img_type=img_type,
         shape=shape, shape_kind=shape_kind, strokes=strokes,
+        motif=motif,
     )
 
 
