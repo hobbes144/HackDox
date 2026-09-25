@@ -896,6 +896,12 @@ _SEVERITY_BY_DAY: dict[DiscrepancyKind, tuple[str, int, str]] = {
 }
 
 
+# Endless (#7) relies on its day numbers sitting above every scheduled step, so
+# a shift reads every kind at its final severity. See config.ENDLESS_DAY_BASE.
+assert all(on_day < config.ENDLESS_DAY_BASE
+           for _b, on_day, _a in _SEVERITY_BY_DAY.values())
+
+
 def stepped_rule_severity(kind: DiscrepancyKind, day_number: int) -> str | None:
     """The rule severity a `_SEVERITY_BY_DAY` kind's rule carries on a day
     ("weighted" while the kind is minor, "disqualifying" once it is major or

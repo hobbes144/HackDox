@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from gameengine import config
-from gameengine.core import persistence, scoring, tools_bridge
+from gameengine.core import endless, persistence, scoring, shop, tools_bridge
 from gameengine.core.audio import sound_manager
 from gameengine.core.models import Day, GameState
 from gameengine.ui.tui.screens._narration import (
@@ -56,40 +56,19 @@ class BetweenDayScreen(Screen):
         self._cursor       = 0
         self._status_msg   = ""
         self._status_err   = False
-        # Shop catalog: consumables/capacity first (under a "General" header),
-        # then permanent upgrades grouped into per-tool sub-categories (#2) —
+        # Shop catalog (#22/#23) — rows, prices and purchase rules live in
+        # core/shop.py so the campaign and Endless (#7) share one shop.
         # "header" rows are non-purchasable and skipped by cursor navigation.
-        items: list[tuple[str, str, int, str, str]] = [
-            ("header", "", 0, "General", ""),
-            ("credit",   "hackdox_credit", config.SHOP_PRICE_CREDIT,
-             "HackDox Credit +1",
-             f"ground-truth reveal charge (max {config.HACKDOX_CREDIT_MAX} slots)"),
-            ("capacity", "compute_capacity", config.SHOP_PRICE_CAPACITY,
-             f"Compute Capacity +{config.COMPUTE_CAPACITY_STEP} ⏱",
-             "permanently raise the per-shift computing-hours budget"),
-        ]
-        by_category: dict[str, list[tuple[str, str, int, str]]] = {
-            cat: [] for cat in config.UPGRADE_CATEGORY_ORDER
-        }
-        for uid, label, price, desc in config.UPGRADE_CATALOG:
-            cat = config.UPGRADE_CATEGORY[uid]
-            by_category[cat].append((uid, label, price, desc))
-        for cat in config.UPGRADE_CATEGORY_ORDER:
-            cat_upgrades = by_category[cat]
-            if not cat_upgrades:
-                continue
-            items.append(("header", "", 0, cat, ""))
-            for uid, label, price, desc in cat_upgrades:
-                items.append(("upgrade", uid, price, label, desc))
+        items = shop.items_for(state)
         self._items = items
         self._cursor = next(
-            (i for i, it in enumerate(items) if it[0] != "header"), 0)
+            (i for i, it in enumerate(items) if it.kind != "header"), 0)
         self._summary_w = Static(id="bd-summary", classes="panel")
         self._shop_w    = Static(id="bd-shop", classes="panel")
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"[b][#7dd3c0]HACKDOX — NIGHT OF DAY {self._day.number}[/][/]",
+            f"[b][#7dd3c0]HACKDOX — NIGHT OF {self._day.title.upper()}[/][/]",
             classes="screen-title",
         )
         with Horizontal(id="bd-root"):
@@ -104,7 +83,8 @@ class BetweenDayScreen(Screen):
             yield self._shop_w
         yield Static(
             "[#00ff9f][b]↑↓[/][/] browse shop  ·  [#00ff9f][b]Enter[/][/] buy  ·  "
-            "[#00ff9f][b]N[/][/] begin next day  ·  [#00ff9f][b]Q[/][/] quit",
+            f"[#00ff9f][b]N[/][/] begin next {'shift' if self._state.is_endless else 'day'}"
+            "  ·  [#00ff9f][b]Q[/][/] quit",
             classes="hint",
         )
 
@@ -188,9 +168,10 @@ class BetweenDayScreen(Screen):
             f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]"),
             f"[#6b7785]Next shift[/]      {self._next_shift_terms()}",
             f"[#6b7785]Board accuracy[/]  {board_pct}%  [dim](paid as HD$ bonus)[/]",
+            *(self._endless_lines() if st.is_endless else [
             f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]"
             + (f"   [#c084fc]· {diverged} verdict(s) where the book and your "
-               f"conscience disagreed[/]" if diverged else ""),
+               f"conscience disagreed[/]" if diverged else "")]),
             "",
             f"[#6b7785]HackDollar$[/]     [#00ff9f]+{self._hd_earned}[/] verdicts{hd_bonus_str}",
             f"[#6b7785]Balance[/]         [#00ff9f][b]{st.hackdollars} HD$[/][/]",
@@ -206,31 +187,72 @@ class BetweenDayScreen(Screen):
             f"— HACKDOX IS LOST[/][/]"),
             ("[#ff5470]The day's admissions took the site down. "
             "Press N to face the consequences.[/]"),
-        ] if scoring.health_below_loss(st) else []))
+        ] if scoring.health_below_loss(st) else []) + ([
+            "",
+            (f"[#ff5470][b]▼ {config.ENDLESS_ACCURACY_WINDOW}-SHIFT ACCURACY BELOW "
+             f"{config.ENDLESS_ACCURACY_THRESHOLD:.0%} — THE RUN IS OVER[/][/]"),
+            "[#ff5470]Press N to clock out.[/]",
+        ] if endless.accuracy_below_loss(st) else []))
+
+    def _endless_lines(self) -> list[str]:
+        """#7: the rolling-accuracy window the run lives or dies by, where
+        the campaign shows alignment (which Endless never moves)."""
+        st   = self._state
+        acc  = endless.rolling_accuracy(st)
+        line = config.ENDLESS_ACCURACY_THRESHOLD
+        win  = config.ENDLESS_ACCURACY_WINDOW
+        played = len(st.shift_history)
+        tr = endless.trend(st)
+        arrow = {"rising": "[#00ff9f]▲ rising[/]", "falling": "[#ff5470]▼ falling[/]",
+                 "steady": "[dim]■ steady[/]", "new": "[dim]· first shift[/]"}[tr]
+        if acc is None:
+            head = "[dim]—[/]"
+        else:
+            col = ("#ff5470" if acc < line else
+                   "#ffd93d" if endless.in_danger(st) else "#00ff9f")
+            head = f"[{col}][b]{acc:.0%}[/][/]"
+        if endless.accuracy_check_active(st):
+            rule = f"[dim]must stay ≥ {line:.0%}[/]"
+        else:
+            rule = (f"[dim]counts from shift {win} "
+                    f"({win - played} to go) · line {line:.0%}[/]")
+        recent = " ".join(
+            f"[{'#00ff9f' if r.accuracy >= line else '#ff5470'}]{r.accuracy:.0%}[/]"
+            for r in st.shift_history[-win:])
+        life = endless.lifetime_accuracy(st)
+        return [
+            f"[#6b7785]{win}-shift acc.[/]    {head}  {arrow}  {rule}",
+            f"[#6b7785]Recent shifts[/]   {recent}   "
+            f"[dim]run: {'—' if life is None else f'{life:.0%}'}[/]",
+        ]
 
     def _shop_text(self) -> str:
         st = self._state
         lines = [
             (f"[#6b7785]balance[/] [#00ff9f][b]{st.hackdollars} HD$[/][/]"
-            f"   [#6b7785]credits[/] [#c084fc]{st.hackdox_credits}/{config.HACKDOX_CREDIT_MAX}[/]"
+            f"   [#6b7785]credits[/] [#c084fc]{st.hackdox_credits}/{shop.credit_cap(st)}[/]"
             f"   [#6b7785]⏱ cap[/] [#ffb454]{st.compute_capacity}[/]"),
             "",
         ]
-        for idx, (kind, iid, price, label, desc) in enumerate(self._items):
-            if kind == "header":
+        for idx, item in enumerate(self._items):
+            label, desc = item.label, item.desc
+            if item.kind == "header":
                 accent = config.UPGRADE_CATEGORY_ACCENT.get(label, "#6b7785")
                 bar = "─" * max(1, 40 - len(label))
                 lines.append(f"[{accent}]── {label} {bar}[/]")
                 continue
-            owned  = kind == "upgrade" and iid in st.upgrades
-            capped = kind == "credit" and st.hackdox_credits >= config.HACKDOX_CREDIT_MAX
-            afford = st.hackdollars >= price
+            status = shop.status_of(st, item)
+            price  = shop.price_of(st, item)
             cur    = idx == self._cursor
-            if owned:
+            if status == "owned":
                 tag, lcol = "[#6b7785]OWNED [/]", "#6b7785"
-            elif capped:
+            elif status == "full":
                 tag, lcol = "[#6b7785]FULL  [/]", "#6b7785"
-            elif afford:
+            elif status == "maintenance":
+                # #7 (Endless): this run's maintenance roll — unbuyable.
+                tag, lcol = "[#ff8c42]MAINT [/]", "#4a5260"
+                desc = "under maintenance for this run — not for sale"
+            elif status == "afford":
                 tag, lcol = f"[#00ff9f]{price:>3} $[/] ", "#c8d4e1"
             else:
                 tag, lcol = f"[#ff5470]{price:>3} $[/] ", "#5a6775"
@@ -244,7 +266,7 @@ class BetweenDayScreen(Screen):
             scol = "#ff5470" if self._status_err else "#7dd3c0"
             lines.append(f"[{scol}]{self._status_msg}[/]")
         else:
-            lines.append("[dim]Enter to buy · N for next day[/]")
+            lines.append("[dim]Enter to buy · N to move on[/]")
         return "\n".join(lines)
 
     # ── Actions ───────────────────────────────────────────────────────
@@ -253,7 +275,7 @@ class BetweenDayScreen(Screen):
         i = self._cursor
         while i > 0:
             i -= 1
-            if self._items[i][0] != "header":
+            if self._items[i].kind != "header":
                 self._cursor = i
                 break
         self._repaint()
@@ -262,37 +284,23 @@ class BetweenDayScreen(Screen):
         i = self._cursor
         while i < len(self._items) - 1:
             i += 1
-            if self._items[i][0] != "header":
+            if self._items[i].kind != "header":
                 self._cursor = i
                 break
         self._repaint()
 
     def action_buy(self) -> None:
-        kind, iid, price, label, _desc = self._items[self._cursor]
-        if kind == "header":
+        item = self._items[self._cursor]
+        if item.kind == "header":
             return   # cursor should never rest on a header, but stay safe
-        st = self._state
-        if kind == "upgrade" and iid in st.upgrades:
-            self._flash(f"{label} already owned", err=True)
+        ok, msg = shop.buy(self._state, item)
+        if not ok:
+            self._flash(msg, err=True)
             return
-        if kind == "credit" and st.hackdox_credits >= config.HACKDOX_CREDIT_MAX:
-            self._flash("credit slots full", err=True)
-            return
-        if st.hackdollars < price:
-            self._flash(
-                f"insufficient HackDollar$ — need {price}, have {st.hackdollars}",
-                err=True)
-            return
-        st.hackdollars -= price
-        if kind == "upgrade":
-            st.upgrades.add(iid)
+        if item.kind == "upgrade":
             sound_manager.play("upgrade_purchase")
-        elif kind == "credit":
-            st.hackdox_credits += 1
-        else:
-            st.compute_capacity += config.COMPUTE_CAPACITY_STEP
-        persistence.save(st)   # purchases persist immediately (issue #22)
-        self._flash(f"purchased {label}  (−{price} HD$)", err=False)
+        persistence.save(self._state)   # purchases persist immediately (issue #22)
+        self._flash(msg, err=False)
 
     def _flash(self, msg: str, err: bool) -> None:
         self._status_msg = msg
@@ -303,7 +311,7 @@ class BetweenDayScreen(Screen):
         # #20 rework: the loss condition is evaluated at end of day. If the
         # batch application dropped health below the threshold, the campaign
         # ends here instead of advancing.
-        if scoring.health_below_loss(self._state):
+        if self.app.run_is_lost():
             self.app.game_over()
             return
         self.app.advance_day()

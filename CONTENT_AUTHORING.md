@@ -30,12 +30,30 @@ Blanking a value falls through to the generic copy — an empty string means "no
 
 To give an unauthored day real copy, just add `day12_intro` etc. here. No code change.
 
+**Endless Mode (#7) keys** — the Foreman is on the player's side, and her line is
+picked from the run's accuracy trend, not the day (`core/overseer.py` →
+`resolve_endless_narrative`):
+
+| Key | When it plays |
+|---|---|
+| `endless_intro_first` | Shift 1 |
+| `endless_intro_danger` | Rolling accuracy within 10 points of the 70% line |
+| `endless_intro_<trend>` | trend = `new` / `rising` / `steady` / `falling` |
+| `endless_outro_<rating>` | End of shift, by rating |
+| `endless_between_lost` / `_danger` / `_<trend>` | Night shop |
+| `endless_intro`, `endless_between` | Fallbacks (then the `generic_*` keys) |
+
+Any Endless key can have numbered variants — `endless_intro_rising_2`, `_3`… — and
+one is picked per shift (stable for a given run). Endless rule-change lines live
+in `_narration.py` → `_ENDLESS_RULE_CHANGE_PHRASINGS`.
+
 **Two lines that are still Python, not JSON:**
 
 | What | Where |
 |---|---|
 | Tool-unlock narration ("New gear on the desk: GHOSTSCAN…") | `ui/tui/screens/_narration.py` → `_UNLOCK_LINES` |
 | Rule-change phrasings (the Overseer mentioning a flip) | `ui/tui/screens/_narration.py` → `_RULE_CHANGE_PHRASINGS` |
+| Endless rule-change phrasings (cooperative) | `ui/tui/screens/_narration.py` → `_ENDLESS_RULE_CHANGE_PHRASINGS` |
 
 Both are re-exported from `ui/tui/app.py` for convenience, but that file just imports them — go straight to `_narration.py` to edit.
 

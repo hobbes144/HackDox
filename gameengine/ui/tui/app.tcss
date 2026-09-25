@@ -585,7 +585,7 @@ ContentSwitcher {
     color: #7dd3c0;
     text-align: center;
     width: 100%;
-    margin: 0 0 2 0;
+    margin: 0 0 1 0;
 }
 
 .menu-buttons {
@@ -595,8 +595,23 @@ ContentSwitcher {
 }
 
 .menu-buttons Button {
-    width: 36;
+    width: 44;
+    margin: 0;          /* seven buttons since Endless (#7) — keep Quit and the
+                           saves line on screen at 40 rows */
+}
+
+.menu-saves {
+    text-align: center;
+    width: 100%;
+    height: auto;
     margin: 0 0 1 0;
+}
+
+#endless-over-stats {
+    width: 100%;
+    height: auto;
+    content-align: center middle;
+    text-align: center;
 }
 
 .menu-hint {

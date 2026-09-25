@@ -7,7 +7,7 @@ from collections.abc import Callable
 from textual.widgets import Static
 
 from gameengine import config
-from gameengine.core import tools_bridge
+from gameengine.core import endless, shop, tools_bridge
 from gameengine.core.models import Day, GameState
 from gameengine.ui.tui.shared import (
     _PAGE_NAMES,
@@ -57,7 +57,7 @@ class StatusHeader(Static):
                          ("L", "logwatch"),  ("S", "stegotool"))
         )
         n_credits   = self.state.hackdox_credits
-        max_credits = config.HACKDOX_CREDIT_MAX
+        max_credits = shop.credit_cap(self.state)
         creds_pips  = "▮" * n_credits + "▯" * max(0, max_credits - n_credits)
         # Health only moves at end of day (#20 rework) — show the pending
         # delta accumulated by today's verdicts so the player can track it.
@@ -109,7 +109,8 @@ class StatusHeader(Static):
             f"   [b #0b0e10 on {hcol}] ⛨ HEALTH {h:.0f}% [/]{pend_s}"
             f"   [b #0b0e10 on #00ff9f] HD$ {self.state.hackdollars} [/]"
             f"   [b #0b0e10 on #c084fc] CR {n_credits}/{max_credits} [/] [#c084fc]{creds_pips}[/]"
-            f"   [{align_col}]{bar}[/]"
+            + (f"   {_endless_accuracy_chip(self.state)}" if self.state.is_endless
+               else f"   [{align_col}]{bar}[/]")
         )
 
         width   = self.size.width or config.STATUS_BAR_FALLBACK_WIDTH
@@ -138,3 +139,22 @@ class StatusHeader(Static):
         self.slot_index = slot_index
         self.page_index = page_index
         self.refresh()
+
+
+def _endless_accuracy_chip(state: GameState) -> str:
+    """Endless (#7): the rolling accuracy the run lives or dies by, in place of
+    the alignment meter (alignment never moves in Endless). Grey until the
+    window is full and the loss rule is live; then green / amber / red."""
+    acc = endless.rolling_accuracy(state)
+    line = f"{config.ENDLESS_ACCURACY_THRESHOLD:.0%}"
+    if acc is None:
+        return f"[#6b7785]ACC —  (line {line})[/]"
+    if not endless.accuracy_check_active(state):
+        col = "#6b7785"
+    elif acc < config.ENDLESS_ACCURACY_THRESHOLD:
+        col = "#ff5470"
+    elif endless.in_danger(state):
+        col = "#ffd93d"
+    else:
+        col = "#00ff9f"
+    return f"[b #0b0e10 on {col}] ACC {acc:.0%} [/] [dim]line {line}[/]"

@@ -118,6 +118,9 @@ def _narration_lines() -> dict[str, str]:
     for kind, templates in _narration._RULE_CHANGE_PHRASINGS.items():
         for i, t in enumerate(templates):
             out[f"phrasing:{kind}:{i}"] = t
+    for kind, templates in _narration._ENDLESS_RULE_CHANGE_PHRASINGS.items():
+        for i, t in enumerate(templates):
+            out[f"endless_phrasing:{kind}:{i}"] = t
     return out
 
 

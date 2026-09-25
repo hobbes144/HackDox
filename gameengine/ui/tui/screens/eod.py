@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from gameengine import config
-from gameengine.core import persistence
+from gameengine.core import endless, persistence
 from gameengine.core.models import Day, GameState, Performance
 from gameengine.ui.tui.screens._narration import (
     _play_overseer,
@@ -75,7 +75,23 @@ class EODScreen(Screen):
                 f"per correct admit · "
                 f"{config.DAY_REWARD_PAYOUT(self._day.number, False)} per correct deny[/]"
             )
-            yield Static(f"Alignment: {self._state.alignment:+d}")
+            if self._state.is_endless:
+                # #7: the rolling window replaces alignment (frozen in Endless).
+                acc = endless.rolling_accuracy(self._state)
+                line = config.ENDLESS_ACCURACY_THRESHOLD
+                live = endless.accuracy_check_active(self._state)
+                col = ("#6b7785" if acc is None or not live else
+                       "#ff5470" if acc < line else
+                       "#ffd93d" if endless.in_danger(self._state) else "#00ff9f")
+                shown = "—" if acc is None else f"{acc:.0%}"
+                note = (f"line {line:.0%}" if live else
+                        f"line {line:.0%} — counts from shift "
+                        f"{config.ENDLESS_ACCURACY_WINDOW}")
+                yield Static(
+                    f"{config.ENDLESS_ACCURACY_WINDOW}-shift accuracy: "
+                    f"[{col}][b]{shown}[/][/]  [dim]({note})[/]")
+            else:
+                yield Static(f"Alignment: {self._state.alignment:+d}")
             yield Static("")
             for r in self._state.pending_results:
                 tag  = "verdict-correct" if r.correct else "verdict-wrong"
@@ -85,8 +101,9 @@ class EODScreen(Screen):
                     f"[{tag}]{mark}[/]  {r.archetype.value:<14}  "
                     f"you {r.player_verdict.value:<5}  "
                     f"[#6b7785]⛨{r.site_health_delta:+.1f}  "
-                    f"+{r.hackdollar_delta}HD${bonus_str}  "
-                    f"Align {r.alignment_delta:+d}[/]"
+                    f"+{r.hackdollar_delta}HD${bonus_str}"
+                    + ("" if self._state.is_endless
+                       else f"  Align {r.alignment_delta:+d}") + "[/]"
                 )
         with Container(id="overseer-panel"):
             yield Static("[b]Foreman:[/]", classes="speaker")

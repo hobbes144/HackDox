@@ -29,7 +29,8 @@ HackDoxApp
                 └── RulesScreen (modal overlay, 0 key)
            └── EODScreen   (end-of-day summary)
            └── BetweenDayScreen (shop/upgrades between days)
-      └── GameOverScreen  (Site Health collapsed)
+      └── GameOverScreen  (Site Health collapsed — campaign)
+      └── EndlessOverScreen (Endless run lost — health or 5-shift accuracy)
 
 PauseScreen (modal overlay, Esc key) is reachable from every campaign-loop
 screen with progress that can be lost — BriefingScreen, IntakeScreen,
@@ -50,15 +51,23 @@ CreditsScreen, or GameOverScreen.
   button at once — Tab/arrow-key focus movement and mouse-wheel both bring
   the rest of the menu (Quit included) into view rather than letting it run
   off screen with no way to reach it.
-- **Buttons:** New Game · Continue (hidden/disabled unless a save exists —
-  closes #79) · Endless Mode (disabled, "coming soon") · Settings · Credits
-  · Quit
-- **Keys:** `N` new game · `C` continue (only when a save exists) ·
-  `S` settings · `R` credits · `Q` quit
-- **Continue behavior:** calls `persistence.load()` then
+- **Buttons:** New Campaign · Continue Campaign · New Endless Run · Continue
+  Endless · Settings · Credits · Quit. Each Continue is hidden unless its own
+  save exists, and its label says where that save stands
+  ("Continue Campaign · Day 7 · 180 HD$", "Continue Endless · Shift 4 · 90 HD$").
+- **Saves line (`#menu-saves`):** when either save exists, a note that the
+  campaign and Endless keep separate saves; plus the Endless personal best
+  ("Endless best: 23 shifts · 84% accuracy") once a run has ended.
+- **Keys:** `N` new campaign · `C` continue campaign · `E` new Endless run ·
+  `X` continue Endless · `S` settings · `R` credits · `Q` quit
+- **New Endless over a run in progress:** the first press only warns (hint
+  line names the shift); the second abandons it — the abandoned run still
+  counts toward the personal best.
+- **Continue behavior:** calls `persistence.load(mode)` then
   `HackDoxApp.resume_game(state)`, which resumes at `state.current_day`'s
   `BriefingScreen` — a save is only ever written at a day boundary, so this
-  is always the correct resume point (single-slot save, no Load screen)
+  is always the correct resume point. Two slots (#7): `saves/slot_0.json`
+  (campaign) and `saves/endless_0.json` (Endless); neither touches the other.
 
 ### SettingsScreen *(modal overlay)*
 - **Trigger:** `S` / Settings button from IntroScreen, or Settings button
@@ -105,19 +114,32 @@ CreditsScreen, or GameOverScreen.
 
 ### EODScreen
 - **Trigger:** After last candidate verdict
-- **Content:** Verdict scorecard, ⏱ summary, alignment delta, Overseer outro
+- **Content:** Verdict scorecard, ⏱ summary, alignment delta (Endless: the
+  5-shift rolling accuracy and its 70% line instead), Foreman outro
 - **Keys:** `Space` save & continue · `Esc` pause
 
 ### BetweenDayScreen
 - **Trigger:** After EODScreen's save & continue
-- **Content:** shop/upgrades between campaign days
+- **Content:** shift report + Foreman + shop (rules in `core/shop.py`).
+  Endless adds: 5-shift accuracy with trend arrow and recent-shift strip (in
+  place of alignment), a loss banner when accuracy falls under the line,
+  MAINT tags on this run's maintenance-locked upgrades, escalating capacity
+  price, the Site Patch item, and 5 credit slots.
 - **Keys:** `N` begin next day · `Esc` pause (the `Q` quit binding was
   removed — quitting now happens only through PauseScreen, which saves
   first)
 
 ### GameOverScreen
-- **Trigger:** Lives reach zero
+- **Trigger:** Site Health below the loss line at end of day (campaign)
 - **Keys:** `R` restart · `Q` quit
+
+### EndlessOverScreen *(Endless run over, #7)*
+- **Trigger:** end of an Endless shift with Site Health under the loss line
+  or the 5-shift rolling accuracy under 70% (only once 5 shifts are played)
+- **Content:** why the run ended, shifts survived, run accuracy, HD$, and the
+  personal-best line (NEW PERSONAL BEST / how far short). The Endless save is
+  cleared on arrival; the campaign save is untouched.
+- **Keys:** `R` new Endless run · `M` main menu · `Q` quit
 
 ### TransitionScreen *(modal, twice per screen change)*
 - **Trigger:** `HackDoxApp._transition`, on every full-screen change
@@ -207,6 +229,7 @@ CreditsScreen, or GameOverScreen.
 
 ### StatusHeader
 - One-line strip: game title · day title · candidate slot · compute hours · site health · HD$ · credits · alignment bar · page tabs
+- Endless: the day title reads "Shift N", the credit cap is Endless's, and an `ACC nn%` chip (grey until 5 shifts are played, then green / amber near the line / red under it) replaces the alignment bar
 - Updates on every page switch and verdict
 
 ### DossierPanel

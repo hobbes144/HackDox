@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from gameengine import config
 from gameengine.core import candidate_gen
 from gameengine.ui.tui.widgets import (
     TypewriterLog,
@@ -87,6 +88,35 @@ _RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Endless (#7): the Foreman is on the player's side, so a rule change comes
+# with an explanation instead of a shrug. Small changes (a rule easing to
+# advisory) are mentioned casually; big ones (a rule becoming a hard deny)
+# carry a reason — what she's heard from other ports. Endless never adds or
+# removes rules, only flips Overseer-Variable severities, so these two buckets
+# are the whole vocabulary.
+_ENDLESS_RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
+    "tightened": (
+        ("Heads up, and it's a big one: {rule} is a hard deny from today. Two "
+        "ports sent cases back last week on exactly that, so we're closing "
+        "the gap before it reaches us."),
+        ("One change you'll want to know about. {rule} — that's a deny now, "
+        "not a note. The harbour office traced a string of opened cases to it, "
+        "and I'd rather we tighten up early than explain it later."),
+        ("Before the first boat: {rule} just became a hard stop. It's been "
+        "the common thread in the bad bonds up and down the coast. If you see "
+        "it, turn them back."),
+    ),
+    "relaxed": (
+        ("Small thing — {rule} is advisory again. Flag it if you see it, but "
+        "it's not a reason to turn someone back on its own."),
+        ("Easing one: {rule}. Note it and use your judgement; it was catching "
+        "too many honest couriers."),
+        ("Quick one. {rule} — we're back to flagging that, not denying on it. "
+        "Keeps the line moving without costing us anything."),
+    ),
+}
+
+
 def _rule_fragment(text: str) -> str:
     """Fold a rulebook line into something that can sit mid-sentence."""
     frag = text.strip().rstrip(".")
@@ -161,7 +191,8 @@ def rule_change_lines(changes, day_number: int) -> list[str]:
                       else "relaxed")
         else:
             bucket = change.kind
-        options = _RULE_CHANGE_PHRASINGS.get(bucket)
+        options = (_ENDLESS_RULE_CHANGE_PHRASINGS if config.is_endless_day(day_number)
+                   else _RULE_CHANGE_PHRASINGS).get(bucket)
         if not options:
             continue
         pick = candidate_gen.stable_hash(change.rule.id, day_number, bucket)

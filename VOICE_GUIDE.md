@@ -152,6 +152,16 @@ she owes the night crew, and she dresses it up as "keeping the line moving" and
 - **Late (12–20):** hostile, manipulative, occasionally honest when tired.
   Alignment bands keep their existing meaning; only the voice changes.
 
+- **Endless Mode (#7, 2026-09-25):** a separate game, and a different
+  Foreman: the early-campaign mentor with no debt to anyone. She's on the
+  clerk's side, practical and warm, and she reacts to how the *run* is going
+  (the five-shift accuracy trend), never to a day number: encouraging when the
+  tally rises, plain-spoken concern when it falls, straight talk near the 70%
+  line. Rule changes come with a reason — casual for a rule easing off, a real
+  explanation ("two ports sent cases back on exactly that") for a new hard
+  deny. Never smugglers, never the arc. Keys: `endless_*` in `overseer.json`;
+  phrasings: `_ENDLESS_RULE_CHANGE_PHRASINGS` in `_narration.py`.
+
 Stock phrases (rotate them, never lean on one): *keep the line moving · boats
 don't wait · clock's running · that's the job · mind your fingers · hang back
 after the whistle · rough shift · long haul · I've seen worse come off worse

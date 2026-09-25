@@ -1,7 +1,7 @@
 # Endless Mode — Build Plan (#7, with #70 and #14)
 
-Drafted 2026-09-25 on branch `Final-Game-Polish` (HEAD `4092f58`). Nothing built yet.
-**Status: waiting on Nick's answers to the open questions at the bottom.**
+Drafted 2026-09-25 on branch `Final-Game-Polish` (HEAD `4092f58`, building on `d956645`).
+**Status: SHIPPED 2026-09-25 (uncommitted, in the working tree) — see "Shipped log" at the bottom.**
 
 ## What Nick asked for
 
@@ -162,10 +162,128 @@ if you want campaign numbers early.
 - The rolling-accuracy loss only applies once 5 shifts have been played, so shift 1
   can't end a run.
 
-## Open questions for Nick
+## Open questions for Nick (answered — see decisions above)
 1. **Save slot.** Should Endless share `slot_0.json` with the campaign, or get its own slot?
 2. **Difficulty shape.** Where does shift 1 start, and does it ever stop getting harder?
 3. **Losing.** Rolling accuracy *and* Site Health, or only one of them? What threshold?
 4. **Economy once the shop is bought out.** What's HD$ for on shift 40?
 5. **Score / personal best.** Track a best run?
 6. **#70 scope.** Do the campaign balance pass in this same batch, or after Endless ships?
+
+## Nick's decisions (2026-09-25)
+1. **Separate save slot.** Endless gets its own slot (`saves/endless_0.json`); the campaign keeps
+   `slot_0.json`. The menu must make the two saves obviously different — each Continue button
+   names its mode and shows where that save is (campaign day N / endless shift N).
+2. **Difficulty = Option A, but it goes past the campaign.** Shift 1 starts around campaign
+   day 6–8, reaches day-20 difficulty in ~15 shifts, then keeps climbing *a bit beyond* the end of
+   the campaign before plateauing. It must never climb to guaranteed failure.
+3. **Loss:** rolling 5-shift accuracy must stay ≥ 70%, only evaluated once 5 shifts have been
+   played. Site Health collapse still ends the run too.
+4. **Economy:** escalating capacity price, a Site Health "patch" purchase, a higher Credit cap —
+   **plus maintenance**: at the start of every Endless run a random subset of the upgrade catalog
+   is placed "under maintenance" (unpurchasable for that run). Re-rolled per run. Campaign unaffected.
+5. **Personal best** tracked for Endless and shown on the run's end screen and on the main menu.
+6. **Order:** Endless first, then one balance pass over BOTH modes. Part of that pass: tune the
+   economy so buying the whole upgrade catalog by day 20 is impossible — players have to pick.
+   Applies to campaign and Endless.
+
+## Shipped log (2026-09-25)
+
+### Architecture — what actually got built (one change from the plan above)
+The plan proposed splitting `Day.number` into `gate_day`/`curve_day` fields
+threaded through ~110 call sites. Built instead: **Endless gets its own
+day-number range** (`config.ENDLESS_DAY_BASE = 1000`; shift N = day 1000+N).
+Every unlock gate in the engine is a monotonic `unlock_day <= day` check, so a
+number above all of them reads as "everything unlocked" at every gate with zero
+gate edits; the difficulty curves alone go through one helper,
+`config.curve_day()`, which is the identity on campaign days. Same result, a
+fraction of the blast radius, and the campaign is unchanged by construction.
+Import-time asserts (config + candidate_gen) fail loudly if an unlock day ever
+reaches the Endless range. A golden snapshot of campaign days 1–20 (content,
+candidates, day logs, every tool's output, stego/cipher grids, costs, budgets,
+payouts × 2 seeds) was byte-identical before and after, and went red on a
+deliberate one-day slip.
+
+### Files
+- `config.py` — Endless range + `curve_day()`/`endless_curve_day()`/`day_label()`;
+  curve funcs route through it; `ENDLESS_*` curve/loss/economy/save constants;
+  `ENDLESS_ARCHETYPE_MIX_BY_BAND` (no Dark Web / White Hat); `LW_ENTRIES_MAX`;
+  `save_file_for()`; the #70 balance values (below).
+- `core/models.py` — `GameMode`, `ShiftRecord`, `GameState.mode/shift_history/
+  lifetime_*/maintenance_upgrades/shop_purchases/is_endless`.
+- `core/content_loader.py` — `build_endless_day()`; `load_day()` dispatches the
+  Endless range to it (never a file); `kinds_discovered_through()` Endless branch.
+- `core/endless.py` (new) — run start (fresh random seed, full kit, maintenance
+  roll), `record_shift` (idempotent per shift), rolling accuracy / trend /
+  danger, loss check, personal-best records.
+- `core/shop.py` (new) — shop rows, prices, status and `buy()` for both modes
+  (lifted out of `BetweenDayScreen`).
+- `core/persistence.py` — per-mode slot, save schema v2, pre-Endless saves load
+  as campaign, `describe()` for the menu.
+- `core/overseer.py` — `resolve_endless_narrative()` (trend-keyed, numbered
+  variants rotate per shift).
+- `core/tools_bridge.py` — stego/cipher grid growth and Logwatch volume read the
+  curve day; Logwatch capped.
+- UI — `intro.py` (both saves labelled, personal best, two-press abandon),
+  `endless_over.py` (new), `between_day.py` (shop via core/shop, Endless
+  accuracy lines, MAINT tags, loss banner), `eod.py`, `status_header.py`
+  (ACC chip), `rules_content.py` (Endless rules section), `_narration.py`
+  (cooperative rule-change phrasings), `app.py` (start/resume/record/loss/
+  run-end), `app.tcss`, `UI_CATALOG.md`.
+- Content — 34 `endless_*` Foreman lines in `overseer.json`; VOICE_GUIDE §3
+  Endless-Foreman note.
+- `sim_balance.py` (new, repo root) — the balance simulator.
+- Tests — `test_endless.py` (29), `test_balance.py` (4); `test_voice.py` now also
+  scans the Endless phrasings. Every new guard was broken on purpose in a scratch
+  copy and went red (10 Endless guards, 4 balance guards).
+
+### Endless difficulty curve (as shipped)
+| shift | 1 | 5 | 10 | 15 | 20 | 25 | 30+ |
+|---|---|---|---|---|---|---|---|
+| plays like campaign day | 7 | 10 | 15 | 20 | 22 | 24 | 26 (plateau) |
+| candidates | 7 | 9 | 11 | 12 | 12 | 13 | 14 |
+
+### #70 balance pass — findings and changes (`sim_balance.py`)
+Method: the real generator/rulebook/costs/payouts over many seeds; three skill
+profiles (sharp 95% · solid 85% · shaky 74% accuracy) plus a perfect player; the
+campaign run both ways on the Dark Web (admit = by the book, deny = resist).
+
+**Findings before the pass**
+1. ⏱ was fine: every day's worst seed leaves budget for correct play (#70 AC).
+2. **The Dark Web alignment path was unfinishable.** Admitting a Dark Web
+   candidate is the scored-correct verdict and cost −8 Site Health; ~23 of them
+   ≈ −184. A *perfect* by-the-book player lost 75% of campaigns.
+3. Health drift was brutal for merely-good play: an 85% player lost 100% of
+   runs in both modes (Endless around shift 13).
+4. Money was ~5× too loose: a perfect player earned 4.6× the whole catalog by
+   day 20; even a 74% player earned 2.4×.
+
+**Changes** (all in `config.py`, each commented with its rationale)
+| constant | before | after |
+|---|---|---|
+| `ARCHETYPE_HEALTH_WEIGHTS` dark_web / sneaky / bad_actor / clumsy / incompatible | −8 / −12 / −10 / −4 / −2 | −2 / −7 / −6 / −3 / −1.5 |
+| `BOARD_ACCURACY_MAX_BONUS` | 10 | 4 |
+| `HACKDOLLAR_PER_CORRECT_ADMIT` / `_DENY` | 10 / 4 | 8 / 3 |
+| `HACKDOLLAR_FLOOR_ADMIT` | 6 | 5 |
+| `HACKDOLLAR_SITE_HEALTH_BONUS` | 25 | 15 |
+| upgrade prices | 20–45 (catalog 625) | ×3.5 → 70–160 (catalog 2,195) |
+| Endless only: capacity price step · Site Patch · credit slots · maintenance | — | +50/buy · 60 HD$ +30/buy for +10% · 5 · 5 upgrades per run |
+
+**After** (catalog share = what that player could afford by day 20 spending on nothing else)
+| | Campaign, by the book | Campaign, resists Dark Web | Endless |
+|---|---|---|---|
+| perfect | 79% of catalog · 0% loss | 69% · 0% loss | 81% · never lost (40 shifts) |
+| sharp 95% | 70% · 0% loss | 61% · 0% loss | 72% · never lost |
+| solid 85% | 50% · 15% loss | 45% · 1% loss | 47% · ~30 shifts on average |
+| shaky 74% | 41% · 88% loss | 31% · 40% loss | 35% · ~9 shifts |
+
+Credits (100) and capacity (100, escalating in Endless) compete for the same
+money, so real players will own well under these shares. The sim doesn't model
+Site Patch purchases, so Endless solid-player runs will go longer in practice.
+Reproduce any row: `python sim_balance.py --seeds 16 --trials 500`; try a
+tuning without editing config: `--set NAME=VALUE`.
+
+**Caveat:** the profiles spread mistakes evenly across candidates. Real players
+probably err toward over-cautious denies (which cost nothing on Site Health),
+so these loss rates are, if anything, pessimistic. Worth a real playtest on both
+alignments before closing #70.

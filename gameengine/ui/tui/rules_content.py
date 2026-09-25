@@ -939,6 +939,7 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines += _band("COMPUTING HOURS (⏱) — FINITE DAILY BUDGET", "#ffb454")
     base = config.STARTING_COMPUTE
     d_no = day.number if day else 1
+    _endless = config.is_endless_day(d_no)
     today_budget = config.daily_compute_budget(d_no, base)
     lines += [
         "  A fixed ⏱ pool is granted at the start of every shift. It is spent",
@@ -1000,11 +1001,34 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "",
         "  [#c084fc]HackDox Credits[/] — type [b]reveal[/] to spend one and see the",
         "  current candidate's ground truth (correct verdict + planted",
-        (f"  violations, no evidence trail). Max {config.HACKDOX_CREDIT_MAX} slots · "
-        f"{config.SHOP_PRICE_CREDIT} HD$ each."),
+        (f"  violations, no evidence trail). Max "
+        f"{config.ENDLESS_HACKDOX_CREDIT_MAX if _endless else config.HACKDOX_CREDIT_MAX} "
+        f"slots · {config.SHOP_PRICE_CREDIT} HD$ each."),
         (f"  [#ffb454]⏱ capacity[/] — +{config.COMPUTE_CAPACITY_STEP} base budget "
-        f"per purchase · {config.SHOP_PRICE_CAPACITY} HD$."),
+        f"per purchase · {config.SHOP_PRICE_CAPACITY} HD$"
+        + (f", +{config.SHOP_CAPACITY_PRICE_STEP} each time." if _endless else ".")),
     ]
+    if _endless:
+        # #7: the Endless-only rules, in the same reference the player
+        # already reads for everything else.
+        lines += [
+            (f"  [#7dd3c0]Site Patch[/] — +{config.SITE_PATCH_HEALTH:.0f}% Site Health · "
+             f"{config.SHOP_PRICE_SITE_PATCH} HD$, +{config.SHOP_SITE_PATCH_PRICE_STEP} each time."),
+            (f"  [#ff8c42]Maintenance[/] — each Endless run, "
+             f"{config.ENDLESS_MAINTENANCE_COUNT} upgrades are out of"),
+            "  service for the whole run (marked MAINT in the shop).",
+            "",
+        ]
+        lines += _band("ENDLESS — HOW A RUN ENDS", "#ff5470")
+        lines += [
+            (f"  Your accuracy over the last {config.ENDLESS_ACCURACY_WINDOW} shifts must stay at "
+             f"or above [b]{config.ENDLESS_ACCURACY_THRESHOLD:.0%}[/]."),
+            (f"  It starts counting once {config.ENDLESS_ACCURACY_WINDOW} shifts are on the books. "
+             "Site Health"),
+            (f"  under {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}% ends the run too. The work gets "
+             "harder for a"),
+            "  while, then levels off — it never becomes impossible.",
+        ]
     lines += _sub("upgrade catalog (permanent · bought in the night shop)", "#00ff9f")
     lines += [
         "[#6b7785]  UPGRADE               HD$   EFFECT[/]",

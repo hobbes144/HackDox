@@ -23,7 +23,7 @@ from __future__ import annotations
 from textual.app import App
 
 from gameengine import config
-from gameengine.core import persistence, scoring
+from gameengine.core import endless, persistence, scoring
 from gameengine.core.audio import sound_manager
 from gameengine.core.content_loader import (
     generic_outro_key,
@@ -31,7 +31,7 @@ from gameengine.core.content_loader import (
     load_narratives,
 )
 from gameengine.core.models import Day, GameState, Performance, Verdict
-from gameengine.core.overseer import resolve_aligned_narrative
+from gameengine.core.overseer import resolve_aligned_narrative, resolve_endless_narrative
 
 # ─── Backward-compat facade ─────────────────────────────────────────────────
 # gameengine/ui/tui/app.py used to be a single ~3,700-line module holding every
@@ -57,6 +57,7 @@ from gameengine.ui.tui.screens.briefing import BriefingScreen
 from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
 from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
 from gameengine.ui.tui.screens.credits import CreditsScreen
+from gameengine.ui.tui.screens.endless_over import EndlessOverScreen
 from gameengine.ui.tui.screens.eod import EODScreen
 from gameengine.ui.tui.screens.game_over import GameOverScreen
 from gameengine.ui.tui.screens.intake import IntakeScreen
@@ -148,6 +149,7 @@ __all__ = [
     "DebugPanel",
     "DossierPanel",
     "EODScreen",
+    "EndlessOverScreen",
     "EvidenceBoard",
     "EvidenceState",
     "GameOverScreen",
@@ -231,15 +233,41 @@ class HackDoxApp(App):
                 max(self._lab_day.number, max(config.TOOL_UNLOCK_DAY.values())))
         self._day_start_health = self._state.site_health
         self._day = self._lab_day or load_day(self._state.current_day)
+        self._transition(BriefingScreen(self._day, self._intro_narrative(),
+                                        self._state))
+
+    def start_endless_game(self) -> None:
+        """Main menu → "New Endless Run" (#7). A fresh run in Endless's own
+        save slot — the campaign's slot is never touched. Shift 1 opens with
+        every tool unlocked and the full rulebook live; there is no tutorial."""
+        self._state = endless.new_endless_state()
+        self._day_start_health = self._state.site_health
+        self._day = load_day(self._state.current_day)
+        persistence.save(self._state)   # the run exists from the first briefing
+        self._transition(BriefingScreen(self._day, self._intro_narrative(),
+                                        self._state))
+
+    # ── Foreman copy, per mode ──────────────────────────────────────────
+
+    def _intro_narrative(self) -> str:
+        assert self._state is not None and self._day is not None
+        if self._state.is_endless:
+            return resolve_endless_narrative(self._narratives, self._state, "intro")
         # #15: falls through to generic copy rather than an empty panel — days
         # 2-20 had no authored intro key at all and opened on silence.
         # #42: routed through the alignment-band tier so a day/generic key
         # authored for a specific band (day14_whitehat_intro, etc.) is
         # actually picked up — resolve_narrative alone would silently skip it.
-        narrative = resolve_aligned_narrative(
+        return resolve_aligned_narrative(
             self._narratives, self._state.alignment,
             self._day.overseer_intro_key, "generic_intro")
-        self._transition(BriefingScreen(self._day, narrative, self._state))
+
+    def run_is_lost(self) -> bool:
+        """Either loss condition. Site Health collapse ends both modes (#20);
+        Endless also ends when the rolling accuracy falls below the line (#7)."""
+        st = self._state
+        return st is not None and (scoring.health_below_loss(st)
+                                   or endless.accuracy_below_loss(st))
 
     def resume_game(self, state: GameState) -> None:
         """IntroScreen → "Continue" (closes #79). Mirrors start_new_game's
@@ -255,10 +283,13 @@ class HackDoxApp(App):
         self._state = state
         self._day_start_health = state.site_health
         self._day = self._lab_day or load_day(state.current_day)
-        narrative = resolve_aligned_narrative(
-            self._narratives, state.alignment,
-            self._day.overseer_intro_key, "generic_intro")
-        self._transition(BriefingScreen(self._day, narrative, self._state))
+        if state.is_endless and self.run_is_lost():
+            # A run saved after it was already lost (quit from the between-day
+            # screen before pressing on) can't be continued — close it out.
+            self.game_over()
+            return
+        self._transition(BriefingScreen(self._day, self._intro_narrative(),
+                                        self._state))
 
     def save_progress(self) -> None:
         """Best-effort save of whatever run is in progress. Safe to call from
@@ -278,14 +309,17 @@ class HackDoxApp(App):
         self._day = None
         self._transition(IntroScreen())
 
+    def to_main_menu(self) -> None:
+        """Back to the start menu with no save side effects (Endless run-over
+        screen's "Main Menu")."""
+        self.quit_to_main_menu()
+
     def begin_intake(self) -> None:
         assert self._state is not None and self._day is not None
         sound_manager.play("day_start")
         self._day_start_health = self._state.site_health
-        intro = resolve_aligned_narrative(
-            self._narratives, self._state.alignment,
-            self._day.overseer_intro_key, "generic_intro")
-        self._transition(IntakeScreen(self._day, self._state, intro))
+        self._transition(IntakeScreen(self._day, self._state,
+                                      self._intro_narrative()))
 
     def finish_day(self) -> None:
         assert self._state is not None and self._day is not None
@@ -300,15 +334,26 @@ class HackDoxApp(App):
                               for r in self._state.pending_results)
         self._hd_bonus  = scoring.eod_health_bonus(self._state)
         self._state.hackdollars += self._hd_bonus
+        if self._state.is_endless:
+            # #7: fold the shift into the rolling window now, so the EOD and
+            # between-day screens (and the Foreman) already see it.
+            endless.record_shift(
+                self._state,
+                health_delta=self._state.site_health - self._day_start_health,
+                hd_earned=self._hd_earned + self._hd_bonus)
         performance = self._evaluate_performance()
-        outro_key   = self._day.overseer_outro_keys.get(
-            performance, self._day.overseer_outro_keys[Performance.PASSING]
-        )
-        # #15: was the literal string "..." on every unauthored day.
-        # #42: alignment-band tier (see start_new_game's comment above).
-        narrative = resolve_aligned_narrative(
-            self._narratives, self._state.alignment, outro_key,
-            generic_outro_key(performance))
+        if self._state.is_endless:
+            narrative = resolve_endless_narrative(
+                self._narratives, self._state, "outro", performance)
+        else:
+            outro_key = self._day.overseer_outro_keys.get(
+                performance, self._day.overseer_outro_keys[Performance.PASSING]
+            )
+            # #15: was the literal string "..." on every unauthored day.
+            # #42: alignment-band tier (see _intro_narrative's comment).
+            narrative = resolve_aligned_narrative(
+                self._narratives, self._state.alignment, outro_key,
+                generic_outro_key(performance))
         self._transition(EODScreen(
             self._day, self._state, narrative, performance,
             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
@@ -316,6 +361,14 @@ class HackDoxApp(App):
         ))
 
     def game_over(self) -> None:
+        st = self._state
+        if st is not None and st.is_endless:
+            reason = ("health" if scoring.health_below_loss(st) else "accuracy")
+            rolling = endless.rolling_accuracy(st)
+            record, prev_best, new_best = endless.finish_run(st)
+            self._transition(EndlessOverScreen(record, prev_best, new_best,
+                                               reason, rolling))
+            return
         self._transition(GameOverScreen())
 
     def show_between_day(self) -> None:
@@ -325,9 +378,13 @@ class HackDoxApp(App):
         # "generic_between", so every line the Overseer speaks lives in one
         # editable file rather than half of it being buried in the UI.
         # #42: alignment-band tier (see start_new_game's comment above).
-        narrative = resolve_aligned_narrative(
-            self._narratives, self._state.alignment,
-            f"day{self._day.number}_between", "generic_between")
+        if self._state.is_endless:
+            narrative = resolve_endless_narrative(
+                self._narratives, self._state, "between")
+        else:
+            narrative = resolve_aligned_narrative(
+                self._narratives, self._state.alignment,
+                f"day{self._day.number}_between", "generic_between")
         self._transition(BetweenDayScreen(
             self._day, self._state, narrative,
             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
@@ -338,7 +395,7 @@ class HackDoxApp(App):
         """Between-day menu → next day intro. Resets the shift budget."""
         assert self._state is not None
         st = self._state
-        if scoring.health_below_loss(st):   # loss trips at end of day (#20)
+        if self.run_is_lost():   # loss trips at end of day (#20; #7 in Endless)
             self.game_over()
             return
         # #36: hold on to yesterday's ruleset before loading today's, so the
@@ -356,7 +413,7 @@ class HackDoxApp(App):
         st.compute_hours = config.daily_compute_budget(
             st.current_day, st.compute_capacity)
         persistence.save(st)
-        if st.current_day > config.CAMPAIGN_LAST_DAY:
+        if not st.is_endless and st.current_day > config.CAMPAIGN_LAST_DAY:
             # Issue #42: the explicit end-of-campaign trigger. Reached
             # deliberately now that every day through CAMPAIGN_LAST_DAY is
             # (once #42's Phase 5b lands) authored content, rather than by
@@ -372,14 +429,8 @@ class HackDoxApp(App):
             self._transition(CampaignEndScreen(st))
             return
         self._day_start_health = st.site_health
-        # #15: falls through to generic copy rather than an empty panel — days
-        # 2-20 had no authored intro key at all and opened on silence.
-        # #42: alignment-band tier (see start_new_game's comment above).
-        narrative = resolve_aligned_narrative(
-            self._narratives, st.alignment,
-            self._day.overseer_intro_key, "generic_intro")
-        self._transition(BriefingScreen(self._day, narrative, self._state,
-                                        prev_day=prev_day))
+        self._transition(BriefingScreen(self._day, self._intro_narrative(),
+                                        self._state, prev_day=prev_day))
 
     # ── Screen transitions (glitch) ─────────────────────────────────────
     #
@@ -468,7 +519,7 @@ class HackDoxApp(App):
             if not r.correct and r.player_verdict == Verdict.ADMIT
         )
         quotas = self._day.quotas
-        if scoring.health_below_loss(self._state):
+        if self.run_is_lost():
             return Performance.FAILED
         if false_admits > quotas.max_false_admits:
             return Performance.FAILED

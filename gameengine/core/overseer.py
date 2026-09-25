@@ -275,3 +275,63 @@ def ending_for_state(state: GameState) -> Ending:
     factor beyond alignment has somewhere natural to be added.
     """
     return ending_for_alignment(state.alignment)
+
+
+# ─── Endless: the cooperative Foreman (#7) ───────────────────────────────────
+#
+# In Endless the Foreman is on the player's side. Her lines don't key on day
+# number or alignment (Endless has neither arc nor alignment) but on how the
+# RUN is going — the rolling-accuracy trend from core/endless.py:
+#
+#   intro   endless_intro_first (shift 1) · endless_intro_danger (near the
+#           line) · endless_intro_<trend>  →  endless_intro  →  generic_intro
+#   outro   endless_outro_<performance>    →  generic_outro_<performance>
+#   between endless_between_lost · endless_between_danger ·
+#           endless_between_<trend>  →  endless_between  →  generic_between
+#
+# where <trend> is new / rising / steady / falling. Any key may be authored as
+# several numbered variants — `endless_intro_rising`, `endless_intro_rising_2`,
+# `_3` ... — and one is picked per shift, deterministically from the run seed,
+# so a long run doesn't hear the same line every night.
+
+def _pick_variant(narratives: dict[str, str], key: str, salt: tuple) -> str | None:
+    from .candidate_gen import stable_hash
+    variants = [narratives[key]] if narratives.get(key) else []
+    n = 2
+    while narratives.get(f"{key}_{n}"):
+        variants.append(narratives[f"{key}_{n}"])
+        n += 1
+    if not variants:
+        return None
+    return variants[stable_hash(key, *salt) % len(variants)]
+
+
+def resolve_endless_narrative(narratives: dict[str, str], state: GameState,
+                              beat: str, performance=None) -> str:
+    """The Endless Foreman's line for `beat` ("intro" / "outro" / "between")."""
+    from . import endless
+    shift = endless.current_shift(state)
+    salt = (state.seed, shift)
+    tr = endless.trend(state)
+    danger = endless.accuracy_check_active(state) and endless.in_danger(state)
+    if beat == "intro":
+        chain = (["endless_intro_first"] if shift <= 1 else [])
+        chain += (["endless_intro_danger"] if danger else [])
+        chain += [f"endless_intro_{tr}", "endless_intro"]
+        generic = "generic_intro"
+    elif beat == "outro":
+        perf = performance.value if performance is not None else "passing"
+        chain = [f"endless_outro_{perf}"]
+        generic = f"generic_outro_{perf}"
+    elif beat == "between":
+        chain = (["endless_between_lost"] if endless.accuracy_below_loss(state) else [])
+        chain += (["endless_between_danger"] if danger else [])
+        chain += [f"endless_between_{tr}", "endless_between"]
+        generic = "generic_between"
+    else:
+        raise ValueError(f"unknown Endless narrative beat {beat!r}")
+    for key in chain:
+        line = _pick_variant(narratives, key, salt)
+        if line:
+            return line
+    return resolve_narrative(narratives, generic, generic)

@@ -1,0 +1,3471 @@
+diff --git a/BUILD_PLAN_EndlessMode_2026-09.md b/BUILD_PLAN_EndlessMode_2026-09.md
+index 65f6b83..5c5cc4c 100644
+--- a/BUILD_PLAN_EndlessMode_2026-09.md
++++ b/BUILD_PLAN_EndlessMode_2026-09.md
+@@ -1,7 +1,7 @@
+ # Endless Mode — Build Plan (#7, with #70 and #14)
+ 
+-Drafted 2026-09-25 on branch `Final-Game-Polish` (HEAD `4092f58`). Nothing built yet.
+-**Status: waiting on Nick's answers to the open questions at the bottom.**
++Drafted 2026-09-25 on branch `Final-Game-Polish` (HEAD `4092f58`, building on `d956645`).
++**Status: SHIPPED 2026-09-25 (uncommitted, in the working tree) — see "Shipped log" at the bottom.**
+ 
+ ## What Nick asked for
+ 
+@@ -162,10 +162,128 @@ if you want campaign numbers early.
+ - The rolling-accuracy loss only applies once 5 shifts have been played, so shift 1
+   can't end a run.
+ 
+-## Open questions for Nick
++## Open questions for Nick (answered — see decisions above)
+ 1. **Save slot.** Should Endless share `slot_0.json` with the campaign, or get its own slot?
+ 2. **Difficulty shape.** Where does shift 1 start, and does it ever stop getting harder?
+ 3. **Losing.** Rolling accuracy *and* Site Health, or only one of them? What threshold?
+ 4. **Economy once the shop is bought out.** What's HD$ for on shift 40?
+ 5. **Score / personal best.** Track a best run?
+ 6. **#70 scope.** Do the campaign balance pass in this same batch, or after Endless ships?
++
++## Nick's decisions (2026-09-25)
++1. **Separate save slot.** Endless gets its own slot (`saves/endless_0.json`); the campaign keeps
++   `slot_0.json`. The menu must make the two saves obviously different — each Continue button
++   names its mode and shows where that save is (campaign day N / endless shift N).
++2. **Difficulty = Option A, but it goes past the campaign.** Shift 1 starts around campaign
++   day 6–8, reaches day-20 difficulty in ~15 shifts, then keeps climbing *a bit beyond* the end of
++   the campaign before plateauing. It must never climb to guaranteed failure.
++3. **Loss:** rolling 5-shift accuracy must stay ≥ 70%, only evaluated once 5 shifts have been
++   played. Site Health collapse still ends the run too.
++4. **Economy:** escalating capacity price, a Site Health "patch" purchase, a higher Credit cap —
++   **plus maintenance**: at the start of every Endless run a random subset of the upgrade catalog
++   is placed "under maintenance" (unpurchasable for that run). Re-rolled per run. Campaign unaffected.
++5. **Personal best** tracked for Endless and shown on the run's end screen and on the main menu.
++6. **Order:** Endless first, then one balance pass over BOTH modes. Part of that pass: tune the
++   economy so buying the whole upgrade catalog by day 20 is impossible — players have to pick.
++   Applies to campaign and Endless.
++
++## Shipped log (2026-09-25)
++
++### Architecture — what actually got built (one change from the plan above)
++The plan proposed splitting `Day.number` into `gate_day`/`curve_day` fields
++threaded through ~110 call sites. Built instead: **Endless gets its own
++day-number range** (`config.ENDLESS_DAY_BASE = 1000`; shift N = day 1000+N).
++Every unlock gate in the engine is a monotonic `unlock_day <= day` check, so a
++number above all of them reads as "everything unlocked" at every gate with zero
++gate edits; the difficulty curves alone go through one helper,
++`config.curve_day()`, which is the identity on campaign days. Same result, a
++fraction of the blast radius, and the campaign is unchanged by construction.
++Import-time asserts (config + candidate_gen) fail loudly if an unlock day ever
++reaches the Endless range. A golden snapshot of campaign days 1–20 (content,
++candidates, day logs, every tool's output, stego/cipher grids, costs, budgets,
++payouts × 2 seeds) was byte-identical before and after, and went red on a
++deliberate one-day slip.
++
++### Files
++- `config.py` — Endless range + `curve_day()`/`endless_curve_day()`/`day_label()`;
++  curve funcs route through it; `ENDLESS_*` curve/loss/economy/save constants;
++  `ENDLESS_ARCHETYPE_MIX_BY_BAND` (no Dark Web / White Hat); `LW_ENTRIES_MAX`;
++  `save_file_for()`; the #70 balance values (below).
++- `core/models.py` — `GameMode`, `ShiftRecord`, `GameState.mode/shift_history/
++  lifetime_*/maintenance_upgrades/shop_purchases/is_endless`.
++- `core/content_loader.py` — `build_endless_day()`; `load_day()` dispatches the
++  Endless range to it (never a file); `kinds_discovered_through()` Endless branch.
++- `core/endless.py` (new) — run start (fresh random seed, full kit, maintenance
++  roll), `record_shift` (idempotent per shift), rolling accuracy / trend /
++  danger, loss check, personal-best records.
++- `core/shop.py` (new) — shop rows, prices, status and `buy()` for both modes
++  (lifted out of `BetweenDayScreen`).
++- `core/persistence.py` — per-mode slot, save schema v2, pre-Endless saves load
++  as campaign, `describe()` for the menu.
++- `core/overseer.py` — `resolve_endless_narrative()` (trend-keyed, numbered
++  variants rotate per shift).
++- `core/tools_bridge.py` — stego/cipher grid growth and Logwatch volume read the
++  curve day; Logwatch capped.
++- UI — `intro.py` (both saves labelled, personal best, two-press abandon),
++  `endless_over.py` (new), `between_day.py` (shop via core/shop, Endless
++  accuracy lines, MAINT tags, loss banner), `eod.py`, `status_header.py`
++  (ACC chip), `rules_content.py` (Endless rules section), `_narration.py`
++  (cooperative rule-change phrasings), `app.py` (start/resume/record/loss/
++  run-end), `app.tcss`, `UI_CATALOG.md`.
++- Content — 34 `endless_*` Foreman lines in `overseer.json`; VOICE_GUIDE §3
++  Endless-Foreman note.
++- `sim_balance.py` (new, repo root) — the balance simulator.
++- Tests — `test_endless.py` (29), `test_balance.py` (4); `test_voice.py` now also
++  scans the Endless phrasings. Every new guard was broken on purpose in a scratch
++  copy and went red (10 Endless guards, 4 balance guards).
++
++### Endless difficulty curve (as shipped)
++| shift | 1 | 5 | 10 | 15 | 20 | 25 | 30+ |
++|---|---|---|---|---|---|---|---|
++| plays like campaign day | 7 | 10 | 15 | 20 | 22 | 24 | 26 (plateau) |
++| candidates | 7 | 9 | 11 | 12 | 12 | 13 | 14 |
++
++### #70 balance pass — findings and changes (`sim_balance.py`)
++Method: the real generator/rulebook/costs/payouts over many seeds; three skill
++profiles (sharp 95% · solid 85% · shaky 74% accuracy) plus a perfect player; the
++campaign run both ways on the Dark Web (admit = by the book, deny = resist).
++
++**Findings before the pass**
++1. ⏱ was fine: every day's worst seed leaves budget for correct play (#70 AC).
++2. **The Dark Web alignment path was unfinishable.** Admitting a Dark Web
++   candidate is the scored-correct verdict and cost −8 Site Health; ~23 of them
++   ≈ −184. A *perfect* by-the-book player lost 75% of campaigns.
++3. Health drift was brutal for merely-good play: an 85% player lost 100% of
++   runs in both modes (Endless around shift 13).
++4. Money was ~5× too loose: a perfect player earned 4.6× the whole catalog by
++   day 20; even a 74% player earned 2.4×.
++
++**Changes** (all in `config.py`, each commented with its rationale)
++| constant | before | after |
++|---|---|---|
++| `ARCHETYPE_HEALTH_WEIGHTS` dark_web / sneaky / bad_actor / clumsy / incompatible | −8 / −12 / −10 / −4 / −2 | −2 / −7 / −6 / −3 / −1.5 |
++| `BOARD_ACCURACY_MAX_BONUS` | 10 | 4 |
++| `HACKDOLLAR_PER_CORRECT_ADMIT` / `_DENY` | 10 / 4 | 8 / 3 |
++| `HACKDOLLAR_FLOOR_ADMIT` | 6 | 5 |
++| `HACKDOLLAR_SITE_HEALTH_BONUS` | 25 | 15 |
++| upgrade prices | 20–45 (catalog 625) | ×3.5 → 70–160 (catalog 2,195) |
++| Endless only: capacity price step · Site Patch · credit slots · maintenance | — | +50/buy · 60 HD$ +30/buy for +10% · 5 · 5 upgrades per run |
++
++**After** (catalog share = what that player could afford by day 20 spending on nothing else)
++| | Campaign, by the book | Campaign, resists Dark Web | Endless |
++|---|---|---|---|
++| perfect | 79% of catalog · 0% loss | 69% · 0% loss | 81% · never lost (40 shifts) |
++| sharp 95% | 70% · 0% loss | 61% · 0% loss | 72% · never lost |
++| solid 85% | 50% · 15% loss | 45% · 1% loss | 47% · ~30 shifts on average |
++| shaky 74% | 41% · 88% loss | 31% · 40% loss | 35% · ~9 shifts |
++
++Credits (100) and capacity (100, escalating in Endless) compete for the same
++money, so real players will own well under these shares. The sim doesn't model
++Site Patch purchases, so Endless solid-player runs will go longer in practice.
++Reproduce any row: `python sim_balance.py --seeds 16 --trials 500`; try a
++tuning without editing config: `--set NAME=VALUE`.
++
++**Caveat:** the profiles spread mistakes evenly across candidates. Real players
++probably err toward over-cautious denies (which cost nothing on Site Health),
++so these loss rates are, if anything, pessimistic. Worth a real playtest on both
++alignments before closing #70.
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 69bbefb..5f94a9e 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -421,8 +421,8 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
+ 
+ | Player action | Outcome |
+ |---------------|---------|
+-| Correctly admit a valid candidate | +10 HD\$ + up to 10 HD\$ board accuracy bonus · Site Health ▲ |
+-| Correctly deny an invalid candidate | +4 HD\$ + up to 10 HD\$ board accuracy bonus |
++| Correctly admit a valid candidate | +8 HD\$ (decays to 5) + up to 4 HD\$ board accuracy bonus · Site Health ▲ |
++| Correctly deny an invalid candidate | +3 HD\$ (decays to 2) + up to 4 HD\$ board accuracy bonus |
+ | Incorrectly admit a malicious candidate | Site Health ▼ (no ⏱ penalty) |
+ | Incorrectly deny a valid candidate | Lost reward only — no ⏱ or Site Health penalty |
+ | Run a tool (ghostscan/logwatch/hashcrack/stegotool) | −5/−4/−3/−1-per-stamp ⏱ |
+@@ -518,6 +518,8 @@ The full 20-day campaign is now authored end to end (Batches 1-5, 2026-08-16 →
+ 
+ **Known open items** (see Session Log for origin): issue #73 (dossier-tier evidence guard blind spot, filed 2026-09-14, unresolved); a dormant `DISPOSABLE_EMAIL` / `is_incompatible` ordering risk (0 live occurrences across a 2,800-candidate sweep, left as a flagged judgment call rather than fixed); `day_01.json` still declares `rule_cross_breach_reuse` twice; `_UNLOCK_LINES` in `_narration.py` still placeholder text, now largely redundant with the authored day 2-5 briefings; no in-game audio settings screen yet (volumes are file-only); `play_music()`/`stop_music()` are wired but nothing calls them (no ambient tracks exist); pygame not yet installed in Nick's actual Windows game environment (audio verified only in the Linux device-bridge sandbox); a GitHub Actions companion workflow for Jenkins hasn't been built.
+ 
++**2026-09-25:** Endless Mode (#7) and the #70 balance pass are built on `Final-Game-Polish` (uncommitted) — see the Session Log entry and `BUILD_PLAN_EndlessMode_2026-09.md`.
++
+ **Next up:** merge `Stego-Shapes` into `main` (25 unmerged commits plus the current uncommitted logwatch/shape work is a lot to be carrying on a feature branch); a clean full-suite pytest run to confirm the 593-test baseline is actually green; then the still-deferred Day-1 vertical-slice playthrough and the Web renderer (v2).
+ 
+ ## Where I Was (2026-07-18)
+@@ -620,6 +622,16 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
+ > of this update everything below from 2026-09-12 onward lives on the unmerged `Stego-Shapes` branch,
+ > not `main` (see Where I'm At).
+ 
++### 2026-09-25 (Endless Mode #7 + balance pass #70/#14)
++Plan + shipped log with every number: `BUILD_PLAN_EndlessMode_2026-09.md`.
++- **Endless Mode is live** from the main menu. Its own save slot (`saves/endless_0.json`) — the menu labels "Continue Campaign · Day N" and "Continue Endless · Shift N" separately and says the two never touch; the Endless personal best (`saves/endless_records.json`) shows on the menu and the run-over screen.
++- **How it works:** Endless shift N is day number `1000+N` (`config.ENDLESS_DAY_BASE`). Every unlock gate is `unlock_day <= day`, so the whole kit is live from shift 1 with no gate code changed; the difficulty curves go through `config.curve_day()` (identity on campaign days — a golden snapshot of days 1–20 stayed byte-identical). Shift 1 plays like campaign day 7, shift 15 like day 20, then climbs to day 26 by shift 30 and plateaus. Days come from `content_loader.build_endless_day` — never the authored campaign files; no Dark Web, no White Hat.
++- **Losing:** Site Health collapse, or the 5-shift rolling accuracy under 70% (counted from shift 5). `core/endless.py` owns the run rules; `EndlessOverScreen` shows why, the run's numbers and the personal best.
++- **Economy (Endless):** 5 random upgrades under maintenance per run (MAINT in the shop), escalating capacity price, a Site Patch item, 5 credit slots. Shop rules moved to `core/shop.py` (both modes).
++- **The Foreman in Endless** is on the player's side: 34 `endless_*` lines keyed by the accuracy trend (rising/steady/falling, near-the-line, lost), cooperative rule-change phrasings (small changes casual, new hard denies with a reason). VOICE_GUIDE §3 updated.
++- **Balance pass (#70, both modes)** via the new `sim_balance.py`: ⏱ was already fine; the Dark Web alignment path was unfinishable (admitting DW is scored correct and cost −8 health each → a perfect by-the-book player lost 75% of campaigns); an 85% player lost every run; a perfect player earned 4.6× the catalog by day 20. Retuned health weights, cut income (board bonus 10→4, payouts 10/4→8/3, health bonus 25→15) and raised upgrade prices ×3.5, so by day 20 a perfect player can afford ~79% of the catalog and a solid one ~50% — players have to choose.
++- Tests: 645 → 678 (`test_endless.py` 29, `test_balance.py` 4); every new guard was reverted in a scratch copy and seen red.
++
+ ### 2026-09-25 (World lore — the Undertow and the data docks)
+ Nick set the world: after an AI disaster (named *the Undertow* in copy), networks and hackers can't be trusted, so data moves physically by ship, and the player vets the couriers who carry it.
+ - **World bible:** new `VOICE_GUIDE.md` §0 — the Undertow, data by ship, courier bonds, the air-gapped gate terminal (why the tools work offline), what Site Health / Dark Web / White Hat / HD$ mean in-world, where the world gets explained (day 1 setup, one beat per day on days 2–6), and the questions left open for Nick (what the Undertow is, whether it's still active, who released it, any link to the smugglers).
+diff --git a/CONTENT_AUTHORING.md b/CONTENT_AUTHORING.md
+index 06d2d06..14df68e 100644
+--- a/CONTENT_AUTHORING.md
++++ b/CONTENT_AUTHORING.md
+@@ -30,12 +30,30 @@ Blanking a value falls through to the generic copy — an empty string means "no
+ 
+ To give an unauthored day real copy, just add `day12_intro` etc. here. No code change.
+ 
++**Endless Mode (#7) keys** — the Foreman is on the player's side, and her line is
++picked from the run's accuracy trend, not the day (`core/overseer.py` →
++`resolve_endless_narrative`):
++
++| Key | When it plays |
++|---|---|
++| `endless_intro_first` | Shift 1 |
++| `endless_intro_danger` | Rolling accuracy within 10 points of the 70% line |
++| `endless_intro_<trend>` | trend = `new` / `rising` / `steady` / `falling` |
++| `endless_outro_<rating>` | End of shift, by rating |
++| `endless_between_lost` / `_danger` / `_<trend>` | Night shop |
++| `endless_intro`, `endless_between` | Fallbacks (then the `generic_*` keys) |
++
++Any Endless key can have numbered variants — `endless_intro_rising_2`, `_3`… — and
++one is picked per shift (stable for a given run). Endless rule-change lines live
++in `_narration.py` → `_ENDLESS_RULE_CHANGE_PHRASINGS`.
++
+ **Two lines that are still Python, not JSON:**
+ 
+ | What | Where |
+ |---|---|
+ | Tool-unlock narration ("New gear on the desk: GHOSTSCAN…") | `ui/tui/screens/_narration.py` → `_UNLOCK_LINES` |
+ | Rule-change phrasings (the Overseer mentioning a flip) | `ui/tui/screens/_narration.py` → `_RULE_CHANGE_PHRASINGS` |
++| Endless rule-change phrasings (cooperative) | `ui/tui/screens/_narration.py` → `_ENDLESS_RULE_CHANGE_PHRASINGS` |
+ 
+ Both are re-exported from `ui/tui/app.py` for convenience, but that file just imports them — go straight to `_narration.py` to edit.
+ 
+diff --git a/VOICE_GUIDE.md b/VOICE_GUIDE.md
+index 27c948c..78f204c 100644
+--- a/VOICE_GUIDE.md
++++ b/VOICE_GUIDE.md
+@@ -152,6 +152,16 @@ she owes the night crew, and she dresses it up as "keeping the line moving" and
+ - **Late (12–20):** hostile, manipulative, occasionally honest when tired.
+   Alignment bands keep their existing meaning; only the voice changes.
+ 
++- **Endless Mode (#7, 2026-09-25):** a separate game, and a different
++  Foreman: the early-campaign mentor with no debt to anyone. She's on the
++  clerk's side, practical and warm, and she reacts to how the *run* is going
++  (the five-shift accuracy trend), never to a day number: encouraging when the
++  tally rises, plain-spoken concern when it falls, straight talk near the 70%
++  line. Rule changes come with a reason — casual for a rule easing off, a real
++  explanation ("two ports sent cases back on exactly that") for a new hard
++  deny. Never smugglers, never the arc. Keys: `endless_*` in `overseer.json`;
++  phrasings: `_ENDLESS_RULE_CHANGE_PHRASINGS` in `_narration.py`.
++
+ Stock phrases (rotate them, never lean on one): *keep the line moving · boats
+ don't wait · clock's running · that's the job · mind your fingers · hang back
+ after the whistle · rough shift · long haul · I've seen worse come off worse
+diff --git a/gameengine/config.py b/gameengine/config.py
+index 6bc4bd8..fbd8f7a 100644
+--- a/gameengine/config.py
++++ b/gameengine/config.py
+@@ -65,13 +65,14 @@ def daily_compute_budget(day_number: int, capacity: int) -> int:
+     capacity is GameState.compute_capacity (upgradable in the shop).
+     Tune DAILY_BUDGET_GROWTH / capacity purchases to manage difficulty.
+     """
++    day_number = curve_day(day_number)
+     return max(DAILY_BUDGET_MIN,
+                capacity + DAILY_BUDGET_GROWTH * (day_number - 1))
+ 
+ 
+ # Maximum evidence-board accuracy bonus — paid in HackDollar$ on a correct
+ # verdict (issue #27 moved this off ⏱: verdicts never grant computing hours).
+-BOARD_ACCURACY_MAX_BONUS = 10  # HD$
++BOARD_ACCURACY_MAX_BONUS = 4   # HD$ (was 10 — #70: it was over half of all income)
+ 
+ # ─── Site Health — persistent % loss condition (issues #18/#20, replaces lives)
+ #
+@@ -86,16 +87,27 @@ SITE_HEALTH_REWARD_THRESHOLD = 75.0    # above this at EOD → bonus payout
+ 
+ # Keyed by Archetype.value strings so config stays import-free of models.
+ # Positive = beneficial actor admitted; negative = threat let inside.
++#
++# #70 balance pass (2026-09-25, sim_balance.py). Threat weights were halved-ish
++# and the Dark Web's cut to a quarter. Before: an 85%-accurate player lost
++# every run in both modes (health drift ≈ −7/shift late), and a PERFECT
++# by-the-book player lost 75% of campaigns — admitting the Dark Web is the
++# scored-correct verdict, ~23 of them at −8 took ~184 health, so the Dark Web
++# alignment path was unfinishable. After: both alignment paths are finishable
++# (solid player: 15% loss by the book, 1% resisting), resisting stays the
++# safer road for the site, a sloppy (74%) player usually still loses, and in
++# Endless a sharp player holds indefinitely while a solid one lasts ~30 shifts.
++# Ordering is unchanged: a missed Sneaky Bugger still hurts most.
+ ARCHETYPE_HEALTH_WEIGHTS: dict[str, float] = {
+     "obvious_admit":     +2.0,
+     "day_to_day":        +1.5,
+     "the_professional":  +2.0,
+     "white_hat":         +1.0,   # rules-invalid, but they help the site
+-    "clumsy_cutie":      -4.0,   # hygiene risk, not malice
+-    "the_incompatible":  -2.0,   # policy breach, low actual threat
+-    "dark_web":          -8.0,
+-    "bad_actor":        -10.0,
+-    "sneaky_bugger":    -12.0,
++    "clumsy_cutie":      -3.0,   # hygiene risk, not malice          (was −4)
++    "the_incompatible":  -1.5,   # policy breach, low actual threat  (was −2)
++    "dark_web":          -2.0,   # the site rots slowly — see above  (was −8)
++    "bad_actor":         -6.0,   #                                   (was −10)
++    "sneaky_bugger":     -7.0,   #                                   (was −12)
+ }
+ 
+ # ─── HackDollar$ — persistent between-day currency (issue #21) ───────────────
+@@ -105,9 +117,14 @@ ARCHETYPE_HEALTH_WEIGHTS: dict[str, float] = {
+ # menu (upgrades, HackDox Credits, ⏱ capacity). Never spent on tools.
+ 
+ STARTING_HACKDOLLARS          = 0
+-HACKDOLLAR_PER_CORRECT_ADMIT  = 10   # HD$ per correct admit (day-1 rate)
+-HACKDOLLAR_PER_CORRECT_DENY   = 4    # HD$ per correct deny (smaller cut)
+-HACKDOLLAR_SITE_HEALTH_BONUS  = 25   # max EOD bonus, scaled by health %
++# #70 (2026-09-25): income cut and upgrade prices raised ×3.5 so the whole
++# catalog can't be bought by day 20 — players pick. Measured by sim_balance.py:
++# by day 20 a perfect player can afford ~79% of the catalog, a solid (85%)
++# one ~50%, a sloppy one ~40%, before credits/capacity compete for the same
++# money. (Before: 4.6× the catalog for a perfect player, 2.4× for a sloppy one.)
++HACKDOLLAR_PER_CORRECT_ADMIT  = 8    # HD$ per correct admit (day-1 rate; was 10)
++HACKDOLLAR_PER_CORRECT_DENY   = 3    # HD$ per correct deny (smaller cut; was 4)
++HACKDOLLAR_SITE_HEALTH_BONUS  = 15   # max EOD bonus, scaled by health % (was 25)
+                                      # (paid only above the reward threshold)
+ 
+ # ── Reward decay (#4, lever 1) ───────────────────────────────────────────────
+@@ -129,7 +146,7 @@ HACKDOLLAR_SITE_HEALTH_BONUS  = 25   # max EOD bonus, scaled by health %
+ # penalise a player twice for the same shift.
+ HACKDOLLAR_DECAY_ADMIT_PERIOD = 5    # admit rate steps down every N days
+ HACKDOLLAR_DECAY_DENY_PERIOD  = 10   # deny rate steps down every N days
+-HACKDOLLAR_FLOOR_ADMIT        = 6
++HACKDOLLAR_FLOOR_ADMIT        = 5    # (was 6)
+ HACKDOLLAR_FLOOR_DENY         = 2
+ 
+ 
+@@ -140,6 +157,7 @@ def DAY_REWARD_PAYOUT(day_number: int, admit: bool) -> int:
+     the smaller cut, and they decay on a slower clock because there is less
+     there to take away.
+     """
++    day_number = curve_day(day_number)
+     if admit:
+         return max(HACKDOLLAR_FLOOR_ADMIT,
+                    HACKDOLLAR_PER_CORRECT_ADMIT
+@@ -315,7 +333,7 @@ TOOL_COST_INFLATION_PERIOD = 4   # +1 ⏱ to every tool base cost every N days
+ 
+ def tool_cost_inflation(day_number: int) -> int:
+     """Extra ⏱ added to every tool's base cost on the given day."""
+-    return day_number // TOOL_COST_INFLATION_PERIOD
++    return curve_day(day_number) // TOOL_COST_INFLATION_PERIOD
+ 
+ 
+ def DAY_TOOL_COST(tool_name: str, day_number: int,
+@@ -807,6 +825,104 @@ CAMPAIGN_LAST_DAY = 20
+ # per day, and the difficulty levers deliberately stay flat across them.
+ TUTORIAL_LAST_DAY = 5
+ 
++
++# ─── Endless Mode (#7) — its own day-number range ────────────────────────────
++#
++# Endless shift N is day number ENDLESS_DAY_BASE + N (shift 1 = day 1001).
++#
++# Why a separate numeric range instead of a second "gate day" field threaded
++# through every call site: every progressive-unlock gate in the engine is a
++# monotonic `unlock_day <= day_number` check (TOOL_UNLOCK_DAY,
++# BREACH_DB_UNLOCK_DAY, candidate_gen.intro_day, the _SEVERITY_BY_DAY steps).
++# A day number above all of them therefore reads as "everything taught,
++# everything unlocked" at every gate with no gate code changing — which is
++# exactly Endless's "full game from shift 1" rule. The number is also part of
++# every RNG seed, so each shift stays unique.
++#
++# What must NOT see 1001+ raw are the difficulty CURVES, which would read it as
++# "day one thousand". Those all go through curve_day() below, which maps a
++# shift onto the campaign-equivalent day it should play like. For every
++# campaign day curve_day(n) == n, so the campaign is untouched by construction
++# (and a golden snapshot of days 1-20 guards that in test_endless.py).
++#
++# Nick's shape (2026-09-25, "Option A, a bit harder than the campaign's end,
++# never guaranteed failure"): shift 1 plays like campaign day 7, the curve
++# reaches the campaign's last day by shift 15, keeps climbing to day 26 by
++# shift 30, then plateaus there for good.
++ENDLESS_DAY_BASE             = 1000
++ENDLESS_CURVE_START          = 7    # shift 1 plays like this campaign day
++ENDLESS_CURVE_CAMPAIGN_SHIFT = 15   # shift that reaches CAMPAIGN_LAST_DAY
++ENDLESS_CURVE_CEILING        = 26   # plateau — a bit past the campaign's end
++ENDLESS_CURVE_CEILING_SHIFT  = 30   # shift the plateau is reached
++
++# Past the campaign's 12-candidate cap, Endless keeps adding one candidate
++# every ENDLESS_CANDIDATE_GROWTH_PERIOD curve days, up to this ceiling.
++ENDLESS_CANDIDATE_COUNT_CAP      = 14
++ENDLESS_CANDIDATE_GROWTH_PERIOD  = 3
++
++
++def is_endless_day(day_number: int) -> bool:
++    return day_number > ENDLESS_DAY_BASE
++
++
++def endless_day_number(shift: int) -> int:
++    """Endless shift (1-based) → the engine day number that represents it."""
++    return ENDLESS_DAY_BASE + max(1, shift)
++
++
++def endless_shift(day_number: int) -> int:
++    """Inverse of endless_day_number."""
++    return day_number - ENDLESS_DAY_BASE
++
++
++def endless_curve_day(shift: int) -> int:
++    """The campaign day an Endless shift's difficulty curves play like.
++
++    Piecewise linear: START → CAMPAIGN_LAST_DAY over shifts 1..CAMPAIGN_SHIFT,
++    then CAMPAIGN_LAST_DAY → CEILING over CAMPAIGN_SHIFT..CEILING_SHIFT, then
++    flat forever. Monotonic, and bounded — Endless never climbs toward
++    certain failure.
++    """
++    shift = max(1, shift)
++    last = CAMPAIGN_LAST_DAY
++    if shift <= ENDLESS_CURVE_CAMPAIGN_SHIFT:
++        span = max(1, ENDLESS_CURVE_CAMPAIGN_SHIFT - 1)
++        return ENDLESS_CURVE_START + (
++            (shift - 1) * (last - ENDLESS_CURVE_START) // span)
++    span = max(1, ENDLESS_CURVE_CEILING_SHIFT - ENDLESS_CURVE_CAMPAIGN_SHIFT)
++    return min(ENDLESS_CURVE_CEILING, last + (
++        (shift - ENDLESS_CURVE_CAMPAIGN_SHIFT) * (ENDLESS_CURVE_CEILING - last) // span))
++
++
++def curve_day(day_number: int) -> int:
++    """The day number the difficulty curves should read.
++
++    Identity for every campaign day. For an Endless day, the campaign-
++    equivalent day from endless_curve_day(). Every curve function in this
++    module routes its day argument through here first; unlock GATES
++    deliberately do not (see the block comment above).
++    """
++    if is_endless_day(day_number):
++        return endless_curve_day(endless_shift(day_number))
++    return day_number
++
++
++def day_label(day_number: int) -> str:
++    """Player-facing name of a day: "Day 7" in the campaign, "Shift 3" in Endless."""
++    if is_endless_day(day_number):
++        return f"Shift {endless_shift(day_number)}"
++    return f"Day {day_number}"
++
++
++def _endless_candidate_count(cday: int) -> int:
++    # Campaign curve up to its own last day (inlined rather than recursing
++    # through DAY_CANDIDATE_COUNT, which would re-enter the endless branch).
++    beyond = min(cday, CAMPAIGN_LAST_DAY) - TUTORIAL_LAST_DAY
++    base = min(CANDIDATE_COUNT_CAP,
++               CANDIDATE_COUNT_BASE + -int(-beyond * CANDIDATE_COUNT_GROWTH // 1))
++    extra = max(0, cday - CAMPAIGN_LAST_DAY) // ENDLESS_CANDIDATE_GROWTH_PERIOD
++    return min(ENDLESS_CANDIDATE_COUNT_CAP, base + extra)
++
+ # ─── Candidate volume ramp (#17) ─────────────────────────────────────────────
+ #
+ # The "volume" difficulty lever, complementing #4's economy/complexity levers.
+@@ -830,6 +946,8 @@ def DAY_CANDIDATE_COUNT(day_number: int) -> int:
+     Single source of truth for shift length: the intake loop drives off
+     Day.candidate_count, which is either the day file's explicit value or this.
+     """
++    if is_endless_day(day_number):
++        return _endless_candidate_count(curve_day(day_number))
+     if day_number <= TUTORIAL_LAST_DAY:
+         return CANDIDATE_COUNT_TUTORIAL
+     beyond = day_number - TUTORIAL_LAST_DAY
+@@ -888,6 +1006,7 @@ RULE_FLIP_PERIOD = 3
+ 
+ 
+ def difficulty_band_for_day(day_number: int) -> str:
++    day_number = curve_day(day_number)
+     if day_number <= DIFFICULTY_BAND_LAST_EASY:
+         return "easy"
+     if day_number <= DIFFICULTY_BAND_LAST_MEDIUM:
+@@ -952,6 +1071,36 @@ ARCHETYPE_MIX_BY_BAND: dict[str, dict[str, int]] = {
+     },
+ }
+ 
++# Endless (#7) runs the same band curve with its own weights. Two archetypes
++# never appear: the Dark Web (the corruption arc is campaign-only) and the
++# White Hat (#7: "every denied candidate genuinely poses a threat" — no moral
++# forks in Endless). Their weight goes to the honest threats instead, so a
++# shift carries the same share of bad actors as the campaign's.
++ENDLESS_ARCHETYPE_MIX_BY_BAND: dict[str, dict[str, int]] = {
++    "easy":   dict(ARCHETYPE_MIX_BY_BAND["easy"]),
++    "medium": {
++        "obvious_admit":    2,
++        "day_to_day":       2,
++        "the_professional": 1,
++        "clumsy_cutie":     1,
++        "the_incompatible": 1,
++        "bad_actor":        2,
++        "sneaky_bugger":    2,
++    },
++    "hard": {
++        "obvious_admit":    1,
++        "day_to_day":       2,
++        "the_professional": 1,
++        "the_incompatible": 1,
++        "clumsy_cutie":     1,
++        "bad_actor":        2,
++        "sneaky_bugger":    5,
++    },
++}
++ENDLESS_EXCLUDED_ARCHETYPES: frozenset[str] = frozenset({"dark_web", "white_hat"})
++assert not any(ENDLESS_EXCLUDED_ARCHETYPES & set(m)
++               for m in ENDLESS_ARCHETYPE_MIX_BY_BAND.values())
++
+ # On "hard" days the generator prefers evidence that needs a tool over evidence
+ # readable free off the dossier, so a late-game candidate's discrepancies sit
+ # behind the ⏱ economy rather than in plain sight. See
+@@ -982,6 +1131,12 @@ LW_ENTRIES_BY_DAY: dict[int, int] = {
+ LW_ENTRIES_DEFAULT      = 100   # fallback for days not in the dict
+ LW_ENTRIES_SCALE_FACTOR = 1.15  # multiplier applied per day beyond the last key
+ LW_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
++# Ceiling (Endless, #7). The per-day growth above is geometric (×1.15/day), which
++# is fine across a 20-day campaign (~740 rows on day 20, under this cap, so the
++# campaign is unaffected) but explodes in an unbounded run — ~12,000 rows by
++# day 40. Endless plateaus its curve day well below that, and this cap is the
++# belt to that suspender.
++LW_ENTRIES_MAX          = 1000
+ 
+ # Batch-3 task #5: fraction of noise AUTH_OK rows (unrelated background
+ # accounts) that log in from the same external-city IP pool violations use
+@@ -1219,30 +1374,31 @@ UPGRADE_TOOLCOST_STEGOTOOL = "toolcost_stegotool"   # reduces the stego filter c
+ TOOLCOST_REDUCTION = 2   # ⏱ knocked off the base cost when owned
+ 
+ # Shop catalog: (upgrade_id, label, HD$ price, description).
++# Prices ×3.5 in the #70 balance pass (2026-09-25) — see HACKDOLLAR_* above.
+ # The between-day menu renders this list; effects key off GameState.upgrades.
+ UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
+-    (UPGRADE_CHAT_HOSTILE,     "Sentiment Scanner",     20, "auto-mark hostile text in candidate chat"),
+-    (UPGRADE_EMAIL_APPROVED,   "Domain Whitelist HUD",  20, "auto-highlight approved email domains on the dossier"),
+-    (UPGRADE_EMAIL_PROHIBITED, "Domain Blacklist HUD",  25, "auto-highlight prohibited email domains on the dossier"),
+-    (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",     20, "auto-highlight approved affiliations on the dossier"),
+-    (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
+-    (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
+-    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
+-    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
+-    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     30, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
+-    (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
+-    (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
+-    (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 35, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
+-    (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     30, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
+-    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
+-    (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     30, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
+-    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    30, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
+-    (UPGRADE_FORUM_AUTO,       "Forum Watch",          30, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
+-    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a recovered password's strength verdict, not just the plaintext"),
+-    (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",    25, "colour-code the RGB channel entropy readout by severity"),
+-    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",    25, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
+-    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",     25, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
+-    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  30, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
++    (UPGRADE_CHAT_HOSTILE,     "Sentiment Scanner",      70, "auto-mark hostile text in candidate chat"),
++    (UPGRADE_EMAIL_APPROVED,   "Domain Whitelist HUD",   70, "auto-highlight approved email domains on the dossier"),
++    (UPGRADE_EMAIL_PROHIBITED, "Domain Blacklist HUD",   90, "auto-highlight prohibited email domains on the dossier"),
++    (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",      70, "auto-highlight approved affiliations on the dossier"),
++    (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",      90, "auto-highlight prohibited affiliations on the dossier"),
++    (UPGRADE_STEGO_TINT,       "Spectral Lens",         105, "stronger blue tint over stego areas of interest"),
++    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        120, "mark the region of the alignment pad the true key sits in"),
++    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      120, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
++    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     105, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
++    (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 160, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
++    (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  140, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
++    (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 120, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
++    (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     105, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
++    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",        70, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
++    (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     105, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
++    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    105, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
++    (UPGRADE_FORUM_AUTO,       "Forum Watch",          105, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
++    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer",  70, "label a recovered password's strength verdict, not just the plaintext"),
++    (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",     90, "colour-code the RGB channel entropy readout by severity"),
++    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",     90, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
++    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",      90, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
++    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  105, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
+ ]
+ 
+ # Sub-category (by tool page) each upgrade belongs to, for shop-UI grouping.
+@@ -1297,6 +1453,52 @@ COMPUTE_CAPACITY_STEP   = 10   # ⏱ added to capacity per purchase
+ SAVE_SLOT = "slot_0"
+ SAVE_FILE = SAVES_DIR / f"{SAVE_SLOT}.json"
+ 
++# Endless keeps its own slot (#7, Nick 2026-09-25) so starting or losing an
++# Endless run can never touch a campaign in progress, and vice versa. The main
++# menu shows the two Continue buttons side by side, each naming its mode.
++ENDLESS_SAVE_SLOT = "endless_0"
++ENDLESS_SAVE_FILE = SAVES_DIR / f"{ENDLESS_SAVE_SLOT}.json"
++# Personal best across Endless runs — survives the run's own save being cleared.
++ENDLESS_RECORDS_FILE = SAVES_DIR / "endless_records.json"
++
++
++def save_file_for(mode: str):
++    """The save slot for a GameMode value ("campaign" / "endless")."""
++    return ENDLESS_SAVE_FILE if mode == "endless" else SAVE_FILE
++
++
++# ─── Endless — loss condition & history (#7) ─────────────────────────────────
++#
++# Besides Site Health collapsing (which ends an Endless run exactly as it ends
++# the campaign), an Endless run is lost when the rolling average accuracy over
++# the last ENDLESS_ACCURACY_WINDOW shifts drops below the threshold. It is only
++# evaluated once that many shifts have been played, so a rough first shift
++# can't end a run on its own (Nick, 2026-09-25: 70%, after 5 shifts).
++ENDLESS_ACCURACY_WINDOW    = 5
++ENDLESS_ACCURACY_THRESHOLD = 0.70
++# Trend reporting: the Foreman calls a trend "rising"/"falling" only when the
++# window average moved at least this much against the previous window.
++ENDLESS_TREND_DEADBAND     = 0.03
++ENDLESS_HISTORY_KEEP       = 30     # shifts kept in the save (lifetime totals kept separately)
++
++# ─── Endless — economy (#7) ──────────────────────────────────────────────────
++#
++# Without these, a long Endless run eventually owns the entire shop and money
++# stops meaning anything. Four levers, all Endless-only unless noted:
++#   • Maintenance — each run, a random handful of upgrades is unbuyable for
++#     the whole run, so no two runs build the same kit (Nick's idea).
++#   • Escalating capacity — each ⏱-capacity purchase costs more than the last.
++#   • Site Patch — spend HD$ to repair Site Health; also escalates.
++#   • More credit slots — a reveal is worth more when the run never ends.
++ENDLESS_MAINTENANCE_COUNT    = 5      # upgrades under maintenance per run
++ENDLESS_HACKDOX_CREDIT_MAX   = 5
++ENDLESS_STARTING_HACKDOLLARS = 0
++SHOP_CAPACITY_PRICE_STEP     = 50     # HD$ added per capacity bought (Endless)
++SHOP_PRICE_SITE_PATCH        = 60     # HD$, first patch
++SHOP_SITE_PATCH_PRICE_STEP   = 30     # HD$ added per patch bought
++SITE_PATCH_HEALTH            = 10.0   # % restored per patch (capped at 100)
++SITE_HEALTH_MAX              = 100.0
++
+ # ─── Key bindings ─────────────────────────────────────────────────────────────────
+ #
+ # Change any value here to remap that control everywhere in the TUI.
+@@ -1391,3 +1593,14 @@ SOUND_ENABLED_DEFAULT = True
+ DEFAULT_MASTER_VOLUME = 1.0   # overall multiplier on both channels below
+ DEFAULT_MUSIC_VOLUME  = 0.6   # background/ambient tracks (no trigger uses this yet)
+ DEFAULT_SFX_VOLUME    = 0.8   # one-shot cues — verdicts, tool runs, UI ticks, etc.
++
++
++# ─── Endless range guard (#7) ────────────────────────────────────────────────
++# The Endless day range only works because it sits above every unlock day in
++# the game (see the ENDLESS_DAY_BASE block). Fail at import, loudly, if a
++# retune ever pushes an unlock day into that range.
++assert ENDLESS_DAY_BASE > max(
++    CAMPAIGN_LAST_DAY,
++    *TOOL_UNLOCK_DAY.values(),
++    *BREACH_DB_UNLOCK_DAY.values(),
++), "ENDLESS_DAY_BASE must sit above every campaign/unlock day"
+diff --git a/gameengine/content/narratives/overseer.json b/gameengine/content/narratives/overseer.json
+index 45c9e3b..77c7250 100644
+--- a/gameengine/content/narratives/overseer.json
++++ b/gameengine/content/narratives/overseer.json
+@@ -210,5 +210,40 @@
+   "day20_outro_excellent": "Clean stack, quota cleared, on the last shift it was ever going to matter. Whatever this pier made of you, it made something. I'll leave it there.",
+   "day20_outro_passing": "You got there. Twenty shifts, and you got through every one of them. That's not nothing, whatever else turns out to be true.",
+   "day20_outro_poor": "Short, on the last day. I won't pretend that doesn't sting a little, for reasons that are probably more mine than yours at this point.",
+-  "day20_outro_failed": "Twenty days, and it comes apart on the last one. I don't have a tidy line for that at the whistle. Maybe there isn't one."
++  "day20_outro_failed": "Twenty days, and it comes apart on the last one. I don't have a tidy line for that at the whistle. Maybe there isn't one.",
++
++  "_comment_endless": "Endless Mode (#7). The Foreman is on the player's side here: warm, practical, rooting for them. Keys follow the run's rolling-accuracy trend, not the day — see core/overseer.py resolve_endless_narrative. Numbered variants (_2, _3) rotate per shift.",
++  "endless_intro_first": "Endless roster. No lessons this time — you know the gate, and the full kit's on the desk from the first whistle.\nThe boats don't stop coming, so neither do we. I'll be watching your tally, not to catch you out, but to catch things before they catch you.\nKeep your calls right seven times in ten over any five shifts and the gate stays yours. That's the whole deal. Let's work.",
++  "endless_intro": "Another shift, another boat. You know the gate. I'm here if you need me.",
++  "endless_intro_new": "Day two. One day on the books isn't a trend yet — work it the way you did yesterday and let the numbers settle.",
++  "endless_intro_steady": "Different faces, same job. Your read's holding steady, so don't change what's working.",
++  "endless_intro_steady_2": "Tally's flat, and on this pier flat is good. Take your time on the quiet ones; the loud ones take care of themselves.",
++  "endless_intro_steady_3": "Nothing to fix from yesterday. Read the book, run the gear where it pays, and trust your eye.",
++  "endless_intro_rising": "Your numbers are climbing. That's not luck, that's you getting a feel for the papers. Keep it up.",
++  "endless_intro_rising_2": "Better read yesterday than the day before. Whatever you changed, keep doing it. I'll keep the coffee on.",
++  "endless_intro_rising_3": "Tally's trending the right way. Don't get comfortable on the easy ones; that's where good clerks slip.",
++  "endless_intro_falling": "Your read slipped yesterday. Not a crisis, but slow down on the ones that look too clean. Run the gear.",
++  "endless_intro_falling_2": "Numbers dipped. Happens on a long haul. Pick one tool you've been skipping and give it a real go today.",
++  "endless_intro_falling_3": "A couple of calls went sideways lately. Check the book before every verdict today — the rules move, so make sure you move with them.",
++  "endless_intro_danger": "I'll be straight with you: you're close to the line. Seven in ten over five shifts, and you're not far above it.\nToday, if you're unsure, spend the hours. That's what they're for.",
++  "endless_intro_danger_2": "You're cutting it fine. Don't guess today. If the papers don't add up, get the gear out before you stamp them.",
++  "endless_outro_excellent": "Clean shift, every call right. Go home proud — that's the kind of tally I pin up in the shed.",
++  "endless_outro_excellent_2": "Not a single miss. Whatever you had for breakfast, have it again tomorrow.",
++  "endless_outro_passing": "Solid work. A couple of rough edges, but the gate held and so did you.",
++  "endless_outro_passing_2": "Good enough work, and good enough keeps the pier running. We'll tighten it up tomorrow.",
++  "endless_outro_poor": "Too few couriers got bonded today. Being careful is right, but turning back honest people costs the pier too.",
++  "endless_outro_poor_2": "You played it safe and the line backed up. Trust your read on the clean ones a little more.",
++  "endless_outro_failed": "Rough one. Something got through that shouldn't have, and the pier's going to feel it. Shake it off. We fix it tomorrow.",
++  "endless_outro_failed_2": "That one hurt. Look over which calls went wrong before you clock out; better to learn it tonight than relearn it tomorrow.",
++  "endless_between": "Rest while you can. The boats will be here in the morning.",
++  "endless_between_new": "One shift down. Get some sleep, and spend your scrip on whatever helped most today. Some of the shed's gear is out for maintenance this run, so work around it.",
++  "endless_between_steady": "Steady night. Have a look through the shop — a good upgrade on a flat tally is how you break out of it.",
++  "endless_between_steady_2": "Nothing on fire. Rest up. The boats get fuller for a while yet, then they level off.",
++  "endless_between_rising": "Good trend. Bank some scrip if you can; the harder days are still coming up the channel.",
++  "endless_between_rising_2": "You're getting sharper. Spend on the gear that saves you hours — you'll want them later.",
++  "endless_between_falling": "Your trend's heading the wrong way. If the shop has something for the tool you trust least, tonight's the night.",
++  "endless_between_falling_2": "Rough stretch. A patch for the site or a spare reveal credit might buy you room to find your footing.",
++  "endless_between_danger": "You're near the line. Tomorrow matters. If you can afford a reveal credit, carry one — one certain call can hold your average up.",
++  "endless_between_danger_2": "Close to the line on the five-shift tally. I'm not letting you go without a fight, so let's make tomorrow a careful one.",
++  "endless_between_lost": "That's the stretch that ends it — the tally dropped under the line. You gave it a real go. Clock out, and we'll talk about the next run."
+ }
+diff --git a/gameengine/core/candidate_gen.py b/gameengine/core/candidate_gen.py
+index 00db43a..b307408 100644
+--- a/gameengine/core/candidate_gen.py
++++ b/gameengine/core/candidate_gen.py
+@@ -896,6 +896,12 @@ _SEVERITY_BY_DAY: dict[DiscrepancyKind, tuple[str, int, str]] = {
+ }
+ 
+ 
++# Endless (#7) relies on its day numbers sitting above every scheduled step, so
++# a shift reads every kind at its final severity. See config.ENDLESS_DAY_BASE.
++assert all(on_day < config.ENDLESS_DAY_BASE
++           for _b, on_day, _a in _SEVERITY_BY_DAY.values())
++
++
+ def stepped_rule_severity(kind: DiscrepancyKind, day_number: int) -> str | None:
+     """The rule severity a `_SEVERITY_BY_DAY` kind's rule carries on a day
+     ("weighted" while the kind is minor, "disqualifying" once it is major or
+diff --git a/gameengine/core/content_loader.py b/gameengine/core/content_loader.py
+index b8a6bfd..1402a76 100644
+--- a/gameengine/core/content_loader.py
++++ b/gameengine/core/content_loader.py
+@@ -672,7 +672,56 @@ def _apply_rule_overrides(
+     return rules, frozenset(removed_ids)
+ 
+ 
++def build_endless_day(day_number: int) -> Day:
++    """Build one Endless shift (#7). `day_number` is in the Endless range
++    (config.endless_day_number(shift)).
++
++    Same recipe as synthesize_day — Day 1's rulebook with this day's
++    Overseer-Variable flips, the curve's length/quota/band — with three
++    differences that ARE Endless:
++
++      • Nothing is gated. The number sits above every unlock day, so the
++        rulebook carries every kind at its final severity and the generator's
++        tier gates let everything through. No tutorial, no progressive unlock.
++      • ENDLESS_ARCHETYPE_MIX_BY_BAND: no Dark Web, no White Hat.
++      • Authored campaign content is never read — days 6-20 carry Dark Web
++        directives and the scripted White Hat, which Endless must not inherit.
++    """
++    if not config.is_endless_day(day_number):
++        raise ValueError(f"{day_number} is not an Endless day number")
++    template = load_day(1)
++    count = config.DAY_CANDIDATE_COUNT(day_number)
++    band  = config.difficulty_band_for_day(day_number)
++    weights = config.ENDLESS_ARCHETYPE_MIX_BY_BAND[band]
++    base_mix = {Archetype(k): v for k, v in weights.items()}
++    return Day(
++        number=day_number,
++        title=config.day_label(day_number),
++        rules=mutate_variable_rules(template.rules, day_number),
++        candidate_count=count,
++        archetype_mix=scale_archetype_mix(base_mix, count),
++        quotas=Quotas(
++            min_correct_admits=config.DAY_MIN_CORRECT_ADMITS(day_number, count),
++            max_false_admits=template.quotas.max_false_admits,
++        ),
++        # The Endless Foreman's copy is chosen by the app from the run's
++        # accuracy trend (core/endless.py), not by day number; these keys are
++        # the generic Endless fallbacks that resolution lands on.
++        overseer_intro_key="endless_intro",
++        overseer_outro_keys={p: f"endless_outro_{p.value}" for p in Performance},
++        allowed_violations=(),
++        difficulty_band=band,
++        forced_includes={},
++        forced_violations={},
++        forced_chat={},
++        rule_sheet=None,
++    )
++
++
+ def load_day(day_number: int) -> Day:
++    # Endless (#7): its own day-number range, built procedurally — never a file.
++    if config.is_endless_day(day_number):
++        return build_endless_day(day_number)
+     path = config.DAYS_DIR / f"day_{day_number:02d}.json"
+     if not path.exists():
+         # No authored content for this day. Synthesize one inside the campaign
+@@ -815,6 +864,12 @@ def kinds_discovered_through(day_number: int) -> frozenset[DiscrepancyKind]:
+     """
+     if day_number < 1:
+         return frozenset()
++    if config.is_endless_day(day_number):
++        # Nothing is gated in Endless, and its archetype set never changes
++        # between shifts (only the weights do), so "discovered so far" is just
++        # what an Endless shift can plant. Walking 1..1001 would also run
++        # straight into the campaign's missing days 21-1000.
++        return frozenset(kinds_the_day_can_plant(load_day(day_number)))
+     discovered: set[DiscrepancyKind] = set()
+     for n in range(1, day_number + 1):
+         discovered |= kinds_the_day_can_plant(load_day(n))
+diff --git a/gameengine/core/endless.py b/gameengine/core/endless.py
+new file mode 100644
+index 0000000..d45a627
+--- /dev/null
++++ b/gameengine/core/endless.py
+@@ -0,0 +1,237 @@
++"""Endless Mode's run rules (#7): starting a run, recording a shift, the
++rolling-accuracy loss condition, the trend the Foreman reacts to, and the
++personal-best record.
++
++The day content itself is `content_loader.build_endless_day`; the difficulty
++curve is `config.curve_day`; shop prices live in `core/shop.py`. This module
++owns only what is Endless-specific about the *run*.
++
++Everything here is a pure function of a GameState (plus the records file for
++the personal best), so it is unit-tested without the TUI.
++"""
++
++from __future__ import annotations
++
++import json
++import random
++from dataclasses import dataclass
++from datetime import date
++from typing import Literal
++
++from .. import config
++from .models import GameMode, GameState, ShiftRecord
++from .candidate_gen import stable_hash
++
++Trend = Literal["rising", "steady", "falling", "new"]
++
++
++# ─── Starting a run ─────────────────────────────────────────────────────────
++
++
++def new_run_seed() -> int:
++    """A fresh seed per Endless run. The campaign plays a fixed seed by design
++    (every player sees the same authored days); Endless is meant to differ run
++    to run — candidates AND the maintenance roll."""
++    return random.SystemRandom().getrandbits(32)
++
++
++def roll_maintenance(seed: int) -> set[str]:
++    """Upgrades under maintenance for this run (Nick, 2026-09-25): a random
++    ENDLESS_MAINTENANCE_COUNT of the catalog, unbuyable until the run ends.
++    Seeded from the run seed, so a reloaded run keeps the same roll."""
++    ids = sorted(uid for uid, *_ in config.UPGRADE_CATALOG)
++    rng = random.Random(stable_hash(seed, "endless_maintenance") & 0xFFFFFFFF)
++    k = max(0, min(config.ENDLESS_MAINTENANCE_COUNT, len(ids)))
++    return set(rng.sample(ids, k))
++
++
++def new_endless_state(seed: int | None = None) -> GameState:
++    """A fresh Endless run at shift 1 with every tool already unlocked."""
++    seed = new_run_seed() if seed is None else seed
++    day_no = config.endless_day_number(1)
++    capacity = config.STARTING_COMPUTE
++    return GameState(
++        seed=seed,
++        current_day=day_no,
++        compute_hours=config.daily_compute_budget(day_no, capacity),
++        compute_capacity=capacity,
++        alignment=config.STARTING_ALIGNMENT,
++        site_health=config.SITE_HEALTH_START,
++        hackdollars=config.ENDLESS_STARTING_HACKDOLLARS,
++        hackdox_credits=config.STARTING_HACKDOX_CREDITS,
++        # No tutorial: the whole kit is live from the first shift.
++        unlocked_tools=config.tools_unlocked_by(day_no),
++        mode=GameMode.ENDLESS.value,
++        maintenance_upgrades=roll_maintenance(seed),
++    )
++
++
++def current_shift(state: GameState) -> int:
++    return config.endless_shift(state.current_day)
++
++
++# ─── Recording a shift & the rolling window ─────────────────────────────────
++
++
++def record_shift(state: GameState, health_delta: float = 0.0,
++                 hd_earned: int = 0) -> ShiftRecord:
++    """Fold the just-finished shift (state.pending_results) into the run's
++    history. Called once per shift, at end of day, before the loss check.
++    Idempotent per shift: recording the same shift twice replaces it."""
++    results = state.pending_results
++    rec = ShiftRecord(
++        shift=current_shift(state),
++        correct=sum(1 for r in results if r.correct),
++        judged=len(results),
++        health_delta=round(health_delta, 2),
++        hd_earned=hd_earned,
++    )
++    if state.shift_history and state.shift_history[-1].shift == rec.shift:
++        old = state.shift_history.pop()
++        state.lifetime_correct -= old.correct
++        state.lifetime_judged  -= old.judged
++    state.shift_history.append(rec)
++    state.lifetime_correct += rec.correct
++    state.lifetime_judged  += rec.judged
++    del state.shift_history[:-config.ENDLESS_HISTORY_KEEP]
++    return rec
++
++
++def _window_accuracy(records: list[ShiftRecord]) -> float | None:
++    judged = sum(r.judged for r in records)
++    if not records or judged == 0:
++        return None
++    return sum(r.correct for r in records) / judged
++
++
++def rolling_accuracy(state: GameState,
++                     window: int = config.ENDLESS_ACCURACY_WINDOW) -> float | None:
++    """Accuracy over the last `window` shifts, weighted by verdicts (a 14-
++    candidate shift counts for more than a 7-candidate one). None before any
++    shift has been recorded."""
++    return _window_accuracy(state.shift_history[-window:])
++
++
++def lifetime_accuracy(state: GameState) -> float | None:
++    if state.lifetime_judged == 0:
++        return None
++    return state.lifetime_correct / state.lifetime_judged
++
++
++def accuracy_check_active(state: GameState) -> bool:
++    """The rolling-accuracy loss only applies once a full window has been
++    played (Nick: after 5 shifts)."""
++    return len(state.shift_history) >= config.ENDLESS_ACCURACY_WINDOW
++
++
++def accuracy_below_loss(state: GameState) -> bool:
++    if not state.is_endless or not accuracy_check_active(state):
++        return False
++    acc = rolling_accuracy(state)
++    return acc is not None and acc < config.ENDLESS_ACCURACY_THRESHOLD
++
++
++def trend(state: GameState) -> Trend:
++    """Which way the run is heading: this window vs. the window one shift
++    earlier. "new" until there are two shifts to compare."""
++    hist = state.shift_history
++    if len(hist) < 2:
++        return "new"
++    w = config.ENDLESS_ACCURACY_WINDOW
++    now  = _window_accuracy(hist[-w:])
++    prev = _window_accuracy(hist[-w - 1:-1])
++    if now is None or prev is None:
++        return "steady"
++    delta = now - prev
++    if delta >= config.ENDLESS_TREND_DEADBAND:
++        return "rising"
++    if delta <= -config.ENDLESS_TREND_DEADBAND:
++        return "falling"
++    return "steady"
++
++
++def in_danger(state: GameState) -> bool:
++    """Rolling accuracy within 10 points of the line — the Foreman's cue to
++    get concerned even if the trend reads steady."""
++    acc = rolling_accuracy(state)
++    return acc is not None and acc < config.ENDLESS_ACCURACY_THRESHOLD + 0.10
++
++
++# ─── Personal best ──────────────────────────────────────────────────────────
++
++
++@dataclass(frozen=True)
++class RunRecord:
++    shifts: int            # shifts fully completed
++    accuracy: float | None # lifetime accuracy for the run
++    hackdollars: int       # HD$ on hand at the end
++    when: str              # ISO date
++
++    def beats(self, other: "RunRecord | None") -> bool:
++        """More shifts wins; accuracy breaks ties."""
++        if other is None:
++            return True
++        if self.shifts != other.shifts:
++            return self.shifts > other.shifts
++        return (self.accuracy or 0.0) > (other.accuracy or 0.0)
++
++    def to_json(self) -> dict:
++        return {"shifts": self.shifts, "accuracy": self.accuracy,
++                "hackdollars": self.hackdollars, "when": self.when}
++
++    @classmethod
++    def from_json(cls, raw: dict) -> "RunRecord":
++        return cls(shifts=int(raw.get("shifts", 0)),
++                   accuracy=raw.get("accuracy"),
++                   hackdollars=int(raw.get("hackdollars", 0)),
++                   when=str(raw.get("when", "")))
++
++
++def run_record(state: GameState) -> RunRecord:
++    return RunRecord(
++        shifts=_shifts_completed(state),
++        accuracy=lifetime_accuracy(state),
++        hackdollars=state.hackdollars,
++        when=date.today().isoformat(),
++    )
++
++
++def _shifts_completed(state: GameState) -> int:
++    # The history is trimmed, but its last entry still carries the shift number.
++    return state.shift_history[-1].shift if state.shift_history else 0
++
++
++def load_records() -> dict:
++    path = config.ENDLESS_RECORDS_FILE
++    if not path.exists():
++        return {"best": None, "runs": 0}
++    try:
++        raw = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return {"best": None, "runs": 0}
++    return {"best": raw.get("best"), "runs": int(raw.get("runs", 0))}
++
++
++def personal_best() -> RunRecord | None:
++    best = load_records()["best"]
++    return RunRecord.from_json(best) if best else None
++
++
++def finish_run(state: GameState) -> tuple[RunRecord, RunRecord | None, bool]:
++    """Close out an Endless run: update the records file and clear the run's
++    save slot (a lost run can't be continued). Returns (this run, the previous
++    best, whether this run is the new best)."""
++    rec = run_record(state)
++    records = load_records()
++    prev = RunRecord.from_json(records["best"]) if records["best"] else None
++    is_new_best = rec.beats(prev)
++    out = {"best": rec.to_json() if is_new_best else records["best"],
++           "runs": records["runs"] + 1}
++    tmp = config.ENDLESS_RECORDS_FILE.with_suffix(".tmp")
++    tmp.write_text(json.dumps(out, indent=2), encoding="utf-8")
++    tmp.replace(config.ENDLESS_RECORDS_FILE)
++    try:
++        config.ENDLESS_SAVE_FILE.unlink()
++    except FileNotFoundError:
++        pass
++    return rec, prev, is_new_best
+diff --git a/gameengine/core/models.py b/gameengine/core/models.py
+index eae998e..41e16e2 100644
+--- a/gameengine/core/models.py
++++ b/gameengine/core/models.py
+@@ -36,6 +36,18 @@ class Archetype(str, Enum):
+     THE_INCOMPATIBLE = "the_incompatible" # disposable email domain — quick deny
+ 
+ 
++class GameMode(str, Enum):
++    """Which game a GameState belongs to (#7).
++
++    Stored in the save file. Each mode has its own save slot
++    (config.save_file_for), and a save with no mode recorded predates Endless
++    and is therefore a campaign save.
++    """
++
++    CAMPAIGN = "campaign"
++    ENDLESS  = "endless"
++
++
+ class Verdict(str, Enum):
+     ADMIT = "admit"
+     DENY  = "deny"
+@@ -479,6 +491,26 @@ class DayResult:
+     final_alignment: int
+ 
+ 
++@dataclass(frozen=True)
++class ShiftRecord:
++    """One finished Endless shift, as the rolling-accuracy window sees it (#7).
++
++    Deliberately flat and JSON-friendly — it is persisted. `judged` counts
++    verdicts actually given; accuracy is `correct / judged` on the MORAL
++    track (CandidateResult.correct), the same one the economy pays out on.
++    """
++
++    shift: int
++    correct: int
++    judged: int
++    health_delta: float = 0.0
++    hd_earned: int = 0
++
++    @property
++    def accuracy(self) -> float:
++        return self.correct / self.judged if self.judged else 1.0
++
++
+ # Upgrade IDs are strings (e.g. "auto_flag_breaches") for forward-compat.
+ UpgradeId = str
+ 
+@@ -516,6 +548,25 @@ class GameState:
+     # config.TOOL_UNLOCK_DAY on load, so a mid-campaign player isn't locked out.
+     unlocked_tools: set[str] = field(default_factory=set)
+     completed_days: list[DayResult] = field(default_factory=list)
++    # ── Endless (#7) ──
++    # Which game this state belongs to — a GameMode value string.
++    mode: str = GameMode.CAMPAIGN.value
++    # The most recent config.ENDLESS_HISTORY_KEEP shifts, oldest first. The
++    # rolling-accuracy loss condition reads the tail of this list.
++    shift_history: list[ShiftRecord] = field(default_factory=list)
++    # Lifetime tallies for the whole run (the history above is trimmed).
++    lifetime_correct: int = 0
++    lifetime_judged: int = 0
++    # Upgrade ids under maintenance — unbuyable for this run. Rolled once when
++    # an Endless run starts; always empty in the campaign.
++    maintenance_upgrades: set[str] = field(default_factory=set)
++    # How many times each escalating shop item has been bought this run
++    # ("capacity", "site_patch"), which is what drives its price upward.
++    shop_purchases: dict[str, int] = field(default_factory=dict)
+     # In-progress-day fields -- populated only mid-day:
+     current_slot_index: int = 0
+     pending_results: list[CandidateResult] = field(default_factory=list)
++
++    @property
++    def is_endless(self) -> bool:
++        return self.mode == GameMode.ENDLESS.value
+diff --git a/gameengine/core/overseer.py b/gameengine/core/overseer.py
+index e58d091..3bec61f 100644
+--- a/gameengine/core/overseer.py
++++ b/gameengine/core/overseer.py
+@@ -275,3 +275,63 @@ def ending_for_state(state: GameState) -> Ending:
+     factor beyond alignment has somewhere natural to be added.
+     """
+     return ending_for_alignment(state.alignment)
++
++
++# ─── Endless: the cooperative Foreman (#7) ───────────────────────────────────
++#
++# In Endless the Foreman is on the player's side. Her lines don't key on day
++# number or alignment (Endless has neither arc nor alignment) but on how the
++# RUN is going — the rolling-accuracy trend from core/endless.py:
++#
++#   intro   endless_intro_first (shift 1) · endless_intro_danger (near the
++#           line) · endless_intro_<trend>  →  endless_intro  →  generic_intro
++#   outro   endless_outro_<performance>    →  generic_outro_<performance>
++#   between endless_between_lost · endless_between_danger ·
++#           endless_between_<trend>  →  endless_between  →  generic_between
++#
++# where <trend> is new / rising / steady / falling. Any key may be authored as
++# several numbered variants — `endless_intro_rising`, `endless_intro_rising_2`,
++# `_3` ... — and one is picked per shift, deterministically from the run seed,
++# so a long run doesn't hear the same line every night.
++
++def _pick_variant(narratives: dict[str, str], key: str, salt: tuple) -> str | None:
++    from .candidate_gen import stable_hash
++    variants = [narratives[key]] if narratives.get(key) else []
++    n = 2
++    while narratives.get(f"{key}_{n}"):
++        variants.append(narratives[f"{key}_{n}"])
++        n += 1
++    if not variants:
++        return None
++    return variants[stable_hash(key, *salt) % len(variants)]
++
++
++def resolve_endless_narrative(narratives: dict[str, str], state: GameState,
++                              beat: str, performance=None) -> str:
++    """The Endless Foreman's line for `beat` ("intro" / "outro" / "between")."""
++    from . import endless
++    shift = endless.current_shift(state)
++    salt = (state.seed, shift)
++    tr = endless.trend(state)
++    danger = endless.accuracy_check_active(state) and endless.in_danger(state)
++    if beat == "intro":
++        chain = (["endless_intro_first"] if shift <= 1 else [])
++        chain += (["endless_intro_danger"] if danger else [])
++        chain += [f"endless_intro_{tr}", "endless_intro"]
++        generic = "generic_intro"
++    elif beat == "outro":
++        perf = performance.value if performance is not None else "passing"
++        chain = [f"endless_outro_{perf}"]
++        generic = f"generic_outro_{perf}"
++    elif beat == "between":
++        chain = (["endless_between_lost"] if endless.accuracy_below_loss(state) else [])
++        chain += (["endless_between_danger"] if danger else [])
++        chain += [f"endless_between_{tr}", "endless_between"]
++        generic = "generic_between"
++    else:
++        raise ValueError(f"unknown Endless narrative beat {beat!r}")
++    for key in chain:
++        line = _pick_variant(narratives, key, salt)
++        if line:
++            return line
++    return resolve_narrative(narratives, generic, generic)
+diff --git a/gameengine/core/persistence.py b/gameengine/core/persistence.py
+index 1a0f06f..6f23111 100644
+--- a/gameengine/core/persistence.py
++++ b/gameengine/core/persistence.py
+@@ -1,16 +1,23 @@
+-"""Save/load GameState as JSON. Single slot for v1."""
++"""Save/load GameState as JSON. One slot per game mode (#7): the campaign's
++`slot_0.json` and Endless's `endless_0.json` never touch each other."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ 
+ from .. import config
+-from .models import GameState
++from .models import GameMode, GameState, ShiftRecord
++
++# Bumped when the payload gains fields a newer loader relies on. v1 = pre-#7
++# (no "version" key at all), v2 = mode / Endless run fields.
++SAVE_VERSION = 2
+ 
+ 
+ def save(state: GameState) -> None:
+-    """Atomic write — tmp file, then rename."""
++    """Atomic write — tmp file, then rename — into the state's own mode slot."""
+     payload = {
++        "version":            SAVE_VERSION,
++        "mode":               state.mode,
+         "seed":               state.seed,
+         "current_day":        state.current_day,
+         "compute_hours":      state.compute_hours,
+@@ -22,19 +29,38 @@ def save(state: GameState) -> None:
+         "upgrades":           sorted(state.upgrades),
+         "unlocked_tools":     sorted(state.unlocked_tools),
+         "current_slot_index": state.current_slot_index,
++        # Endless run fields (#7). Harmless empties on a campaign save.
++        "shift_history": [
++            {"shift": r.shift, "correct": r.correct, "judged": r.judged,
++             "health_delta": r.health_delta, "hd_earned": r.hd_earned}
++            for r in state.shift_history
++        ],
++        "lifetime_correct":     state.lifetime_correct,
++        "lifetime_judged":      state.lifetime_judged,
++        "maintenance_upgrades": sorted(state.maintenance_upgrades),
++        "shop_purchases":       dict(state.shop_purchases),
+         # DayResult / CandidateResult round-trip deferred to v1.1 —
+         # saves happen at EOD only so mid-day resume isn't needed yet.
+     }
+-    tmp = config.SAVE_FILE.with_suffix(".tmp")
++    path = config.save_file_for(state.mode)
++    tmp = path.with_suffix(".tmp")
+     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+-    tmp.replace(config.SAVE_FILE)
++    tmp.replace(path)
++
+ 
++def exists(mode: str = GameMode.CAMPAIGN.value) -> bool:
++    return config.save_file_for(mode).exists()
+ 
+-def load() -> GameState | None:
+-    if not config.SAVE_FILE.exists():
++
++def load(mode: str = GameMode.CAMPAIGN.value) -> GameState | None:
++    path = config.save_file_for(mode)
++    if not path.exists():
+         return None
+-    raw = json.loads(config.SAVE_FILE.read_text(encoding="utf-8"))
++    raw = json.loads(path.read_text(encoding="utf-8"))
+     state = GameState(seed=raw["seed"])
++    # A save with no "mode" predates Endless, and Endless has never written
++    # to the campaign slot — so it is a campaign save.
++    state.mode = raw.get("mode", GameMode.CAMPAIGN.value)
+     state.current_day    = raw.get("current_day", 1)
+     state.compute_hours  = raw.get("compute_hours",
+                                    raw.get("currency", config.STARTING_COMPUTE))
+@@ -47,8 +73,33 @@ def load() -> GameState | None:
+     # Progressive unlock (#31). A pre-#31 save has no "unlocked_tools" key;
+     # backfill it from the schedule for the save's current day so a
+     # mid-campaign player keeps the tools they've already earned instead of
+-    # loading in fully locked.
++    # loading in fully locked. (An Endless day number sits above every unlock
++    # day, so the same backfill yields the full kit there.)
+     state.unlocked_tools = (set(raw["unlocked_tools"]) if "unlocked_tools" in raw
+                             else config.tools_unlocked_by(state.current_day))
+     state.current_slot_index = raw.get("current_slot_index", 0)
++    state.shift_history = [
++        ShiftRecord(shift=int(r["shift"]), correct=int(r["correct"]),
++                    judged=int(r["judged"]),
++                    health_delta=float(r.get("health_delta", 0.0)),
++                    hd_earned=int(r.get("hd_earned", 0)))
++        for r in raw.get("shift_history", [])
++    ]
++    state.lifetime_correct     = raw.get("lifetime_correct", 0)
++    state.lifetime_judged      = raw.get("lifetime_judged", 0)
++    state.maintenance_upgrades = set(raw.get("maintenance_upgrades", []))
++    state.shop_purchases       = dict(raw.get("shop_purchases", {}))
+     return state
++
++
++def describe(mode: str) -> str | None:
++    """One-line summary of a slot for the main menu ("Day 7 · 180 HD$"), or
++    None if the slot is empty or unreadable. Reads the file directly — the
++    menu must never crash on a damaged save."""
++    try:
++        state = load(mode)
++    except (OSError, ValueError, KeyError, TypeError):
++        return None
++    if state is None:
++        return None
++    return f"{config.day_label(state.current_day)} · {state.hackdollars} HD$"
+diff --git a/gameengine/core/shop.py b/gameengine/core/shop.py
+new file mode 100644
+index 0000000..2108eb2
+--- /dev/null
++++ b/gameengine/core/shop.py
+@@ -0,0 +1,134 @@
++"""The between-day HackDollar$ shop's rules — what's for sale, what it costs,
++and what buying it does (#22, #23, #25; Endless economy #7).
++
++Lifted out of BetweenDayScreen so the rules are testable without the TUI and
++so the campaign and Endless share one shop that differs only where the
++config says it should:
++
++  • Endless puts a per-run random set of upgrades under MAINTENANCE.
++  • Endless escalates the ⏱-capacity price with every purchase.
++  • Endless sells a Site Patch (repair Site Health), also escalating.
++  • Endless has more HackDox Credit slots.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Literal
++
++from .. import config
++from .models import GameState
++
++ItemKind = Literal["header", "credit", "capacity", "site_patch", "upgrade"]
++Status = Literal["owned", "full", "maintenance", "afford", "poor"]
++
++
++@dataclass(frozen=True)
++class ShopItem:
++    kind: ItemKind
++    iid: str
++    label: str
++    desc: str = ""
++
++
++def credit_cap(state: GameState) -> int:
++    return (config.ENDLESS_HACKDOX_CREDIT_MAX if state.is_endless
++            else config.HACKDOX_CREDIT_MAX)
++
++
++def capacity_price(state: GameState) -> int:
++    bought = state.shop_purchases.get("capacity", 0)
++    step = config.SHOP_CAPACITY_PRICE_STEP if state.is_endless else 0
++    return config.SHOP_PRICE_CAPACITY + step * bought
++
++
++def site_patch_price(state: GameState) -> int:
++    bought = state.shop_purchases.get("site_patch", 0)
++    return config.SHOP_PRICE_SITE_PATCH + config.SHOP_SITE_PATCH_PRICE_STEP * bought
++
++
++_UPGRADE_PRICE = {uid: price for uid, _l, price, _d in config.UPGRADE_CATALOG}
++
++
++def price_of(state: GameState, item: ShopItem) -> int:
++    if item.kind == "credit":
++        return config.SHOP_PRICE_CREDIT
++    if item.kind == "capacity":
++        return capacity_price(state)
++    if item.kind == "site_patch":
++        return site_patch_price(state)
++    if item.kind == "upgrade":
++        return _UPGRADE_PRICE[item.iid]
++    return 0
++
++
++def items_for(state: GameState) -> list[ShopItem]:
++    """The shop's rows, in display order, including non-buyable headers."""
++    items: list[ShopItem] = [
++        ShopItem("header", "", "General"),
++        ShopItem("credit", "hackdox_credit", "HackDox Credit +1",
++                 f"ground-truth reveal charge (max {credit_cap(state)} slots)"),
++        ShopItem("capacity", "compute_capacity",
++                 f"Compute Capacity +{config.COMPUTE_CAPACITY_STEP} ⏱",
++                 "permanently raise the per-shift computing-hours budget"
++                 + (" — costs more each time" if state.is_endless else "")),
++    ]
++    if state.is_endless:
++        items.append(ShopItem(
++            "site_patch", "site_patch",
++            f"Site Patch +{config.SITE_PATCH_HEALTH:.0f}% ⛨",
++            "repair Site Health overnight — costs more each time"))
++    by_cat: dict[str, list[ShopItem]] = {c: [] for c in config.UPGRADE_CATEGORY_ORDER}
++    for uid, label, _price, desc in config.UPGRADE_CATALOG:
++        by_cat[config.UPGRADE_CATEGORY[uid]].append(
++            ShopItem("upgrade", uid, label, desc))
++    for cat in config.UPGRADE_CATEGORY_ORDER:
++        if by_cat[cat]:
++            items.append(ShopItem("header", "", cat))
++            items.extend(by_cat[cat])
++    return items
++
++
++def status_of(state: GameState, item: ShopItem) -> Status:
++    if item.kind == "upgrade":
++        if item.iid in state.upgrades:
++            return "owned"
++        if item.iid in state.maintenance_upgrades:
++            return "maintenance"
++    if item.kind == "credit" and state.hackdox_credits >= credit_cap(state):
++        return "full"
++    if item.kind == "site_patch" and state.site_health >= config.SITE_HEALTH_MAX:
++        return "full"
++    return "afford" if state.hackdollars >= price_of(state, item) else "poor"
++
++
++def buy(state: GameState, item: ShopItem) -> tuple[bool, str]:
++    """Attempt a purchase. Mutates `state` only on success. Returns
++    (succeeded, player-facing message)."""
++    if item.kind == "header":
++        return False, ""
++    status = status_of(state, item)
++    if status == "owned":
++        return False, f"{item.label} already owned"
++    if status == "maintenance":
++        return False, f"{item.label} is under maintenance for this run"
++    if status == "full":
++        return False, ("credit slots full" if item.kind == "credit"
++                       else "Site Health is already at full")
++    price = price_of(state, item)
++    if status == "poor":
++        return False, (f"insufficient HackDollar$ — need {price}, "
++                       f"have {state.hackdollars}")
++    state.hackdollars -= price
++    if item.kind == "upgrade":
++        state.upgrades.add(item.iid)
++    elif item.kind == "credit":
++        state.hackdox_credits += 1
++    elif item.kind == "capacity":
++        state.compute_capacity += config.COMPUTE_CAPACITY_STEP
++    elif item.kind == "site_patch":
++        state.site_health = min(config.SITE_HEALTH_MAX,
++                                state.site_health + config.SITE_PATCH_HEALTH)
++    if item.kind in ("capacity", "site_patch"):
++        state.shop_purchases[item.kind] = state.shop_purchases.get(item.kind, 0) + 1
++    return True, f"purchased {item.label}  (−{price} HD$)"
+diff --git a/gameengine/core/tools_bridge.py b/gameengine/core/tools_bridge.py
+index e70d8da..867458f 100644
+--- a/gameengine/core/tools_bridge.py
++++ b/gameengine/core/tools_bridge.py
+@@ -1612,13 +1612,17 @@ def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
+         crng = _random.Random(_stable_hash(game_seed, day.number, slot, "lw_entries") & 0xFFFFFFFF)
+         all_entries.extend(_lw_candidate_entries(cand, crng, day.number))
+ 
+-    # Noise count from config — scaled per day
+-    base_noise = _cfg.LW_ENTRIES_BY_DAY.get(day.number, _cfg.LW_ENTRIES_DEFAULT)
++    # Noise count from config — scaled per day. Reads the CURVE day (Endless
++    # maps its shift onto a campaign-equivalent day; identity in the campaign)
++    # and is capped at LW_ENTRIES_MAX so the geometric growth can't run away.
++    cday       = _cfg.curve_day(day.number)
++    base_noise = _cfg.LW_ENTRIES_BY_DAY.get(cday, _cfg.LW_ENTRIES_DEFAULT)
+     last_key   = max(_cfg.LW_ENTRIES_BY_DAY.keys()) if _cfg.LW_ENTRIES_BY_DAY else 1
+-    if day.number > last_key:
+-        extra_days = day.number - last_key
++    if cday > last_key:
++        extra_days = cday - last_key
+         base_noise = int(_cfg.LW_ENTRIES_BY_DAY.get(last_key, _cfg.LW_ENTRIES_DEFAULT)
+                          * (_cfg.LW_ENTRIES_SCALE_FACTOR ** extra_days))
++    base_noise   = min(base_noise, _cfg.LW_ENTRIES_MAX)
+     target_noise = max(_cfg.LW_ENTRIES_MIN, base_noise - len(all_entries))
+     all_entries.extend(_lw_noise_entries(rng, target_noise))
+     all_entries.sort(key=lambda e: e.ts_secs)
+@@ -2700,7 +2704,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
+     def _sized(kind_key: str) -> tuple[int, int]:
+         """Base grid for this payload type, grown by day and capped."""
+         base_c, base_r = config.STEGO_GRID_BASE[kind_key]
+-        extra = max(0, day - 1)
++        extra = max(0, config.curve_day(day) - 1)
+         cols = base_c + extra * config.STEGO_GRID_GROWTH_COLS_PER_DAY
+         rows = base_r + extra * config.STEGO_GRID_GROWTH_ROWS_PER_DAY
+         max_c, max_r = config.STEGO_GRID_MAX
+@@ -3263,7 +3267,7 @@ def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
+     _lbl, _col, algo, _desc = _CIPHER_TIER_META[tier]
+ 
+     base_c, base_r = config.CIPHER_GRID_BASE[tier]
+-    extra = max(0, day - 1)
++    extra = max(0, config.curve_day(day) - 1)
+     cols = base_c + extra * config.CIPHER_GRID_GROWTH_COLS_PER_DAY
+     rows = base_r + extra // config.CIPHER_GRID_GROWTH_ROWS_PERIOD
+     max_c, max_r = config.CIPHER_GRID_MAX
+diff --git a/gameengine/tests/test_balance.py b/gameengine/tests/test_balance.py
+new file mode 100644
+index 0000000..ef20bbe
+--- /dev/null
++++ b/gameengine/tests/test_balance.py
+@@ -0,0 +1,74 @@
++"""Balance guards (#70 campaign pass, #7 Endless) — the properties the
++2026-09-25 balance pass tuned for, asserted through the same simulator
++(`sim_balance.py`, repo root) so a later config retune that breaks one fails
++here instead of in a playtest.
++
++These assert DESIGN TARGETS, not exact numbers, so ordinary tuning inside the
++targets never needs this file touched.
++"""
++
++from __future__ import annotations
++
++import sys
++from pathlib import Path
++
++import pytest
++
++from gameengine import config
++from gameengine.core.content_loader import load_day
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
++import sim_balance as sb  # noqa: E402
++
++SEEDS = list(range(1, 5))
++
++
++@pytest.fixture(scope="module")
++def campaign():
++    days = [(f"D{n}", load_day(n)) for n in range(1, config.CAMPAIGN_LAST_DAY + 1)]
++    return sb.walk(days, SEEDS, config.STARTING_COMPUTE)
++
++
++@pytest.fixture(scope="module")
++def endless_run():
++    days = [(f"S{s}", load_day(config.endless_day_number(s))) for s in range(1, 41)]
++    return sb.walk(days, SEEDS, config.STARTING_COMPUTE)
++
++
++def test_correct_play_is_always_affordable(campaign, endless_run):
++    """#70 AC: no day makes correct play impossible on ⏱ — the cheapest
++    decisive evidence for every deny fits the day's budget, worst seed."""
++    for d in [*campaign, *endless_run]:
++        assert d.need_max <= d.budget, f"{d.label}: need {d.need_max} > budget {d.budget}"
++
++
++def test_nobody_can_buy_the_whole_catalog_by_day_20(campaign, endless_run):
++    """Nick (2026-09-25): buying every upgrade by day 20 must be impossible, in
++    both modes — even for a perfect player who spends on nothing else."""
++    cat = sb.catalog_total()
++    for stats, label in ((campaign, "campaign"), (endless_run, "endless")):
++        for p in (sb.PERFECT, sb.Profile("perfect-resist", 1.0, 1.0, "deny")):
++            bank = sb.expected_economy(stats, p)[19]["bank"]
++            assert bank < 0.9 * cat, f"{label}/{p.name}: {bank:.0f} of {cat}"
++    # ...while a solid player can still afford a meaningful chunk of it.
++    solid = sb.expected_economy(campaign, sb.PROFILES[1])[19]["bank"]
++    assert solid > 0.35 * cat
++
++
++def test_both_alignment_paths_are_finishable(campaign):
++    """#70 AC plays the campaign on both alignments. Admitting the Dark Web is
++    the scored-correct verdict, so a skilled by-the-book player must be able to
++    reach day 20 — this is what the old −8 Dark Web weight broke."""
++    for dw in ("admit", "deny"):
++        for base in (sb.PERFECT, sb.PROFILES[0], sb.PROFILES[1]):
++            p = sb.Profile(base.name, base.accuracy, base.board, dw)
++            health = sb.expected_economy(campaign, p)[-1]["health"]
++            assert health > config.SITE_HEALTH_LOSS_THRESHOLD, (dw, p.name, health)
++
++
++def test_endless_rewards_skill_without_guaranteed_failure(endless_run):
++    """A sharp player's site holds at the plateau; a sloppy one's collapses."""
++    sharp = sb.expected_economy(endless_run, sb.PROFILES[0])
++    shaky = sb.expected_economy(endless_run, sb.PROFILES[2])
++    assert sharp[-1]["health"] >= config.SITE_HEALTH_REWARD_THRESHOLD
++    assert shaky[-1]["health"] < config.SITE_HEALTH_LOSS_THRESHOLD
+diff --git a/gameengine/tests/test_endless.py b/gameengine/tests/test_endless.py
+new file mode 100644
+index 0000000..7ecddb7
+--- /dev/null
++++ b/gameengine/tests/test_endless.py
+@@ -0,0 +1,472 @@
++"""Endless Mode (#7).
++
++Organised around the things that would quietly ruin it:
++
++  * **The campaign must not move.** Endless lives in its own day-number range
++    (config.ENDLESS_DAY_BASE); only the difficulty curves are remapped, through
++    config.curve_day, and that must be the identity on every campaign day.
++  * **Nothing gated, nothing from the campaign.** Shift 1 has the whole kit;
++    no Dark Web or White Hat ever appears; authored campaign days are never
++    read; no tutorial beats play.
++  * **Bounded.** Every curve plateaus — no shift, however late, becomes
++    arithmetically unplayable or blows up the log volume.
++  * **The run's rules.** Rolling accuracy (70% over 5 shifts, only once 5 are
++    played), separate save slot, maintenance roll, escalating shop, personal
++    best.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++from dataclasses import replace
++
++import pytest
++
++from gameengine import config
++from gameengine.core import candidate_gen, content_loader, endless, persistence, shop, tools_bridge
++from gameengine.core.content_loader import kinds_discovered_through, load_day
++from gameengine.core.models import (
++    Archetype,
++    CandidateResult,
++    GameMode,
++    GameState,
++    Performance,
++    ShiftRecord,
++    Verdict,
++)
++from gameengine.core.overseer import resolve_endless_narrative
++
++ALL_TOOLS = {t for t in config.TOOL_UNLOCK_DAY if t != "dossier"}
++FAR = 500   # "as late as anyone will ever play"
++
++
++def E(shift: int) -> int:
++    return config.endless_day_number(shift)
++
++
++@pytest.fixture
++def slots(tmp_path, monkeypatch):
++    """Point every save/record file at a temp dir — tests must never touch the
++    player's real saves."""
++    monkeypatch.setattr(config, "SAVE_FILE", tmp_path / "slot_0.json")
++    monkeypatch.setattr(config, "ENDLESS_SAVE_FILE", tmp_path / "endless_0.json")
++    monkeypatch.setattr(config, "ENDLESS_RECORDS_FILE", tmp_path / "endless_records.json")
++    return tmp_path
++
++
++def _state_with_history(accs: list[tuple[int, int]]) -> GameState:
++    st = endless.new_endless_state(seed=7)
++    for i, (correct, judged) in enumerate(accs, start=1):
++        st.shift_history.append(ShiftRecord(shift=i, correct=correct, judged=judged))
++        st.lifetime_correct += correct
++        st.lifetime_judged += judged
++    st.current_day = E(len(accs) + 1)
++    return st
++
++
++# ─── The campaign does not move ─────────────────────────────────────────────
++
++
++def test_curve_day_is_the_identity_on_every_campaign_day():
++    for n in range(1, config.CAMPAIGN_LAST_DAY + 1):
++        assert config.curve_day(n) == n
++        assert not config.is_endless_day(n)
++
++
++def test_the_endless_range_sits_above_every_unlock_day():
++    top = max(config.CAMPAIGN_LAST_DAY, *config.TOOL_UNLOCK_DAY.values(),
++              *config.BREACH_DB_UNLOCK_DAY.values(),
++              *(on for _b, on, _a in candidate_gen._SEVERITY_BY_DAY.values()))
++    assert E(1) > top
++
++
++# ─── The curve: Option A, a bit past the campaign, then flat ────────────────
++
++
++def test_endless_curve_shape():
++    days = [config.endless_curve_day(s) for s in range(1, FAR + 1)]
++    assert days[0] == config.ENDLESS_CURVE_START
++    assert days[config.ENDLESS_CURVE_CAMPAIGN_SHIFT - 1] == config.CAMPAIGN_LAST_DAY
++    assert max(days) == config.ENDLESS_CURVE_CEILING > config.CAMPAIGN_LAST_DAY
++    assert all(a <= b for a, b in zip(days, days[1:])), "curve must never ease off"
++    ceil_at = days.index(config.ENDLESS_CURVE_CEILING) + 1
++    assert ceil_at == config.ENDLESS_CURVE_CEILING_SHIFT
++    assert set(days[ceil_at - 1:]) == {config.ENDLESS_CURVE_CEILING}, "must plateau"
++
++
++def test_every_difficulty_lever_plateaus():
++    at_ceiling, far = E(config.ENDLESS_CURVE_CEILING_SHIFT), E(FAR)
++    for fn in (config.DAY_CANDIDATE_COUNT, config.tool_cost_inflation,
++               config.difficulty_band_for_day):
++        assert fn(far) == fn(at_ceiling)
++    assert (config.daily_compute_budget(far, 60)
++            == config.daily_compute_budget(at_ceiling, 60))
++    assert config.DAY_REWARD_PAYOUT(far, True) == config.DAY_REWARD_PAYOUT(at_ceiling, True)
++    assert config.DAY_CANDIDATE_COUNT(far) <= config.ENDLESS_CANDIDATE_COUNT_CAP
++    # ...and ends a bit harder than the campaign's last day.
++    last = config.CAMPAIGN_LAST_DAY
++    assert config.DAY_CANDIDATE_COUNT(far) > config.DAY_CANDIDATE_COUNT(last)
++    assert config.tool_cost_inflation(far) >= config.tool_cost_inflation(last)
++
++
++def test_logwatch_volume_is_capped():
++    """The raw curve is ×1.15/day — ~12,000 rows by day 40 without the cap."""
++    day = load_day(E(FAR))
++    noise = [e for e in tools_bridge.generate_day_log(3, day)]
++    assert len(noise) <= config.LW_ENTRIES_MAX + 20 * day.candidate_count
++
++
++def test_grids_are_capped_far_out():
++    day = load_day(E(FAR))
++    for slot in range(day.candidate_count):
++        c = candidate_gen.generate(11, day, slot)
++        img = tools_bridge.build_stego_image(c, day.number)
++        blk = tools_bridge.build_cipher_block(c, day.number)
++        assert img.cols <= config.STEGO_GRID_MAX[0] and img.rows <= config.STEGO_GRID_MAX[1]
++        assert blk.cols <= config.CIPHER_GRID_MAX[0] and blk.rows <= config.CIPHER_GRID_MAX[1]
++
++
++# ─── Nothing gated, nothing from the campaign ───────────────────────────────
++
++
++def test_shift_one_has_the_whole_kit():
++    st = endless.new_endless_state(seed=1)
++    assert st.is_endless and st.unlocked_tools == ALL_TOOLS
++    assert config.breach_dbs_unlocked_by(st.current_day) == \
++        config.breach_dbs_unlocked_by(config.CAMPAIGN_LAST_DAY)
++    for s in range(1, 30):
++        assert config.tool_introduced_on(E(s)) is None, "a tutorial unlock beat would play"
++    # Every kind the campaign ever teaches (bar the Dark-Web-only arc) is live.
++    assert kinds_discovered_through(E(1)) >= (
++        kinds_discovered_through(config.CAMPAIGN_LAST_DAY)
++        - _dark_web_and_white_hat_only_kinds())
++
++
++def _dark_web_and_white_hat_only_kinds():
++    day = content_loader.synthesize_day(config.CAMPAIGN_LAST_DAY - 1)
++    without = replace(day, archetype_mix={
++        a: n for a, n in day.archetype_mix.items()
++        if a not in (Archetype.DARK_WEB, Archetype.WHITE_HAT)})
++    return (candidate_gen.kinds_the_day_can_plant(day)
++            - candidate_gen.kinds_the_day_can_plant(without))
++
++
++def test_no_dark_web_or_white_hat_ever():
++    for shift in (1, 2, 5, 9, 15, 22, 30, 60):
++        day = load_day(E(shift))
++        assert not ({Archetype.DARK_WEB, Archetype.WHITE_HAT} & set(day.archetype_mix))
++        for seed in (1, 99):
++            for slot in range(day.candidate_count):
++                c = candidate_gen.generate(seed, day, slot)
++                assert c.archetype not in (Archetype.DARK_WEB, Archetype.WHITE_HAT)
++                assert c.truth.moral_modifier == 0
++
++
++def test_endless_days_never_read_authored_campaign_content():
++    for shift in range(1, 25):
++        day = load_day(E(shift))
++        assert day.title == f"Shift {shift}"
++        assert not day.forced_includes and not day.forced_violations
++        assert day.rule_sheet is None
++        assert all(r.mutability != "dark_web" for r in day.rules)
++        assert not day.directive_removed_rule_ids
++        assert day.overseer_intro_key.startswith("endless_")
++
++
++def test_rules_still_flip_between_shifts():
++    """#7 keeps Overseer-Variable changes — cooperatively explained, but real."""
++    from gameengine.core import rules_engine
++    changed = sum(bool(rules_engine.diff_rulesets(load_day(E(s)), load_day(E(s + 1))))
++                  for s in range(1, 30))
++    assert changed > 0
++
++
++# ─── The rolling-accuracy loss condition ────────────────────────────────────
++
++
++def test_accuracy_loss_waits_for_a_full_window():
++    st = _state_with_history([(0, 8)] * (config.ENDLESS_ACCURACY_WINDOW - 1))
++    assert not endless.accuracy_check_active(st)
++    assert not endless.accuracy_below_loss(st), "a bad start must not end the run"
++    st = _state_with_history([(0, 8)] * config.ENDLESS_ACCURACY_WINDOW)
++    assert endless.accuracy_below_loss(st)
++
++
++def test_accuracy_threshold_boundary_and_weighting():
++    # exactly on the line survives
++    st = _state_with_history([(7, 10)] * 5)
++    assert endless.rolling_accuracy(st) == pytest.approx(0.70)
++    assert not endless.accuracy_below_loss(st)
++    # verdict-weighted, not shift-averaged: 13/14 and 0/1 is 13/15, not 50%
++    st = _state_with_history([(7, 10)] * 3 + [(13, 14), (0, 1)])
++    assert endless.rolling_accuracy(st) == pytest.approx((21 + 13) / (30 + 15))
++    # only the last WINDOW shifts count
++    st = _state_with_history([(0, 10)] * 10 + [(10, 10)] * 5)
++    assert endless.rolling_accuracy(st) == 1.0
++
++
++def test_the_campaign_never_trips_the_accuracy_rule():
++    st = _state_with_history([(0, 8)] * 8)
++    st.mode = GameMode.CAMPAIGN.value
++    assert not endless.accuracy_below_loss(st)
++
++
++def test_trend():
++    assert endless.trend(_state_with_history([(5, 10)])) == "new"
++    assert endless.trend(_state_with_history([(5, 10)] * 5 + [(10, 10)])) == "rising"
++    assert endless.trend(_state_with_history([(9, 10)] * 5 + [(2, 10)])) == "falling"
++    assert endless.trend(_state_with_history([(8, 10)] * 6)) == "steady"
++
++
++def _result(correct: bool) -> CandidateResult:
++    return CandidateResult("x", Archetype.BAD_ACTOR, Verdict.DENY, correct, 0, 0, 0.0, 0)
++
++
++def test_record_shift_is_idempotent_per_shift():
++    st = endless.new_endless_state(seed=3)
++    st.pending_results = [_result(True), _result(False)]
++    endless.record_shift(st)
++    endless.record_shift(st)   # e.g. quit at EOD, resumed, replayed the shift
++    assert len(st.shift_history) == 1
++    assert (st.lifetime_correct, st.lifetime_judged) == (1, 2)
++
++
++def test_history_is_trimmed_but_lifetime_totals_are_not():
++    st = _state_with_history([(1, 2)] * (config.ENDLESS_HISTORY_KEEP + 10))
++    st.pending_results = [_result(True)]
++    endless.record_shift(st)
++    assert len(st.shift_history) == config.ENDLESS_HISTORY_KEEP
++    assert st.lifetime_judged == 2 * (config.ENDLESS_HISTORY_KEEP + 10) + 1
++
++
++# ─── Separate save slots ────────────────────────────────────────────────────
++
++
++def test_endless_and_campaign_saves_never_touch(slots):
++    camp = GameState(seed=1, current_day=7, hackdollars=180)
++    persistence.save(camp)
++    run = endless.new_endless_state(seed=2)
++    run.shift_history.append(ShiftRecord(shift=1, correct=6, judged=7))
++    run.shop_purchases["capacity"] = 2
++    persistence.save(run)
++
++    assert config.SAVE_FILE.exists() and config.ENDLESS_SAVE_FILE.exists()
++    c = persistence.load(GameMode.CAMPAIGN.value)
++    e = persistence.load(GameMode.ENDLESS.value)
++    assert (c.mode, c.current_day, c.hackdollars) == ("campaign", 7, 180)
++    assert e.is_endless and e.shift_history == run.shift_history
++    assert e.maintenance_upgrades == run.maintenance_upgrades
++    assert e.shop_purchases == {"capacity": 2}
++    assert persistence.describe("campaign") == "Day 7 · 180 HD$"
++    assert persistence.describe("endless").startswith("Shift 1 ")
++
++
++def test_a_pre_endless_save_loads_as_a_campaign(slots):
++    config.SAVE_FILE.write_text(json.dumps({"seed": 5, "current_day": 4}), encoding="utf-8")
++    st = persistence.load()
++    assert st.mode == "campaign" and not st.is_endless
++    assert st.shift_history == [] and st.maintenance_upgrades == set()
++
++
++# ─── Economy: maintenance, escalation, patch, credit slots ──────────────────
++
++
++def test_maintenance_roll():
++    ids = {uid for uid, *_ in config.UPGRADE_CATALOG}
++    rolls = [endless.roll_maintenance(seed) for seed in range(40)]
++    assert all(len(r) == config.ENDLESS_MAINTENANCE_COUNT and r <= ids for r in rolls)
++    assert endless.roll_maintenance(12) == endless.roll_maintenance(12), "must survive a reload"
++    assert len({frozenset(r) for r in rolls}) > 30, "runs should differ"
++    assert GameState(seed=1).maintenance_upgrades == set(), "never in the campaign"
++
++
++def test_shop_refuses_maintenance_items():
++    st = endless.new_endless_state(seed=4)
++    st.hackdollars = 10_000
++    item = next(i for i in shop.items_for(st)
++                if i.kind == "upgrade" and i.iid in st.maintenance_upgrades)
++    ok, msg = shop.buy(st, item)
++    assert not ok and "maintenance" in msg and item.iid not in st.upgrades
++    assert st.hackdollars == 10_000
++
++
++def test_capacity_escalates_in_endless_only():
++    run, camp = endless.new_endless_state(seed=5), GameState(seed=5)
++    for st in (run, camp):
++        st.hackdollars = 10_000
++    cap = next(i for i in shop.items_for(run) if i.kind == "capacity")
++    prices = []
++    for _ in range(3):
++        prices.append(shop.price_of(run, cap))
++        assert shop.buy(run, cap)[0]
++    assert prices == [config.SHOP_PRICE_CAPACITY + k * config.SHOP_CAPACITY_PRICE_STEP
++                      for k in range(3)]
++    shop.buy(camp, cap)
++    assert shop.price_of(camp, cap) == config.SHOP_PRICE_CAPACITY
++
++
++def test_site_patch_is_endless_only_and_caps_at_full():
++    assert not any(i.kind == "site_patch" for i in shop.items_for(GameState(seed=1)))
++    st = endless.new_endless_state(seed=6)
++    st.hackdollars, st.site_health = 10_000, config.SITE_HEALTH_MAX - 3
++    patch = next(i for i in shop.items_for(st) if i.kind == "site_patch")
++    first = shop.price_of(st, patch)
++    assert shop.buy(st, patch)[0]
++    assert st.site_health == config.SITE_HEALTH_MAX
++    assert shop.price_of(st, patch) == first + config.SHOP_SITE_PATCH_PRICE_STEP
++    assert shop.status_of(st, patch) == "full"
++
++
++def test_credit_slots():
++    assert shop.credit_cap(GameState(seed=1)) == config.HACKDOX_CREDIT_MAX
++    assert shop.credit_cap(endless.new_endless_state(seed=1)) == config.ENDLESS_HACKDOX_CREDIT_MAX
++
++
++# ─── Personal best ──────────────────────────────────────────────────────────
++
++
++def test_finish_run_records_best_and_clears_only_the_endless_slot(slots):
++    persistence.save(GameState(seed=1, current_day=9))
++    run = _state_with_history([(8, 10)] * 12)
++    persistence.save(run)
++    rec, prev, new_best = endless.finish_run(run)
++    assert new_best and prev is None and rec.shifts == 12
++    assert not config.ENDLESS_SAVE_FILE.exists()
++    assert config.SAVE_FILE.exists(), "the campaign save must survive"
++    assert endless.personal_best().shifts == 12
++
++    worse = _state_with_history([(8, 10)] * 6)
++    _rec, prev, new_best = endless.finish_run(worse)
++    assert not new_best and prev.shifts == 12
++    assert endless.personal_best().shifts == 12
++    assert endless.load_records()["runs"] == 2
++
++    tie_better = _state_with_history([(10, 10)] * 12)
++    assert endless.finish_run(tie_better)[2], "same shifts, better accuracy wins"
++
++
++# ─── The cooperative Foreman ────────────────────────────────────────────────
++
++
++def test_endless_narrative_prefers_the_most_specific_key():
++    st = _state_with_history([(5, 10)] * 5 + [(10, 10)])  # rising, in danger? no
++    n = {"endless_intro_rising": "UP", "endless_intro": "BASE", "generic_intro": "GEN"}
++    assert resolve_endless_narrative(n, st, "intro") == "UP"
++    n.pop("endless_intro_rising")
++    assert resolve_endless_narrative(n, st, "intro") == "BASE"
++    assert resolve_endless_narrative({"generic_intro": "GEN"}, st, "intro") == "GEN"
++    first = endless.new_endless_state(seed=1)
++    assert resolve_endless_narrative({"endless_intro_first": "HI", "endless_intro": "X"},
++                                     first, "intro") == "HI"
++    lost = _state_with_history([(1, 10)] * 5)
++    assert resolve_endless_narrative({"endless_between_lost": "BYE", "endless_between": "X"},
++                                     lost, "between") == "BYE"
++    assert resolve_endless_narrative({"endless_outro_poor": "P"}, st, "outro",
++                                     Performance.POOR) == "P"
++
++
++def test_every_endless_beat_is_authored():
++    """The shipped overseer.json covers every Endless beat and trend, so no
++    shift ever falls through to campaign copy."""
++    narr = content_loader.load_narratives()
++    for key in (["endless_intro_first", "endless_intro_danger", "endless_intro",
++                 "endless_between_lost", "endless_between_danger", "endless_between"]
++                + [f"endless_intro_{t}" for t in ("new", "rising", "steady", "falling")]
++                + [f"endless_between_{t}" for t in ("new", "rising", "steady", "falling")]
++                + [f"endless_outro_{p.value}" for p in Performance]):
++        assert narr.get(key), f"overseer.json is missing {key}"
++
++
++# ─── App flow (headless pilot) ──────────────────────────────────────────────
++
++
++def _pilot(fn, size=(140, 44)):
++    from gameengine.ui.tui.app import HackDoxApp
++
++    async def go():
++        original = config.TRANSITION_ENABLED
++        config.TRANSITION_ENABLED = False
++        try:
++            app = HackDoxApp()
++            async with app.run_test(size=size) as pilot:
++                await pilot.pause()
++                await fn(app, pilot)
++        finally:
++            config.TRANSITION_ENABLED = original
++
++    asyncio.run(go())
++
++
++def test_menu_labels_both_saves(slots):
++    from textual.widgets import Button, Static
++    persistence.save(GameState(seed=1, current_day=7, hackdollars=180))
++    persistence.save(endless.new_endless_state(seed=2))
++
++    async def check(app, pilot):
++        labels = {b.id: str(b.label) for b in app.screen.query(Button) if b.display}
++        assert labels["menu-continue"] == "Continue Campaign · Day 7 · 180 HD$"
++        assert labels["menu-continue-endless"].startswith("Continue Endless · Shift 1")
++        saves = str(app.screen.query_one("#menu-saves", Static).render())
++        assert "separate saves" in saves
++
++    _pilot(check)
++
++
++def test_endless_run_start_to_game_over(slots):
++    from gameengine.ui.tui.screens.between_day import BetweenDayScreen
++    from gameengine.ui.tui.screens.briefing import BriefingScreen
++    from gameengine.ui.tui.screens.endless_over import EndlessOverScreen
++
++    async def play(app, pilot):
++        await pilot.press("e")
++        await pilot.pause()
++        assert isinstance(app.screen, BriefingScreen)
++        st = app._state
++        assert st.is_endless and st.unlocked_tools == ALL_TOOLS
++        assert app.screen._unlock_tool is None
++        assert config.ENDLESS_SAVE_FILE.exists() and not config.SAVE_FILE.exists()
++
++        # Play five terrible shifts through the real day-boundary methods.
++        for shift in range(1, config.ENDLESS_ACCURACY_WINDOW + 1):
++            app.begin_intake()
++            await pilot.pause()
++            st.pending_results = [_result(False)] * app._day.candidate_count
++            app.finish_day()
++            await pilot.pause()
++            assert len(st.shift_history) == shift
++            app.show_between_day()
++            await pilot.pause()
++            assert isinstance(app.screen, BetweenDayScreen)
++            app.screen.action_next_day()
++            await pilot.pause()
++            if shift < config.ENDLESS_ACCURACY_WINDOW:
++                assert isinstance(app.screen, BriefingScreen), "lost before the window filled"
++                assert app._day.title == f"Shift {shift + 1}"
++        assert isinstance(app.screen, EndlessOverScreen)
++        assert app.screen._reason == "accuracy"
++        assert not config.ENDLESS_SAVE_FILE.exists()
++        assert endless.personal_best().shifts == config.ENDLESS_ACCURACY_WINDOW
++
++        await pilot.press("r")          # R = a new Endless run, not the campaign
++        await pilot.pause()
++        assert isinstance(app.screen, BriefingScreen) and app._state.is_endless
++        assert len(app._state.shift_history) == 0
++
++    _pilot(play)
++
++
++def test_endless_sails_past_the_campaigns_last_day(slots):
++    from gameengine.ui.tui.screens.briefing import BriefingScreen
++
++    async def play(app, pilot):
++        st = endless.new_endless_state(seed=9)
++        st.current_day = E(config.CAMPAIGN_LAST_DAY + 5)
++        app.resume_game(st)
++        await pilot.pause()
++        app.advance_day()
++        await pilot.pause()
++        assert isinstance(app.screen, BriefingScreen)
++        assert app._day.title == f"Shift {config.CAMPAIGN_LAST_DAY + 6}"
++
++    _pilot(play)
+diff --git a/gameengine/tests/test_voice.py b/gameengine/tests/test_voice.py
+index d93f7bd..fca0aef 100644
+--- a/gameengine/tests/test_voice.py
++++ b/gameengine/tests/test_voice.py
+@@ -118,6 +118,9 @@ def _narration_lines() -> dict[str, str]:
+     for kind, templates in _narration._RULE_CHANGE_PHRASINGS.items():
+         for i, t in enumerate(templates):
+             out[f"phrasing:{kind}:{i}"] = t
++    for kind, templates in _narration._ENDLESS_RULE_CHANGE_PHRASINGS.items():
++        for i, t in enumerate(templates):
++            out[f"endless_phrasing:{kind}:{i}"] = t
+     return out
+ 
+ 
+diff --git a/gameengine/ui/tui/UI_CATALOG.md b/gameengine/ui/tui/UI_CATALOG.md
+index 6bb456b..85c9b75 100644
+--- a/gameengine/ui/tui/UI_CATALOG.md
++++ b/gameengine/ui/tui/UI_CATALOG.md
+@@ -29,7 +29,8 @@ HackDoxApp
+                 └── RulesScreen (modal overlay, 0 key)
+            └── EODScreen   (end-of-day summary)
+            └── BetweenDayScreen (shop/upgrades between days)
+-      └── GameOverScreen  (Site Health collapsed)
++      └── GameOverScreen  (Site Health collapsed — campaign)
++      └── EndlessOverScreen (Endless run lost — health or 5-shift accuracy)
+ 
+ PauseScreen (modal overlay, Esc key) is reachable from every campaign-loop
+ screen with progress that can be lost — BriefingScreen, IntakeScreen,
+@@ -50,15 +51,23 @@ CreditsScreen, or GameOverScreen.
+   button at once — Tab/arrow-key focus movement and mouse-wheel both bring
+   the rest of the menu (Quit included) into view rather than letting it run
+   off screen with no way to reach it.
+-- **Buttons:** New Game · Continue (hidden/disabled unless a save exists —
+-  closes #79) · Endless Mode (disabled, "coming soon") · Settings · Credits
+-  · Quit
+-- **Keys:** `N` new game · `C` continue (only when a save exists) ·
+-  `S` settings · `R` credits · `Q` quit
+-- **Continue behavior:** calls `persistence.load()` then
++- **Buttons:** New Campaign · Continue Campaign · New Endless Run · Continue
++  Endless · Settings · Credits · Quit. Each Continue is hidden unless its own
++  save exists, and its label says where that save stands
++  ("Continue Campaign · Day 7 · 180 HD$", "Continue Endless · Shift 4 · 90 HD$").
++- **Saves line (`#menu-saves`):** when either save exists, a note that the
++  campaign and Endless keep separate saves; plus the Endless personal best
++  ("Endless best: 23 shifts · 84% accuracy") once a run has ended.
++- **Keys:** `N` new campaign · `C` continue campaign · `E` new Endless run ·
++  `X` continue Endless · `S` settings · `R` credits · `Q` quit
++- **New Endless over a run in progress:** the first press only warns (hint
++  line names the shift); the second abandons it — the abandoned run still
++  counts toward the personal best.
++- **Continue behavior:** calls `persistence.load(mode)` then
+   `HackDoxApp.resume_game(state)`, which resumes at `state.current_day`'s
+   `BriefingScreen` — a save is only ever written at a day boundary, so this
+-  is always the correct resume point (single-slot save, no Load screen)
++  is always the correct resume point. Two slots (#7): `saves/slot_0.json`
++  (campaign) and `saves/endless_0.json` (Endless); neither touches the other.
+ 
+ ### SettingsScreen *(modal overlay)*
+ - **Trigger:** `S` / Settings button from IntroScreen, or Settings button
+@@ -105,20 +114,33 @@ CreditsScreen, or GameOverScreen.
+ 
+ ### EODScreen
+ - **Trigger:** After last candidate verdict
+-- **Content:** Verdict scorecard, ⏱ summary, alignment delta, Overseer outro
++- **Content:** Verdict scorecard, ⏱ summary, alignment delta (Endless: the
++  5-shift rolling accuracy and its 70% line instead), Foreman outro
+ - **Keys:** `Space` save & continue · `Esc` pause
+ 
+ ### BetweenDayScreen
+ - **Trigger:** After EODScreen's save & continue
+-- **Content:** shop/upgrades between campaign days
++- **Content:** shift report + Foreman + shop (rules in `core/shop.py`).
++  Endless adds: 5-shift accuracy with trend arrow and recent-shift strip (in
++  place of alignment), a loss banner when accuracy falls under the line,
++  MAINT tags on this run's maintenance-locked upgrades, escalating capacity
++  price, the Site Patch item, and 5 credit slots.
+ - **Keys:** `N` begin next day · `Esc` pause (the `Q` quit binding was
+   removed — quitting now happens only through PauseScreen, which saves
+   first)
+ 
+ ### GameOverScreen
+-- **Trigger:** Lives reach zero
++- **Trigger:** Site Health below the loss line at end of day (campaign)
+ - **Keys:** `R` restart · `Q` quit
+ 
++### EndlessOverScreen *(Endless run over, #7)*
++- **Trigger:** end of an Endless shift with Site Health under the loss line
++  or the 5-shift rolling accuracy under 70% (only once 5 shifts are played)
++- **Content:** why the run ended, shifts survived, run accuracy, HD$, and the
++  personal-best line (NEW PERSONAL BEST / how far short). The Endless save is
++  cleared on arrival; the campaign save is untouched.
++- **Keys:** `R` new Endless run · `M` main menu · `Q` quit
++
+ ### TransitionScreen *(modal, twice per screen change)*
+ - **Trigger:** `HackDoxApp._transition`, on every full-screen change
+ - **Content:** animated CRT signal-loss rows over the screen underneath
+@@ -207,6 +229,7 @@ CreditsScreen, or GameOverScreen.
+ 
+ ### StatusHeader
+ - One-line strip: game title · day title · candidate slot · compute hours · site health · HD$ · credits · alignment bar · page tabs
++- Endless: the day title reads "Shift N", the credit cap is Endless's, and an `ACC nn%` chip (grey until 5 shifts are played, then green / amber near the line / red under it) replaces the alignment bar
+ - Updates on every page switch and verdict
+ 
+ ### DossierPanel
+diff --git a/gameengine/ui/tui/app.py b/gameengine/ui/tui/app.py
+index 75d80ef..82b25ed 100644
+--- a/gameengine/ui/tui/app.py
++++ b/gameengine/ui/tui/app.py
+@@ -23,7 +23,7 @@ from __future__ import annotations
+ from textual.app import App
+ 
+ from gameengine import config
+-from gameengine.core import persistence, scoring
++from gameengine.core import endless, persistence, scoring
+ from gameengine.core.audio import sound_manager
+ from gameengine.core.content_loader import (
+     generic_outro_key,
+@@ -31,7 +31,7 @@ from gameengine.core.content_loader import (
+     load_narratives,
+ )
+ from gameengine.core.models import Day, GameState, Performance, Verdict
+-from gameengine.core.overseer import resolve_aligned_narrative
++from gameengine.core.overseer import resolve_aligned_narrative, resolve_endless_narrative
+ 
+ # ─── Backward-compat facade ─────────────────────────────────────────────────
+ # gameengine/ui/tui/app.py used to be a single ~3,700-line module holding every
+@@ -57,6 +57,7 @@ from gameengine.ui.tui.screens.briefing import BriefingScreen
+ from gameengine.ui.tui.screens.campaign_end import CampaignEndScreen
+ from gameengine.ui.tui.screens.credit_reveal import CreditRevealScreen
+ from gameengine.ui.tui.screens.credits import CreditsScreen
++from gameengine.ui.tui.screens.endless_over import EndlessOverScreen
+ from gameengine.ui.tui.screens.eod import EODScreen
+ from gameengine.ui.tui.screens.game_over import GameOverScreen
+ from gameengine.ui.tui.screens.intake import IntakeScreen
+@@ -148,6 +149,7 @@ __all__ = [
+     "DebugPanel",
+     "DossierPanel",
+     "EODScreen",
++    "EndlessOverScreen",
+     "EvidenceBoard",
+     "EvidenceState",
+     "GameOverScreen",
+@@ -231,15 +233,41 @@ class HackDoxApp(App):
+                 max(self._lab_day.number, max(config.TOOL_UNLOCK_DAY.values())))
+         self._day_start_health = self._state.site_health
+         self._day = self._lab_day or load_day(self._state.current_day)
++        self._transition(BriefingScreen(self._day, self._intro_narrative(),
++                                        self._state))
++
++    def start_endless_game(self) -> None:
++        """Main menu → "New Endless Run" (#7). A fresh run in Endless's own
++        save slot — the campaign's slot is never touched. Shift 1 opens with
++        every tool unlocked and the full rulebook live; there is no tutorial."""
++        self._state = endless.new_endless_state()
++        self._day_start_health = self._state.site_health
++        self._day = load_day(self._state.current_day)
++        persistence.save(self._state)   # the run exists from the first briefing
++        self._transition(BriefingScreen(self._day, self._intro_narrative(),
++                                        self._state))
++
++    # ── Foreman copy, per mode ──────────────────────────────────────────
++
++    def _intro_narrative(self) -> str:
++        assert self._state is not None and self._day is not None
++        if self._state.is_endless:
++            return resolve_endless_narrative(self._narratives, self._state, "intro")
+         # #15: falls through to generic copy rather than an empty panel — days
+         # 2-20 had no authored intro key at all and opened on silence.
+         # #42: routed through the alignment-band tier so a day/generic key
+         # authored for a specific band (day14_whitehat_intro, etc.) is
+         # actually picked up — resolve_narrative alone would silently skip it.
+-        narrative = resolve_aligned_narrative(
++        return resolve_aligned_narrative(
+             self._narratives, self._state.alignment,
+             self._day.overseer_intro_key, "generic_intro")
+-        self._transition(BriefingScreen(self._day, narrative, self._state))
++
++    def run_is_lost(self) -> bool:
++        """Either loss condition. Site Health collapse ends both modes (#20);
++        Endless also ends when the rolling accuracy falls below the line (#7)."""
++        st = self._state
++        return st is not None and (scoring.health_below_loss(st)
++                                   or endless.accuracy_below_loss(st))
+ 
+     def resume_game(self, state: GameState) -> None:
+         """IntroScreen → "Continue" (closes #79). Mirrors start_new_game's
+@@ -255,10 +283,13 @@ class HackDoxApp(App):
+         self._state = state
+         self._day_start_health = state.site_health
+         self._day = self._lab_day or load_day(state.current_day)
+-        narrative = resolve_aligned_narrative(
+-            self._narratives, state.alignment,
+-            self._day.overseer_intro_key, "generic_intro")
+-        self._transition(BriefingScreen(self._day, narrative, self._state))
++        if state.is_endless and self.run_is_lost():
++            # A run saved after it was already lost (quit from the between-day
++            # screen before pressing on) can't be continued — close it out.
++            self.game_over()
++            return
++        self._transition(BriefingScreen(self._day, self._intro_narrative(),
++                                        self._state))
+ 
+     def save_progress(self) -> None:
+         """Best-effort save of whatever run is in progress. Safe to call from
+@@ -278,14 +309,17 @@ class HackDoxApp(App):
+         self._day = None
+         self._transition(IntroScreen())
+ 
++    def to_main_menu(self) -> None:
++        """Back to the start menu with no save side effects (Endless run-over
++        screen's "Main Menu")."""
++        self.quit_to_main_menu()
++
+     def begin_intake(self) -> None:
+         assert self._state is not None and self._day is not None
+         sound_manager.play("day_start")
+         self._day_start_health = self._state.site_health
+-        intro = resolve_aligned_narrative(
+-            self._narratives, self._state.alignment,
+-            self._day.overseer_intro_key, "generic_intro")
+-        self._transition(IntakeScreen(self._day, self._state, intro))
++        self._transition(IntakeScreen(self._day, self._state,
++                                      self._intro_narrative()))
+ 
+     def finish_day(self) -> None:
+         assert self._state is not None and self._day is not None
+@@ -300,15 +334,26 @@ class HackDoxApp(App):
+                               for r in self._state.pending_results)
+         self._hd_bonus  = scoring.eod_health_bonus(self._state)
+         self._state.hackdollars += self._hd_bonus
++        if self._state.is_endless:
++            # #7: fold the shift into the rolling window now, so the EOD and
++            # between-day screens (and the Foreman) already see it.
++            endless.record_shift(
++                self._state,
++                health_delta=self._state.site_health - self._day_start_health,
++                hd_earned=self._hd_earned + self._hd_bonus)
+         performance = self._evaluate_performance()
+-        outro_key   = self._day.overseer_outro_keys.get(
+-            performance, self._day.overseer_outro_keys[Performance.PASSING]
+-        )
+-        # #15: was the literal string "..." on every unauthored day.
+-        # #42: alignment-band tier (see start_new_game's comment above).
+-        narrative = resolve_aligned_narrative(
+-            self._narratives, self._state.alignment, outro_key,
+-            generic_outro_key(performance))
++        if self._state.is_endless:
++            narrative = resolve_endless_narrative(
++                self._narratives, self._state, "outro", performance)
++        else:
++            outro_key = self._day.overseer_outro_keys.get(
++                performance, self._day.overseer_outro_keys[Performance.PASSING]
++            )
++            # #15: was the literal string "..." on every unauthored day.
++            # #42: alignment-band tier (see _intro_narrative's comment).
++            narrative = resolve_aligned_narrative(
++                self._narratives, self._state.alignment, outro_key,
++                generic_outro_key(performance))
+         self._transition(EODScreen(
+             self._day, self._state, narrative, performance,
+             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
+@@ -316,6 +361,14 @@ class HackDoxApp(App):
+         ))
+ 
+     def game_over(self) -> None:
++        st = self._state
++        if st is not None and st.is_endless:
++            reason = ("health" if scoring.health_below_loss(st) else "accuracy")
++            rolling = endless.rolling_accuracy(st)
++            record, prev_best, new_best = endless.finish_run(st)
++            self._transition(EndlessOverScreen(record, prev_best, new_best,
++                                               reason, rolling))
++            return
+         self._transition(GameOverScreen())
+ 
+     def show_between_day(self) -> None:
+@@ -325,9 +378,13 @@ class HackDoxApp(App):
+         # "generic_between", so every line the Overseer speaks lives in one
+         # editable file rather than half of it being buried in the UI.
+         # #42: alignment-band tier (see start_new_game's comment above).
+-        narrative = resolve_aligned_narrative(
+-            self._narratives, self._state.alignment,
+-            f"day{self._day.number}_between", "generic_between")
++        if self._state.is_endless:
++            narrative = resolve_endless_narrative(
++                self._narratives, self._state, "between")
++        else:
++            narrative = resolve_aligned_narrative(
++                self._narratives, self._state.alignment,
++                f"day{self._day.number}_between", "generic_between")
+         self._transition(BetweenDayScreen(
+             self._day, self._state, narrative,
+             hd_earned=self._hd_earned, hd_bonus=self._hd_bonus,
+@@ -338,7 +395,7 @@ class HackDoxApp(App):
+         """Between-day menu → next day intro. Resets the shift budget."""
+         assert self._state is not None
+         st = self._state
+-        if scoring.health_below_loss(st):   # loss trips at end of day (#20)
++        if self.run_is_lost():   # loss trips at end of day (#20; #7 in Endless)
+             self.game_over()
+             return
+         # #36: hold on to yesterday's ruleset before loading today's, so the
+@@ -356,7 +413,7 @@ class HackDoxApp(App):
+         st.compute_hours = config.daily_compute_budget(
+             st.current_day, st.compute_capacity)
+         persistence.save(st)
+-        if st.current_day > config.CAMPAIGN_LAST_DAY:
++        if not st.is_endless and st.current_day > config.CAMPAIGN_LAST_DAY:
+             # Issue #42: the explicit end-of-campaign trigger. Reached
+             # deliberately now that every day through CAMPAIGN_LAST_DAY is
+             # (once #42's Phase 5b lands) authored content, rather than by
+@@ -372,14 +429,8 @@ class HackDoxApp(App):
+             self._transition(CampaignEndScreen(st))
+             return
+         self._day_start_health = st.site_health
+-        # #15: falls through to generic copy rather than an empty panel — days
+-        # 2-20 had no authored intro key at all and opened on silence.
+-        # #42: alignment-band tier (see start_new_game's comment above).
+-        narrative = resolve_aligned_narrative(
+-            self._narratives, st.alignment,
+-            self._day.overseer_intro_key, "generic_intro")
+-        self._transition(BriefingScreen(self._day, narrative, self._state,
+-                                        prev_day=prev_day))
++        self._transition(BriefingScreen(self._day, self._intro_narrative(),
++                                        self._state, prev_day=prev_day))
+ 
+     # ── Screen transitions (glitch) ─────────────────────────────────────
+     #
+@@ -468,7 +519,7 @@ class HackDoxApp(App):
+             if not r.correct and r.player_verdict == Verdict.ADMIT
+         )
+         quotas = self._day.quotas
+-        if scoring.health_below_loss(self._state):
++        if self.run_is_lost():
+             return Performance.FAILED
+         if false_admits > quotas.max_false_admits:
+             return Performance.FAILED
+diff --git a/gameengine/ui/tui/app.tcss b/gameengine/ui/tui/app.tcss
+index b8c2852..8181cdd 100644
+--- a/gameengine/ui/tui/app.tcss
++++ b/gameengine/ui/tui/app.tcss
+@@ -585,7 +585,7 @@ ContentSwitcher {
+     color: #7dd3c0;
+     text-align: center;
+     width: 100%;
+-    margin: 0 0 2 0;
++    margin: 0 0 1 0;
+ }
+ 
+ .menu-buttons {
+@@ -595,10 +595,25 @@ ContentSwitcher {
+ }
+ 
+ .menu-buttons Button {
+-    width: 36;
++    width: 44;
++    margin: 0;          /* seven buttons since Endless (#7) — keep Quit and the
++                           saves line on screen at 40 rows */
++}
++
++.menu-saves {
++    text-align: center;
++    width: 100%;
++    height: auto;
+     margin: 0 0 1 0;
+ }
+ 
++#endless-over-stats {
++    width: 100%;
++    height: auto;
++    content-align: center middle;
++    text-align: center;
++}
++
+ .menu-hint {
+     color: #6b7785;
+     text-align: center;
+diff --git a/gameengine/ui/tui/rules_content.py b/gameengine/ui/tui/rules_content.py
+index 4d81e80..2d1f017 100644
+--- a/gameengine/ui/tui/rules_content.py
++++ b/gameengine/ui/tui/rules_content.py
+@@ -939,6 +939,7 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
+     lines += _band("COMPUTING HOURS (⏱) — FINITE DAILY BUDGET", "#ffb454")
+     base = config.STARTING_COMPUTE
+     d_no = day.number if day else 1
++    _endless = config.is_endless_day(d_no)
+     today_budget = config.daily_compute_budget(d_no, base)
+     lines += [
+         "  A fixed ⏱ pool is granted at the start of every shift. It is spent",
+@@ -1000,11 +1001,34 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
+         "",
+         "  [#c084fc]HackDox Credits[/] — type [b]reveal[/] to spend one and see the",
+         "  current candidate's ground truth (correct verdict + planted",
+-        (f"  violations, no evidence trail). Max {config.HACKDOX_CREDIT_MAX} slots · "
+-        f"{config.SHOP_PRICE_CREDIT} HD$ each."),
++        (f"  violations, no evidence trail). Max "
++        f"{config.ENDLESS_HACKDOX_CREDIT_MAX if _endless else config.HACKDOX_CREDIT_MAX} "
++        f"slots · {config.SHOP_PRICE_CREDIT} HD$ each."),
+         (f"  [#ffb454]⏱ capacity[/] — +{config.COMPUTE_CAPACITY_STEP} base budget "
+-        f"per purchase · {config.SHOP_PRICE_CAPACITY} HD$."),
++        f"per purchase · {config.SHOP_PRICE_CAPACITY} HD$"
++        + (f", +{config.SHOP_CAPACITY_PRICE_STEP} each time." if _endless else ".")),
+     ]
++    if _endless:
++        # #7: the Endless-only rules, in the same reference the player
++        # already reads for everything else.
++        lines += [
++            (f"  [#7dd3c0]Site Patch[/] — +{config.SITE_PATCH_HEALTH:.0f}% Site Health · "
++             f"{config.SHOP_PRICE_SITE_PATCH} HD$, +{config.SHOP_SITE_PATCH_PRICE_STEP} each time."),
++            (f"  [#ff8c42]Maintenance[/] — each Endless run, "
++             f"{config.ENDLESS_MAINTENANCE_COUNT} upgrades are out of"),
++            "  service for the whole run (marked MAINT in the shop).",
++            "",
++        ]
++        lines += _band("ENDLESS — HOW A RUN ENDS", "#ff5470")
++        lines += [
++            (f"  Your accuracy over the last {config.ENDLESS_ACCURACY_WINDOW} shifts must stay at "
++             f"or above [b]{config.ENDLESS_ACCURACY_THRESHOLD:.0%}[/]."),
++            (f"  It starts counting once {config.ENDLESS_ACCURACY_WINDOW} shifts are on the books. "
++             "Site Health"),
++            (f"  under {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}% ends the run too. The work gets "
++             "harder for a"),
++            "  while, then levels off — it never becomes impossible.",
++        ]
+     lines += _sub("upgrade catalog (permanent · bought in the night shop)", "#00ff9f")
+     lines += [
+         "[#6b7785]  UPGRADE               HD$   EFFECT[/]",
+diff --git a/gameengine/ui/tui/screens/_narration.py b/gameengine/ui/tui/screens/_narration.py
+index 736080b..cb409c8 100644
+--- a/gameengine/ui/tui/screens/_narration.py
++++ b/gameengine/ui/tui/screens/_narration.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++from gameengine import config
+ from gameengine.core import candidate_gen
+ from gameengine.ui.tui.widgets import (
+     TypewriterLog,
+@@ -87,6 +88,35 @@ _RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
+ }
+ 
+ 
++# Endless (#7): the Foreman is on the player's side, so a rule change comes
++# with an explanation instead of a shrug. Small changes (a rule easing to
++# advisory) are mentioned casually; big ones (a rule becoming a hard deny)
++# carry a reason — what she's heard from other ports. Endless never adds or
++# removes rules, only flips Overseer-Variable severities, so these two buckets
++# are the whole vocabulary.
++_ENDLESS_RULE_CHANGE_PHRASINGS: dict[str, tuple[str, ...]] = {
++    "tightened": (
++        ("Heads up, and it's a big one: {rule} is a hard deny from today. Two "
++        "ports sent cases back last week on exactly that, so we're closing "
++        "the gap before it reaches us."),
++        ("One change you'll want to know about. {rule} — that's a deny now, "
++        "not a note. The harbour office traced a string of opened cases to it, "
++        "and I'd rather we tighten up early than explain it later."),
++        ("Before the first boat: {rule} just became a hard stop. It's been "
++        "the common thread in the bad bonds up and down the coast. If you see "
++        "it, turn them back."),
++    ),
++    "relaxed": (
++        ("Small thing — {rule} is advisory again. Flag it if you see it, but "
++        "it's not a reason to turn someone back on its own."),
++        ("Easing one: {rule}. Note it and use your judgement; it was catching "
++        "too many honest couriers."),
++        ("Quick one. {rule} — we're back to flagging that, not denying on it. "
++        "Keeps the line moving without costing us anything."),
++    ),
++}
++
++
+ def _rule_fragment(text: str) -> str:
+     """Fold a rulebook line into something that can sit mid-sentence."""
+     frag = text.strip().rstrip(".")
+@@ -161,7 +191,8 @@ def rule_change_lines(changes, day_number: int) -> list[str]:
+                       else "relaxed")
+         else:
+             bucket = change.kind
+-        options = _RULE_CHANGE_PHRASINGS.get(bucket)
++        options = (_ENDLESS_RULE_CHANGE_PHRASINGS if config.is_endless_day(day_number)
++                   else _RULE_CHANGE_PHRASINGS).get(bucket)
+         if not options:
+             continue
+         pick = candidate_gen.stable_hash(change.rule.id, day_number, bucket)
+diff --git a/gameengine/ui/tui/screens/between_day.py b/gameengine/ui/tui/screens/between_day.py
+index 717599c..8551bdf 100644
+--- a/gameengine/ui/tui/screens/between_day.py
++++ b/gameengine/ui/tui/screens/between_day.py
+@@ -11,7 +11,7 @@ from textual.screen import Screen
+ from textual.widgets import Static
+ 
+ from gameengine import config
+-from gameengine.core import persistence, scoring, tools_bridge
++from gameengine.core import endless, persistence, scoring, shop, tools_bridge
+ from gameengine.core.audio import sound_manager
+ from gameengine.core.models import Day, GameState
+ from gameengine.ui.tui.screens._narration import (
+@@ -56,40 +56,19 @@ class BetweenDayScreen(Screen):
+         self._cursor       = 0
+         self._status_msg   = ""
+         self._status_err   = False
+-        # Shop catalog: consumables/capacity first (under a "General" header),
+-        # then permanent upgrades grouped into per-tool sub-categories (#2) —
++        # Shop catalog (#22/#23) — rows, prices and purchase rules live in
++        # core/shop.py so the campaign and Endless (#7) share one shop.
+         # "header" rows are non-purchasable and skipped by cursor navigation.
+-        items: list[tuple[str, str, int, str, str]] = [
+-            ("header", "", 0, "General", ""),
+-            ("credit",   "hackdox_credit", config.SHOP_PRICE_CREDIT,
+-             "HackDox Credit +1",
+-             f"ground-truth reveal charge (max {config.HACKDOX_CREDIT_MAX} slots)"),
+-            ("capacity", "compute_capacity", config.SHOP_PRICE_CAPACITY,
+-             f"Compute Capacity +{config.COMPUTE_CAPACITY_STEP} ⏱",
+-             "permanently raise the per-shift computing-hours budget"),
+-        ]
+-        by_category: dict[str, list[tuple[str, str, int, str]]] = {
+-            cat: [] for cat in config.UPGRADE_CATEGORY_ORDER
+-        }
+-        for uid, label, price, desc in config.UPGRADE_CATALOG:
+-            cat = config.UPGRADE_CATEGORY[uid]
+-            by_category[cat].append((uid, label, price, desc))
+-        for cat in config.UPGRADE_CATEGORY_ORDER:
+-            cat_upgrades = by_category[cat]
+-            if not cat_upgrades:
+-                continue
+-            items.append(("header", "", 0, cat, ""))
+-            for uid, label, price, desc in cat_upgrades:
+-                items.append(("upgrade", uid, price, label, desc))
++        items = shop.items_for(state)
+         self._items = items
+         self._cursor = next(
+-            (i for i, it in enumerate(items) if it[0] != "header"), 0)
++            (i for i, it in enumerate(items) if it.kind != "header"), 0)
+         self._summary_w = Static(id="bd-summary", classes="panel")
+         self._shop_w    = Static(id="bd-shop", classes="panel")
+ 
+     def compose(self) -> ComposeResult:
+         yield Static(
+-            f"[b][#7dd3c0]HACKDOX — NIGHT OF DAY {self._day.number}[/][/]",
++            f"[b][#7dd3c0]HACKDOX — NIGHT OF {self._day.title.upper()}[/][/]",
+             classes="screen-title",
+         )
+         with Horizontal(id="bd-root"):
+@@ -104,7 +83,8 @@ class BetweenDayScreen(Screen):
+             yield self._shop_w
+         yield Static(
+             "[#00ff9f][b]↑↓[/][/] browse shop  ·  [#00ff9f][b]Enter[/][/] buy  ·  "
+-            "[#00ff9f][b]N[/][/] begin next day  ·  [#00ff9f][b]Q[/][/] quit",
++            f"[#00ff9f][b]N[/][/] begin next {'shift' if self._state.is_endless else 'day'}"
++            "  ·  [#00ff9f][b]Q[/][/] quit",
+             classes="hint",
+         )
+ 
+@@ -188,9 +168,10 @@ class BetweenDayScreen(Screen):
+             f"   [dim](fresh budget next shift: {next_budget} ⏱ — no carry-over)[/]"),
+             f"[#6b7785]Next shift[/]      {self._next_shift_terms()}",
+             f"[#6b7785]Board accuracy[/]  {board_pct}%  [dim](paid as HD$ bonus)[/]",
++            *(self._endless_lines() if st.is_endless else [
+             f"[#6b7785]Alignment[/]       [{acol}]{st.alignment:+d} ({align_lbl})[/]"
+             + (f"   [#c084fc]· {diverged} verdict(s) where the book and your "
+-               f"conscience disagreed[/]" if diverged else ""),
++               f"conscience disagreed[/]" if diverged else "")]),
+             "",
+             f"[#6b7785]HackDollar$[/]     [#00ff9f]+{self._hd_earned}[/] verdicts{hd_bonus_str}",
+             f"[#6b7785]Balance[/]         [#00ff9f][b]{st.hackdollars} HD$[/][/]",
+@@ -206,31 +187,72 @@ class BetweenDayScreen(Screen):
+             f"— HACKDOX IS LOST[/][/]"),
+             ("[#ff5470]The day's admissions took the site down. "
+             "Press N to face the consequences.[/]"),
+-        ] if scoring.health_below_loss(st) else []))
++        ] if scoring.health_below_loss(st) else []) + ([
++            "",
++            (f"[#ff5470][b]▼ {config.ENDLESS_ACCURACY_WINDOW}-SHIFT ACCURACY BELOW "
++             f"{config.ENDLESS_ACCURACY_THRESHOLD:.0%} — THE RUN IS OVER[/][/]"),
++            "[#ff5470]Press N to clock out.[/]",
++        ] if endless.accuracy_below_loss(st) else []))
++
++    def _endless_lines(self) -> list[str]:
++        """#7: the rolling-accuracy window the run lives or dies by, where
++        the campaign shows alignment (which Endless never moves)."""
++        st   = self._state
++        acc  = endless.rolling_accuracy(st)
++        line = config.ENDLESS_ACCURACY_THRESHOLD
++        win  = config.ENDLESS_ACCURACY_WINDOW
++        played = len(st.shift_history)
++        tr = endless.trend(st)
++        arrow = {"rising": "[#00ff9f]▲ rising[/]", "falling": "[#ff5470]▼ falling[/]",
++                 "steady": "[dim]■ steady[/]", "new": "[dim]· first shift[/]"}[tr]
++        if acc is None:
++            head = "[dim]—[/]"
++        else:
++            col = ("#ff5470" if acc < line else
++                   "#ffd93d" if endless.in_danger(st) else "#00ff9f")
++            head = f"[{col}][b]{acc:.0%}[/][/]"
++        if endless.accuracy_check_active(st):
++            rule = f"[dim]must stay ≥ {line:.0%}[/]"
++        else:
++            rule = (f"[dim]counts from shift {win} "
++                    f"({win - played} to go) · line {line:.0%}[/]")
++        recent = " ".join(
++            f"[{'#00ff9f' if r.accuracy >= line else '#ff5470'}]{r.accuracy:.0%}[/]"
++            for r in st.shift_history[-win:])
++        life = endless.lifetime_accuracy(st)
++        return [
++            f"[#6b7785]{win}-shift acc.[/]    {head}  {arrow}  {rule}",
++            f"[#6b7785]Recent shifts[/]   {recent}   "
++            f"[dim]run: {'—' if life is None else f'{life:.0%}'}[/]",
++        ]
+ 
+     def _shop_text(self) -> str:
+         st = self._state
+         lines = [
+             (f"[#6b7785]balance[/] [#00ff9f][b]{st.hackdollars} HD$[/][/]"
+-            f"   [#6b7785]credits[/] [#c084fc]{st.hackdox_credits}/{config.HACKDOX_CREDIT_MAX}[/]"
++            f"   [#6b7785]credits[/] [#c084fc]{st.hackdox_credits}/{shop.credit_cap(st)}[/]"
+             f"   [#6b7785]⏱ cap[/] [#ffb454]{st.compute_capacity}[/]"),
+             "",
+         ]
+-        for idx, (kind, iid, price, label, desc) in enumerate(self._items):
+-            if kind == "header":
++        for idx, item in enumerate(self._items):
++            label, desc = item.label, item.desc
++            if item.kind == "header":
+                 accent = config.UPGRADE_CATEGORY_ACCENT.get(label, "#6b7785")
+                 bar = "─" * max(1, 40 - len(label))
+                 lines.append(f"[{accent}]── {label} {bar}[/]")
+                 continue
+-            owned  = kind == "upgrade" and iid in st.upgrades
+-            capped = kind == "credit" and st.hackdox_credits >= config.HACKDOX_CREDIT_MAX
+-            afford = st.hackdollars >= price
++            status = shop.status_of(st, item)
++            price  = shop.price_of(st, item)
+             cur    = idx == self._cursor
+-            if owned:
++            if status == "owned":
+                 tag, lcol = "[#6b7785]OWNED [/]", "#6b7785"
+-            elif capped:
++            elif status == "full":
+                 tag, lcol = "[#6b7785]FULL  [/]", "#6b7785"
+-            elif afford:
++            elif status == "maintenance":
++                # #7 (Endless): this run's maintenance roll — unbuyable.
++                tag, lcol = "[#ff8c42]MAINT [/]", "#4a5260"
++                desc = "under maintenance for this run — not for sale"
++            elif status == "afford":
+                 tag, lcol = f"[#00ff9f]{price:>3} $[/] ", "#c8d4e1"
+             else:
+                 tag, lcol = f"[#ff5470]{price:>3} $[/] ", "#5a6775"
+@@ -244,7 +266,7 @@ class BetweenDayScreen(Screen):
+             scol = "#ff5470" if self._status_err else "#7dd3c0"
+             lines.append(f"[{scol}]{self._status_msg}[/]")
+         else:
+-            lines.append("[dim]Enter to buy · N for next day[/]")
++            lines.append("[dim]Enter to buy · N to move on[/]")
+         return "\n".join(lines)
+ 
+     # ── Actions ───────────────────────────────────────────────────────
+@@ -253,7 +275,7 @@ class BetweenDayScreen(Screen):
+         i = self._cursor
+         while i > 0:
+             i -= 1
+-            if self._items[i][0] != "header":
++            if self._items[i].kind != "header":
+                 self._cursor = i
+                 break
+         self._repaint()
+@@ -262,37 +284,23 @@ class BetweenDayScreen(Screen):
+         i = self._cursor
+         while i < len(self._items) - 1:
+             i += 1
+-            if self._items[i][0] != "header":
++            if self._items[i].kind != "header":
+                 self._cursor = i
+                 break
+         self._repaint()
+ 
+     def action_buy(self) -> None:
+-        kind, iid, price, label, _desc = self._items[self._cursor]
+-        if kind == "header":
++        item = self._items[self._cursor]
++        if item.kind == "header":
+             return   # cursor should never rest on a header, but stay safe
+-        st = self._state
+-        if kind == "upgrade" and iid in st.upgrades:
+-            self._flash(f"{label} already owned", err=True)
++        ok, msg = shop.buy(self._state, item)
++        if not ok:
++            self._flash(msg, err=True)
+             return
+-        if kind == "credit" and st.hackdox_credits >= config.HACKDOX_CREDIT_MAX:
+-            self._flash("credit slots full", err=True)
+-            return
+-        if st.hackdollars < price:
+-            self._flash(
+-                f"insufficient HackDollar$ — need {price}, have {st.hackdollars}",
+-                err=True)
+-            return
+-        st.hackdollars -= price
+-        if kind == "upgrade":
+-            st.upgrades.add(iid)
++        if item.kind == "upgrade":
+             sound_manager.play("upgrade_purchase")
+-        elif kind == "credit":
+-            st.hackdox_credits += 1
+-        else:
+-            st.compute_capacity += config.COMPUTE_CAPACITY_STEP
+-        persistence.save(st)   # purchases persist immediately (issue #22)
+-        self._flash(f"purchased {label}  (−{price} HD$)", err=False)
++        persistence.save(self._state)   # purchases persist immediately (issue #22)
++        self._flash(msg, err=False)
+ 
+     def _flash(self, msg: str, err: bool) -> None:
+         self._status_msg = msg
+@@ -303,7 +311,7 @@ class BetweenDayScreen(Screen):
+         # #20 rework: the loss condition is evaluated at end of day. If the
+         # batch application dropped health below the threshold, the campaign
+         # ends here instead of advancing.
+-        if scoring.health_below_loss(self._state):
++        if self.app.run_is_lost():
+             self.app.game_over()
+             return
+         self.app.advance_day()
+diff --git a/gameengine/ui/tui/screens/endless_over.py b/gameengine/ui/tui/screens/endless_over.py
+new file mode 100644
+index 0000000..436f9fd
+--- /dev/null
++++ b/gameengine/ui/tui/screens/endless_over.py
+@@ -0,0 +1,105 @@
++"""EndlessOverScreen — the end of an Endless run (#7).
++
++Replaces GameOverScreen for Endless. Says why the run ended (Site Health
++collapse or rolling accuracy under the line), what the run achieved, and how
++it stands against the personal best. The run's save slot has already been
++cleared by `endless.finish_run` — a lost run can't be continued — and the
++campaign's slot is untouched.
++"""
++
++from __future__ import annotations
++
++from typing import ClassVar
++
++from textual.app import ComposeResult
++from textual.binding import Binding
++from textual.containers import Horizontal, Vertical
++from textual.screen import Screen
++from textual.widgets import Static
++
++from gameengine import config
++from gameengine.core.endless import RunRecord
++from gameengine.ui.tui.widgets import AmbientGlitchPanel
++
++
++def _pct(x: float | None) -> str:
++    return "—" if x is None else f"{x:.0%}"
++
++
++class EndlessOverScreen(Screen):
++    BINDINGS: ClassVar[list[Binding]] = [
++        Binding("r", "restart", "New run"),
++        Binding("m", "main_menu", "Main menu"),
++        Binding("q", "quit_app", "Quit"),
++    ]
++
++    def __init__(self, record: RunRecord, prev_best: RunRecord | None,
++                 new_best: bool, reason: str, rolling: float | None) -> None:
++        super().__init__()
++        self._record    = record
++        self._prev_best = prev_best
++        self._new_best  = new_best
++        self._reason    = reason      # "health" | "accuracy"
++        self._rolling   = rolling
++
++    def _why(self) -> str:
++        if self._reason == "health":
++            return ("Site Health collapsed — the threats that got through "
++                    "took the terminal down.")
++        return (f"Your last {config.ENDLESS_ACCURACY_WINDOW} shifts averaged "
++                f"{_pct(self._rolling)} — under the "
++                f"{config.ENDLESS_ACCURACY_THRESHOLD:.0%} line, and the "
++                f"gate went to another clerk.")
++
++    def _best_line(self) -> str:
++        r, b = self._record, self._prev_best
++        if self._new_best:
++            if b is None:
++                return "[#00ff9f][b]★ FIRST RECORD SET[/][/]"
++            return (f"[#00ff9f][b]★ NEW PERSONAL BEST[/][/]  "
++                    f"[dim](was {b.shifts} shifts · {_pct(b.accuracy)})[/]")
++        assert b is not None
++        short = b.shifts - r.shifts
++        return (f"[#6b7785]Personal best[/]  [b]{b.shifts}[/] shifts · "
++                f"{_pct(b.accuracy)}  [dim]({short} shift"
++                f"{'' if short == 1 else 's'} short)[/]")
++
++    def compose(self) -> ComposeResult:
++        # Same framed layout as the start menu (glitch border around a centred
++        # column), so a run's end reads as part of the menu flow it returns to.
++        r = self._record
++        with Vertical(classes="menu-frame"):
++            yield AmbientGlitchPanel(seed=313, classes="menu-flank-h")
++            with Horizontal(classes="menu-frame-row"):
++                yield AmbientGlitchPanel(seed=303, classes="menu-flank")
++                with Vertical(classes="menu-column"):
++                    yield Static("[b][#ff5470]R U N   O V E R[/][/]",
++                                 classes="menu-logo")
++                    yield Static(self._why(), classes="menu-subtitle")
++                    yield Static(
++                        "\n".join([
++                            f"[#6b7785]Shifts survived[/]   [b]{r.shifts}[/]",
++                            f"[#6b7785]Run accuracy[/]      [b]{_pct(r.accuracy)}[/]",
++                            f"[#6b7785]HackDollar$[/]       [b]{r.hackdollars}[/]",
++                            "",
++                            self._best_line(),
++                        ]),
++                        id="endless-over-stats",
++                    )
++                    yield Static(
++                        "[#00ff9f][b]R[/][/] New Endless run   ·   "
++                        "[#00ff9f][b]M[/][/] Main menu   ·   "
++                        "[#00ff9f][b]Q[/][/] Quit",
++                        classes="menu-hint",
++                    )
++                yield AmbientGlitchPanel(seed=404, classes="menu-flank")
++            yield AmbientGlitchPanel(seed=414, classes="menu-flank-h")
++
++    def action_restart(self) -> None:
++        self.app.start_endless_game()
++
++    def action_main_menu(self) -> None:
++        self.app.to_main_menu()
++
++    def action_quit_app(self) -> None:
++        self.app.exit()
+diff --git a/gameengine/ui/tui/screens/eod.py b/gameengine/ui/tui/screens/eod.py
+index 52a4320..55ed711 100644
+--- a/gameengine/ui/tui/screens/eod.py
++++ b/gameengine/ui/tui/screens/eod.py
+@@ -11,7 +11,7 @@ from textual.screen import Screen
+ from textual.widgets import Static
+ 
+ from gameengine import config
+-from gameengine.core import persistence
++from gameengine.core import endless, persistence
+ from gameengine.core.models import Day, GameState, Performance
+ from gameengine.ui.tui.screens._narration import (
+     _play_overseer,
+@@ -75,7 +75,23 @@ class EODScreen(Screen):
+                 f"per correct admit · "
+                 f"{config.DAY_REWARD_PAYOUT(self._day.number, False)} per correct deny[/]"
+             )
+-            yield Static(f"Alignment: {self._state.alignment:+d}")
++            if self._state.is_endless:
++                # #7: the rolling window replaces alignment (frozen in Endless).
++                acc = endless.rolling_accuracy(self._state)
++                line = config.ENDLESS_ACCURACY_THRESHOLD
++                live = endless.accuracy_check_active(self._state)
++                col = ("#6b7785" if acc is None or not live else
++                       "#ff5470" if acc < line else
++                       "#ffd93d" if endless.in_danger(self._state) else "#00ff9f")
++                shown = "—" if acc is None else f"{acc:.0%}"
++                note = (f"line {line:.0%}" if live else
++                        f"line {line:.0%} — counts from shift "
++                        f"{config.ENDLESS_ACCURACY_WINDOW}")
++                yield Static(
++                    f"{config.ENDLESS_ACCURACY_WINDOW}-shift accuracy: "
++                    f"[{col}][b]{shown}[/][/]  [dim]({note})[/]")
++            else:
++                yield Static(f"Alignment: {self._state.alignment:+d}")
+             yield Static("")
+             for r in self._state.pending_results:
+                 tag  = "verdict-correct" if r.correct else "verdict-wrong"
+@@ -85,8 +101,9 @@ class EODScreen(Screen):
+                     f"[{tag}]{mark}[/]  {r.archetype.value:<14}  "
+                     f"you {r.player_verdict.value:<5}  "
+                     f"[#6b7785]⛨{r.site_health_delta:+.1f}  "
+-                    f"+{r.hackdollar_delta}HD${bonus_str}  "
+-                    f"Align {r.alignment_delta:+d}[/]"
++                    f"+{r.hackdollar_delta}HD${bonus_str}"
++                    + ("" if self._state.is_endless
++                       else f"  Align {r.alignment_delta:+d}") + "[/]"
+                 )
+         with Container(id="overseer-panel"):
+             yield Static("[b]Foreman:[/]", classes="speaker")
+diff --git a/gameengine/ui/tui/screens/intro.py b/gameengine/ui/tui/screens/intro.py
+index 887082e..0a64505 100644
+--- a/gameengine/ui/tui/screens/intro.py
++++ b/gameengine/ui/tui/screens/intro.py
+@@ -5,9 +5,11 @@ BUILD_PLAN_MenuSystem_2026-09.md, Phase 2. Closes GitHub issue #79
+ up). The logo is a plain text placeholder per Nick's own instruction —
+ swappable for real art later without touching layout or behavior.
+ 
+-Endless Mode has no engine behind it yet (Phase order in the build plan) —
+-it ships as a disabled "coming soon" button, same treatment as any other
+-not-yet-built feature getting a stub rather than a silently missing one.
++Endless Mode (#7) is live. The campaign and Endless keep SEPARATE saves
++(Nick, 2026-09-25), so the menu shows them as two clearly labelled pairs —
++"New Campaign / Continue Campaign" and "New Endless Run / Continue Endless" —
++each Continue naming where that save is (Day 7 vs Shift 4), plus a note that
++the two never overwrite each other and the Endless personal best.
+ """
+ 
+ from __future__ import annotations
+@@ -21,7 +23,8 @@ from textual.screen import Screen
+ from textual.widgets import Button, Static
+ 
+ from gameengine import config
+-from gameengine.core import persistence
++from gameengine.core import endless, persistence
++from gameengine.core.models import GameMode
+ from gameengine.ui.tui.screens.credits import CreditsScreen
+ from gameengine.ui.tui.screens.settings import SettingsScreen
+ from gameengine.ui.tui.widgets import AmbientGlitchPanel
+@@ -31,13 +34,20 @@ _LOGO = "H A C K D O X\nT E R M I N A L"
+ 
+ class IntroScreen(Screen):
+     BINDINGS: ClassVar[list[Binding]] = [
+-        Binding("n", "new_game",      "New game"),
+-        Binding("c", "continue_game", "Continue",  show=False),
++        Binding("n", "new_game",      "New campaign"),
++        Binding("c", "continue_game", "Continue campaign", show=False),
++        Binding("e", "new_endless",   "New Endless run",   show=False),
++        Binding("x", "continue_endless", "Continue Endless", show=False),
+         Binding("s", "open_settings", "Settings",  show=False),
+         Binding("r", "open_credits",  "Credits",   show=False),
+         Binding("q", "quit_app",      "Quit"),
+     ]
+ 
++    def __init__(self) -> None:
++        super().__init__()
++        # Starting a new Endless run over one in progress takes two presses.
++        self._confirm_abandon = False
++
+     def compose(self) -> ComposeResult:
+         with Vertical(classes="menu-frame"):
+             yield AmbientGlitchPanel(seed=111, classes="menu-flank-h")
+@@ -46,14 +56,17 @@ class IntroScreen(Screen):
+                 with Vertical(classes="menu-column"):
+                     yield Static(_LOGO, classes="menu-logo")
+                     yield Static(
+-                        "The wire can't be trusted. The data goes by ship. You decide who carries it.",
++                        "Access to HackDox is reviewed by hand. You are the hand.",
+                         classes="menu-subtitle",
+                     )
++                    # Above the buttons, so it stays visible on a short
++                    # terminal (the column scrolls, and the bottom goes first).
++                    yield Static("", id="menu-saves", classes="menu-saves")
+                     with Vertical(classes="menu-buttons"):
+-                        yield Button("New Game", id="menu-new-game", variant="success")
+-                        yield Button("Continue", id="menu-continue")
+-                        yield Button("Endless Mode (coming soon)",
+-                                     id="menu-endless", disabled=True)
++                        yield Button("New Campaign", id="menu-new-game", variant="success")
++                        yield Button("Continue Campaign", id="menu-continue")
++                        yield Button("New Endless Run", id="menu-endless")
++                        yield Button("Continue Endless", id="menu-continue-endless")
+                         yield Button("Settings", id="menu-settings")
+                         yield Button("Credits", id="menu-credits")
+                         yield Button("Quit", id="menu-quit", variant="error")
+@@ -65,17 +78,42 @@ class IntroScreen(Screen):
+         self._refresh_continue()
+ 
+     def _refresh_continue(self) -> None:
+-        """#79 AC: Continue is shown/enabled only when a save exists, and
+-        the hint line reflects that too — a fresh install shows just New
+-        Game / Settings / Credits / Quit."""
+-        has_save = config.SAVE_FILE.exists()
+-        btn = self.query_one("#menu-continue", Button)
+-        btn.disabled = not has_save
+-        btn.display = has_save
++        """#79 AC: each Continue is shown only when its save exists. #7: the
++        campaign and Endless saves are separate, so each Continue button names
++        its mode AND where that save stands, and a line under the buttons
++        spells out that the two never overwrite each other."""
++        camp = persistence.describe(GameMode.CAMPAIGN.value)
++        endl = persistence.describe(GameMode.ENDLESS.value)
+ 
+-        parts = ["[#00ff9f][b]N[/][/] New Game"]
+-        if has_save:
+-            parts.append("[#00ff9f][b]C[/][/] Continue")
++        btn = self.query_one("#menu-continue", Button)
++        btn.disabled = camp is None
++        btn.display = camp is not None
++        if camp is not None:
++            btn.label = f"Continue Campaign · {camp}"
++
++        ebtn = self.query_one("#menu-continue-endless", Button)
++        ebtn.disabled = endl is None
++        ebtn.display = endl is not None
++        if endl is not None:
++            ebtn.label = f"Continue Endless · {endl}"
++
++        saves: list[str] = []
++        if camp is not None or endl is not None:
++            saves.append("[dim]Campaign and Endless keep separate saves — "
++                         "starting one never touches the other.[/]")
++        best = endless.personal_best()
++        if best is not None:
++            acc = "—" if best.accuracy is None else f"{best.accuracy:.0%}"
++            saves.append(f"[#c084fc]Endless best:[/] [b]{best.shifts}[/] shifts "
++                         f"· {acc} accuracy")
++        self.query_one("#menu-saves", Static).update("\n".join(saves))
++
++        parts = ["[#00ff9f][b]N[/][/] New Campaign"]
++        if camp is not None:
++            parts.append("[#00ff9f][b]C[/][/] Continue Campaign")
++        parts.append("[#00ff9f][b]E[/][/] New Endless")
++        if endl is not None:
++            parts.append("[#00ff9f][b]X[/][/] Continue Endless")
+         parts += [
+             "[#00ff9f][b]S[/][/] Settings",
+             "[#00ff9f][b]R[/][/] Credits",
+@@ -86,25 +124,51 @@ class IntroScreen(Screen):
+     def on_button_pressed(self, event: Button.Pressed) -> None:
+         event.stop()
+         handlers = {
+-            "menu-new-game": self.action_new_game,
+-            "menu-continue": self.action_continue_game,
+-            "menu-settings": self.action_open_settings,
+-            "menu-credits":  self.action_open_credits,
+-            "menu-quit":     self.action_quit_app,
++            "menu-new-game":         self.action_new_game,
++            "menu-continue":         self.action_continue_game,
++            "menu-endless":          self.action_new_endless,
++            "menu-continue-endless": self.action_continue_endless,
++            "menu-settings":         self.action_open_settings,
++            "menu-credits":          self.action_open_credits,
++            "menu-quit":             self.action_quit_app,
+         }
+         handler = handlers.get(event.button.id)
+         if handler is not None:
+             handler()
+-        # menu-endless is disabled — no handler until Endless Mode itself
+-        # exists (not this phase).
+ 
+     def action_new_game(self) -> None:
+         self.app.start_new_game()
+ 
+     def action_continue_game(self) -> None:
+-        if not config.SAVE_FILE.exists():
++        if not persistence.exists(GameMode.CAMPAIGN.value):
++            return
++        state = persistence.load(GameMode.CAMPAIGN.value)
++        if state is None:
++            return
++        self.app.resume_game(state)
++
++    def action_new_endless(self) -> None:
++        """Start a fresh Endless run. If one is already in progress, the first
++        press only warns; the second abandons it (it still counts toward the
++        personal best — the shifts it survived were real)."""
++        existing = persistence.load(GameMode.ENDLESS.value) \
++            if persistence.exists(GameMode.ENDLESS.value) else None
++        if existing is not None and not self._confirm_abandon:
++            self._confirm_abandon = True
++            self.query_one("#menu-hint", Static).update(
++                f"[#ffd93d]An Endless run is in progress "
++                f"({config.day_label(existing.current_day)}). Press "
++                f"[b]New Endless Run[/b] again to abandon it and start over.[/]")
++            return
++        if existing is not None:
++            endless.finish_run(existing)
++        self._confirm_abandon = False
++        self.app.start_endless_game()
++
++    def action_continue_endless(self) -> None:
++        if not persistence.exists(GameMode.ENDLESS.value):
+             return
+-        state = persistence.load()
++        state = persistence.load(GameMode.ENDLESS.value)
+         if state is None:
+             return
+         self.app.resume_game(state)
+diff --git a/gameengine/ui/tui/widgets/status_header.py b/gameengine/ui/tui/widgets/status_header.py
+index 257d8ab..8c3f3c3 100644
+--- a/gameengine/ui/tui/widgets/status_header.py
++++ b/gameengine/ui/tui/widgets/status_header.py
+@@ -7,7 +7,7 @@ from collections.abc import Callable
+ from textual.widgets import Static
+ 
+ from gameengine import config
+-from gameengine.core import tools_bridge
++from gameengine.core import endless, shop, tools_bridge
+ from gameengine.core.models import Day, GameState
+ from gameengine.ui.tui.shared import (
+     _PAGE_NAMES,
+@@ -57,7 +57,7 @@ class StatusHeader(Static):
+                          ("L", "logwatch"),  ("S", "stegotool"))
+         )
+         n_credits   = self.state.hackdox_credits
+-        max_credits = config.HACKDOX_CREDIT_MAX
++        max_credits = shop.credit_cap(self.state)
+         creds_pips  = "▮" * n_credits + "▯" * max(0, max_credits - n_credits)
+         # Health only moves at end of day (#20 rework) — show the pending
+         # delta accumulated by today's verdicts so the player can track it.
+@@ -109,7 +109,8 @@ class StatusHeader(Static):
+             f"   [b #0b0e10 on {hcol}] ⛨ HEALTH {h:.0f}% [/]{pend_s}"
+             f"   [b #0b0e10 on #00ff9f] HD$ {self.state.hackdollars} [/]"
+             f"   [b #0b0e10 on #c084fc] CR {n_credits}/{max_credits} [/] [#c084fc]{creds_pips}[/]"
+-            f"   [{align_col}]{bar}[/]"
++            + (f"   {_endless_accuracy_chip(self.state)}" if self.state.is_endless
++               else f"   [{align_col}]{bar}[/]")
+         )
+ 
+         width   = self.size.width or config.STATUS_BAR_FALLBACK_WIDTH
+@@ -138,3 +139,22 @@ class StatusHeader(Static):
+         self.slot_index = slot_index
+         self.page_index = page_index
+         self.refresh()
++
++
++def _endless_accuracy_chip(state: GameState) -> str:
++    """Endless (#7): the rolling accuracy the run lives or dies by, in place of
++    the alignment meter (alignment never moves in Endless). Grey until the
++    window is full and the loss rule is live; then green / amber / red."""
++    acc = endless.rolling_accuracy(state)
++    line = f"{config.ENDLESS_ACCURACY_THRESHOLD:.0%}"
++    if acc is None:
++        return f"[#6b7785]ACC —  (line {line})[/]"
++    if not endless.accuracy_check_active(state):
++        col = "#6b7785"
++    elif acc < config.ENDLESS_ACCURACY_THRESHOLD:
++        col = "#ff5470"
++    elif endless.in_danger(state):
++        col = "#ffd93d"
++    else:
++        col = "#00ff9f"
++    return f"[b #0b0e10 on {col}] ACC {acc:.0%} [/] [dim]line {line}[/]"
+diff --git a/sim_balance.py b/sim_balance.py
+new file mode 100644
+index 0000000..b5a7e2a
+--- /dev/null
++++ b/sim_balance.py
+@@ -0,0 +1,329 @@
++"""Balance simulator for #70 (campaign) and #7 (Endless).
++
++Runs the REAL generator, rulebook, tool costs and payout curves — no copies of
++the formulas — across many seeds, and answers three questions per day/shift:
++
++  1. Is correct play possible on ⏱?  `need` is the cheapest spend that reveals
++     decisive evidence for every candidate who must be denied (evidence behind
++     a tool you can't afford can't be acted on). Admits cost nothing in this
++     bound — you can admit a clean candidate off the dossier. If the day's
++     budget is below `need`, correct play is mathematically impossible.
++     `full` is the comfortable spend: every unlocked tool's base run on every
++     candidate, a filter wherever a deny's evidence needs one, and the stamps
++     to resolve every stego image. budget/full is how much of a "check
++     everything" shift the budget buys — the scarcity dial.
++
++  2. What does the economy pay?  Expected HD$ per day for three player
++     profiles (accuracy, evidence-board quality), against the price of the
++     whole upgrade catalog. Nick (2026-09-25): buying every upgrade by day 20
++     must be impossible, in both modes.
++
++  3. Does Site Health hold?  Expected health path per profile, plus a Monte
++     Carlo of how often each profile loses (health, or Endless's rolling
++     accuracy).
++
++Usage:
++    python sim_balance.py                 # campaign + endless, markdown report
++    python sim_balance.py --seeds 40      # more seeds (slower, smoother)
++"""
++
++from __future__ import annotations
++
++import argparse
++import math
++import random
++import statistics
++from dataclasses import dataclass
++
++from gameengine import config
++from gameengine.core import candidate_gen, tools_bridge
++from gameengine.core.content_loader import load_day
++from gameengine.core.models import Day, DiscrepancyKind, GameState, ToolName, Verdict
++
++TOOLS = ("ghostscan", "hashcrack", "logwatch", "stegotool")
++
++
++@dataclass(frozen=True)
++class Profile:
++    name: str
++    accuracy: float       # chance each verdict is right
++    board: float          # fraction of the evidence-board bonus earned on a correct verdict
++    # Campaign only: what the player does with a Dark Web candidate. "admit"
++    # is by-the-book (the scored-correct verdict, and the Dark Web alignment
++    # path); "deny" resists (scored wrong, no pay, but the site is spared —
++    # the White Hat path). Endless has no Dark Web.
++    dark_web: str = "admit"
++
++
++PROFILES = (
++    Profile("sharp", 0.95, 0.85),
++    Profile("solid", 0.85, 0.60),
++    Profile("shaky", 0.74, 0.40),
++)
++PERFECT = Profile("perfect", 1.0, 1.0)
++
++
++# ─── ⏱: what does correct play cost? ────────────────────────────────────────
++
++
++def _stamps_to_resolve(img) -> int:
++    """Stamps to reveal STEGO_STAMP_RESOLVE_COVERAGE of the zone with perfect
++    aim (a floor — real players overlap). 1.3× for honest aim."""
++    if img.zone is None:
++        return 0
++    _x, _y, w, h = img.zone
++    area = w * h * config.STEGO_STAMP_RESOLVE_COVERAGE
++    return max(1, math.ceil(1.3 * area / (config.STEGO_STAMP_W * config.STEGO_STAMP_H)))
++
++
++def _kind_cost(kind: DiscrepancyKind, cand, state, day: Day, with_filter: bool) -> int:
++    tool, _sev = candidate_gen._SEVERITY_REVEAL[kind]
++    if tool == ToolName.DOSSIER:
++        return 0
++    t = tool.value
++    if t == "stegotool":
++        stamps = _stamps_to_resolve(tools_bridge.build_stego_image(cand, day.number))
++        return stamps * config.STEGO_STAMP_COST + (
++            config.STEGO_FILTER_COST if with_filter else 0)
++    cost = tools_bridge.tool_cost(state, t)
++    if with_filter and t in ("ghostscan", "logwatch"):
++        cost += config.FILTER_COSTS[t]
++    return cost
++
++
++def _disqualifying_kinds(day: Day) -> set[DiscrepancyKind]:
++    out = set()
++    for r in day.rules:
++        if r.severity == "disqualifying" and r.predicate.startswith("has_discrepancy:"):
++            try:
++                out.add(DiscrepancyKind(r.predicate.split(":", 1)[1]))
++            except ValueError:
++                pass
++    return out
++
++
++def candidate_costs(cand, day: Day, state) -> tuple[int, int]:
++    """(need, full) ⏱ for one candidate."""
++    kinds = [d.kind for d in cand.truth.discrepancies]
++    deny = cand.truth.correct_verdict == Verdict.DENY
++    # need: cheapest decisive evidence for a deny
++    need = 0
++    if deny and kinds:
++        dq = [k for k in kinds if k in _disqualifying_kinds(day)]
++        if dq:
++            need = min(_kind_cost(k, cand, state, day, with_filter=False) for k in dq)
++        else:
++            # Only advisory kinds: the case is "multiple discrepancies" — see
++            # two of them. One tool run reveals every kind that tool owns, so
++            # buy tools cheapest-first until two kinds are covered.
++            by_tool: dict[str, list] = {}
++            for k in set(kinds):
++                by_tool.setdefault(candidate_gen._SEVERITY_REVEAL[k][0].value, []).append(k)
++            priced = sorted((min(_kind_cost(k, cand, state, day, False) for k in ks), len(ks))
++                            for ks in by_tool.values())
++            seen = 0
++            for cost, n in priced:
++                if seen >= 2:
++                    break
++                need += cost
++                seen += n
++    # full: base-run everything unlocked, filters/stamps where evidence lives
++    unlocked = config.tools_unlocked_by(day.number)
++    full = sum(tools_bridge.tool_cost(state, t) for t in ("ghostscan", "hashcrack", "logwatch")
++               if t in unlocked)
++    tools_hit = {candidate_gen._SEVERITY_REVEAL[k][0].value for k in kinds}
++    for t in ("ghostscan", "logwatch"):
++        if t in tools_hit and deny:
++            full += config.FILTER_COSTS[t]
++    if "stegotool" in unlocked:
++        img = tools_bridge.build_stego_image(cand, day.number)
++        # a thorough player samples every image; a clean one needs ~2 stamps to trust
++        full += max(2, _stamps_to_resolve(img)) * config.STEGO_STAMP_COST
++    return need, full
++
++
++# ─── The walk ───────────────────────────────────────────────────────────────
++
++
++@dataclass
++class DayStats:
++    label: str
++    number: int
++    count: int
++    budget: int
++    need: float          # mean over seeds
++    need_max: int        # worst seed
++    full: float
++    admit_w: list        # per-candidate (is_admit, health weight) for a representative mix
++    payout_admit: int
++    payout_deny: int
++    n_admit: float
++    n_deny: float
++
++
++def walk(days: list[tuple[str, Day]], seeds: list[int], capacity: int) -> list[DayStats]:
++    out = []
++    for label, day in days:
++        state = GameState(seed=0, current_day=day.number)
++        state.compute_capacity = capacity
++        needs, fulls, mix = [], [], []
++        n_admit = n_deny = 0
++        for seed in seeds:
++            cands = [candidate_gen.generate(seed, day, s) for s in range(day.candidate_count)]
++            need = full = 0
++            for c in cands:
++                a, b = candidate_costs(c, day, state)
++                need += a
++                full += b
++                admit = c.truth.correct_verdict == Verdict.ADMIT
++                n_admit += admit
++                n_deny += not admit
++                mix.append((admit, config.ARCHETYPE_HEALTH_WEIGHTS.get(c.archetype.value, 0.0),
++                            c.archetype.value == "dark_web"))
++            needs.append(need)
++            fulls.append(full)
++        out.append(DayStats(
++            label=label, number=day.number, count=day.candidate_count,
++            budget=config.daily_compute_budget(day.number, capacity),
++            need=statistics.mean(needs), need_max=max(needs), full=statistics.mean(fulls),
++            admit_w=mix,
++            payout_admit=config.DAY_REWARD_PAYOUT(day.number, True),
++            payout_deny=config.DAY_REWARD_PAYOUT(day.number, False),
++            n_admit=n_admit / len(seeds), n_deny=n_deny / len(seeds)))
++    return out
++
++
++def expected_economy(stats: list[DayStats], p: Profile) -> list[dict]:
++    """Expected per-day HD$ and health for a profile (no spending)."""
++    health, bank, rows = config.SITE_HEALTH_START, 0.0, []
++    for d in stats:
++        per = len(d.admit_w) / max(1, d.count)       # seeds folded into the mix
++        dh = hd = 0.0
++        for admit, w, dw in d.admit_w:
++            if dw:
++                # A deliberate policy, not a skill roll.
++                if p.dark_web == "admit":
++                    dh += w
++                    hd += d.payout_admit + config.BOARD_ACCURACY_MAX_BONUS
++                continue
++            dh += p.accuracy * w if admit else (1 - p.accuracy) * w
++            hd += p.accuracy * ((d.payout_admit if admit else d.payout_deny)
++                                + p.board * config.BOARD_ACCURACY_MAX_BONUS)
++        dh /= per
++        hd /= per
++        health = max(0.0, min(100.0, health + dh))
++        bonus = (round(config.HACKDOLLAR_SITE_HEALTH_BONUS * health / 100)
++                 if health >= config.SITE_HEALTH_REWARD_THRESHOLD else 0)
++        bank += hd + bonus
++        rows.append({"label": d.label, "hd": hd + bonus, "bank": bank, "health": health})
++    return rows
++
++
++def loss_rate(stats: list[DayStats], p: Profile, trials: int, endless: bool,
++              rng: random.Random) -> tuple[float, float]:
++    """Monte Carlo: (share of runs lost, mean days survived)."""
++    lost, survived = 0, []
++    for _ in range(trials):
++        health, hist = config.SITE_HEALTH_START, []
++        day_i = 0
++        for day_i, d in enumerate(stats, start=1):
++            # sample one seed's worth of candidates from the pooled mix
++            sample = rng.sample(d.admit_w, d.count)
++            correct = 0
++            for admit, w, dw in sample:
++                if dw:
++                    if p.dark_web == "admit":
++                        health += w
++                        correct += 1
++                    continue
++                ok = rng.random() < p.accuracy
++                correct += ok
++                if (admit and ok) or (not admit and not ok):
++                    health += w
++            health = max(0.0, min(100.0, health))
++            hist.append((correct, d.count))
++            dead = health < config.SITE_HEALTH_LOSS_THRESHOLD
++            if endless and len(hist) >= config.ENDLESS_ACCURACY_WINDOW:
++                w5 = hist[-config.ENDLESS_ACCURACY_WINDOW:]
++                dead = dead or (sum(c for c, _ in w5) / sum(n for _, n in w5)
++                                < config.ENDLESS_ACCURACY_THRESHOLD)
++            if dead:
++                lost += 1
++                break
++        survived.append(day_i)
++    return lost / trials, statistics.mean(survived)
++
++
++# ─── Report ─────────────────────────────────────────────────────────────────
++
++
++PRICE_MULT = 1.0   # sweep aid: --price-mult scales the catalog total only
++
++
++def catalog_total() -> int:
++    return round(PRICE_MULT * sum(price for _u, _l, price, _d in config.UPGRADE_CATALOG))
++
++
++def report(seeds: int = 20, endless_shifts: int = 40, trials: int = 400) -> str:
++    rng = random.Random(7)
++    sd = list(range(1, seeds + 1))
++    lines: list[str] = []
++    cat = catalog_total()
++
++    def section(title, days, endless):
++        st = walk(days, sd, config.STARTING_COMPUTE)
++        lines.append(f"## {title}\n")
++        lines.append("| day | n | budget ⏱ | need ⏱ (mean/worst) | full ⏱ | budget/full | admit HD$ | deny HD$ |")
++        lines.append("|---|---|---|---|---|---|---|---|")
++        for d in st:
++            flag = " ⚠" if d.need_max > d.budget else ""
++            lines.append(f"| {d.label} | {d.count} | {d.budget} | {d.need:.0f} / {d.need_max}{flag} | "
++                         f"{d.full:.0f} | {(f'{d.budget / d.full:.2f}' if d.full else '—')} | "
++                         f"{d.payout_admit} | {d.payout_deny} |")
++        lines.append("")
++        lines.append(f"Upgrade catalog total: **{cat} HD$** "
++                     f"(+ credits {config.SHOP_PRICE_CREDIT} each, capacity {config.SHOP_PRICE_CAPACITY}+).\n")
++        lines.append("| profile | HD$ by day 10 | by day 20 | share of catalog by 20 | health @20 | loss rate | mean days survived |")
++        lines.append("|---|---|---|---|---|---|---|")
++        profiles = [PERFECT, *PROFILES]
++        if not endless:
++            profiles += [Profile(f"{q.name}, resists DW", q.accuracy, q.board, "deny")
++                         for q in (PERFECT, *PROFILES)]
++        for p in profiles:
++            eco = expected_economy(st, p)
++            at = lambda n: eco[min(n, len(eco)) - 1]["bank"]  # noqa: E731
++            lr, surv = loss_rate(st, p, trials, endless, rng)
++            lines.append(f"| {p.name} ({p.accuracy:.0%}, board {p.board:.0%}) | {at(10):.0f} | {at(20):.0f} | "
++                         f"{at(20) / cat:.0%} | {eco[min(20, len(eco)) - 1]['health']:.0f}% | "
++                         f"{lr:.0%} | {surv:.1f} |")
++        lines.append("")
++        return st
++
++    section("Campaign (days 1–20)",
++            [(f"D{n}", load_day(n)) for n in range(1, config.CAMPAIGN_LAST_DAY + 1)], False)
++    section(f"Endless (shifts 1–{endless_shifts})",
++            [(f"S{s}", load_day(config.endless_day_number(s)))
++             for s in range(1, endless_shifts + 1)], True)
++    return "\n".join(lines)
++
++
++def apply_overrides(pairs: list[str]) -> None:
++    """--set NAME=VALUE (python literal) — try a tuning without editing config."""
++    import ast
++    for pair in pairs:
++        name, value = pair.split("=", 1)
++        setattr(config, name, ast.literal_eval(value))
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--price-mult", type=float, default=1.0)
++    ap.add_argument("--set", action="append", default=[],
++                    help="config override NAME=VALUE, repeatable")
++    ap.add_argument("--seeds", type=int, default=20)
++    ap.add_argument("--shifts", type=int, default=40)
++    ap.add_argument("--trials", type=int, default=400)
++    a = ap.parse_args()
++    apply_overrides(a.set)
++    PRICE_MULT = a.price_mult
++    print(report(a.seeds, a.shifts, a.trials))

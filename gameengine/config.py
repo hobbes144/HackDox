@@ -65,13 +65,14 @@ def daily_compute_budget(day_number: int, capacity: int) -> int:
     capacity is GameState.compute_capacity (upgradable in the shop).
     Tune DAILY_BUDGET_GROWTH / capacity purchases to manage difficulty.
     """
+    day_number = curve_day(day_number)
     return max(DAILY_BUDGET_MIN,
                capacity + DAILY_BUDGET_GROWTH * (day_number - 1))
 
 
 # Maximum evidence-board accuracy bonus — paid in HackDollar$ on a correct
 # verdict (issue #27 moved this off ⏱: verdicts never grant computing hours).
-BOARD_ACCURACY_MAX_BONUS = 10  # HD$
+BOARD_ACCURACY_MAX_BONUS = 4   # HD$ (was 10 — #70: it was over half of all income)
 
 # ─── Site Health — persistent % loss condition (issues #18/#20, replaces lives)
 #
@@ -86,16 +87,27 @@ SITE_HEALTH_REWARD_THRESHOLD = 75.0    # above this at EOD → bonus payout
 
 # Keyed by Archetype.value strings so config stays import-free of models.
 # Positive = beneficial actor admitted; negative = threat let inside.
+#
+# #70 balance pass (2026-09-25, sim_balance.py). Threat weights were halved-ish
+# and the Dark Web's cut to a quarter. Before: an 85%-accurate player lost
+# every run in both modes (health drift ≈ −7/shift late), and a PERFECT
+# by-the-book player lost 75% of campaigns — admitting the Dark Web is the
+# scored-correct verdict, ~23 of them at −8 took ~184 health, so the Dark Web
+# alignment path was unfinishable. After: both alignment paths are finishable
+# (solid player: 15% loss by the book, 1% resisting), resisting stays the
+# safer road for the site, a sloppy (74%) player usually still loses, and in
+# Endless a sharp player holds indefinitely while a solid one lasts ~30 shifts.
+# Ordering is unchanged: a missed Sneaky Bugger still hurts most.
 ARCHETYPE_HEALTH_WEIGHTS: dict[str, float] = {
     "obvious_admit":     +2.0,
     "day_to_day":        +1.5,
     "the_professional":  +2.0,
     "white_hat":         +1.0,   # rules-invalid, but they help the site
-    "clumsy_cutie":      -4.0,   # hygiene risk, not malice
-    "the_incompatible":  -2.0,   # policy breach, low actual threat
-    "dark_web":          -8.0,
-    "bad_actor":        -10.0,
-    "sneaky_bugger":    -12.0,
+    "clumsy_cutie":      -3.0,   # hygiene risk, not malice          (was −4)
+    "the_incompatible":  -1.5,   # policy breach, low actual threat  (was −2)
+    "dark_web":          -2.0,   # the site rots slowly — see above  (was −8)
+    "bad_actor":         -6.0,   #                                   (was −10)
+    "sneaky_bugger":     -7.0,   #                                   (was −12)
 }
 
 # ─── HackDollar$ — persistent between-day currency (issue #21) ───────────────
@@ -105,9 +117,14 @@ ARCHETYPE_HEALTH_WEIGHTS: dict[str, float] = {
 # menu (upgrades, HackDox Credits, ⏱ capacity). Never spent on tools.
 
 STARTING_HACKDOLLARS          = 0
-HACKDOLLAR_PER_CORRECT_ADMIT  = 10   # HD$ per correct admit (day-1 rate)
-HACKDOLLAR_PER_CORRECT_DENY   = 4    # HD$ per correct deny (smaller cut)
-HACKDOLLAR_SITE_HEALTH_BONUS  = 25   # max EOD bonus, scaled by health %
+# #70 (2026-09-25): income cut and upgrade prices raised ×3.5 so the whole
+# catalog can't be bought by day 20 — players pick. Measured by sim_balance.py:
+# by day 20 a perfect player can afford ~79% of the catalog, a solid (85%)
+# one ~50%, a sloppy one ~40%, before credits/capacity compete for the same
+# money. (Before: 4.6× the catalog for a perfect player, 2.4× for a sloppy one.)
+HACKDOLLAR_PER_CORRECT_ADMIT  = 8    # HD$ per correct admit (day-1 rate; was 10)
+HACKDOLLAR_PER_CORRECT_DENY   = 3    # HD$ per correct deny (smaller cut; was 4)
+HACKDOLLAR_SITE_HEALTH_BONUS  = 15   # max EOD bonus, scaled by health % (was 25)
                                      # (paid only above the reward threshold)
 
 # ── Reward decay (#4, lever 1) ───────────────────────────────────────────────
@@ -129,7 +146,7 @@ HACKDOLLAR_SITE_HEALTH_BONUS  = 25   # max EOD bonus, scaled by health %
 # penalise a player twice for the same shift.
 HACKDOLLAR_DECAY_ADMIT_PERIOD = 5    # admit rate steps down every N days
 HACKDOLLAR_DECAY_DENY_PERIOD  = 10   # deny rate steps down every N days
-HACKDOLLAR_FLOOR_ADMIT        = 6
+HACKDOLLAR_FLOOR_ADMIT        = 5    # (was 6)
 HACKDOLLAR_FLOOR_DENY         = 2
 
 
@@ -140,6 +157,7 @@ def DAY_REWARD_PAYOUT(day_number: int, admit: bool) -> int:
     the smaller cut, and they decay on a slower clock because there is less
     there to take away.
     """
+    day_number = curve_day(day_number)
     if admit:
         return max(HACKDOLLAR_FLOOR_ADMIT,
                    HACKDOLLAR_PER_CORRECT_ADMIT
@@ -315,7 +333,7 @@ TOOL_COST_INFLATION_PERIOD = 4   # +1 ⏱ to every tool base cost every N days
 
 def tool_cost_inflation(day_number: int) -> int:
     """Extra ⏱ added to every tool's base cost on the given day."""
-    return day_number // TOOL_COST_INFLATION_PERIOD
+    return curve_day(day_number) // TOOL_COST_INFLATION_PERIOD
 
 
 def DAY_TOOL_COST(tool_name: str, day_number: int,
@@ -807,6 +825,104 @@ CAMPAIGN_LAST_DAY = 20
 # per day, and the difficulty levers deliberately stay flat across them.
 TUTORIAL_LAST_DAY = 5
 
+
+# ─── Endless Mode (#7) — its own day-number range ────────────────────────────
+#
+# Endless shift N is day number ENDLESS_DAY_BASE + N (shift 1 = day 1001).
+#
+# Why a separate numeric range instead of a second "gate day" field threaded
+# through every call site: every progressive-unlock gate in the engine is a
+# monotonic `unlock_day <= day_number` check (TOOL_UNLOCK_DAY,
+# BREACH_DB_UNLOCK_DAY, candidate_gen.intro_day, the _SEVERITY_BY_DAY steps).
+# A day number above all of them therefore reads as "everything taught,
+# everything unlocked" at every gate with no gate code changing — which is
+# exactly Endless's "full game from shift 1" rule. The number is also part of
+# every RNG seed, so each shift stays unique.
+#
+# What must NOT see 1001+ raw are the difficulty CURVES, which would read it as
+# "day one thousand". Those all go through curve_day() below, which maps a
+# shift onto the campaign-equivalent day it should play like. For every
+# campaign day curve_day(n) == n, so the campaign is untouched by construction
+# (and a golden snapshot of days 1-20 guards that in test_endless.py).
+#
+# Nick's shape (2026-09-25, "Option A, a bit harder than the campaign's end,
+# never guaranteed failure"): shift 1 plays like campaign day 7, the curve
+# reaches the campaign's last day by shift 15, keeps climbing to day 26 by
+# shift 30, then plateaus there for good.
+ENDLESS_DAY_BASE             = 1000
+ENDLESS_CURVE_START          = 7    # shift 1 plays like this campaign day
+ENDLESS_CURVE_CAMPAIGN_SHIFT = 15   # shift that reaches CAMPAIGN_LAST_DAY
+ENDLESS_CURVE_CEILING        = 26   # plateau — a bit past the campaign's end
+ENDLESS_CURVE_CEILING_SHIFT  = 30   # shift the plateau is reached
+
+# Past the campaign's 12-candidate cap, Endless keeps adding one candidate
+# every ENDLESS_CANDIDATE_GROWTH_PERIOD curve days, up to this ceiling.
+ENDLESS_CANDIDATE_COUNT_CAP      = 14
+ENDLESS_CANDIDATE_GROWTH_PERIOD  = 3
+
+
+def is_endless_day(day_number: int) -> bool:
+    return day_number > ENDLESS_DAY_BASE
+
+
+def endless_day_number(shift: int) -> int:
+    """Endless shift (1-based) → the engine day number that represents it."""
+    return ENDLESS_DAY_BASE + max(1, shift)
+
+
+def endless_shift(day_number: int) -> int:
+    """Inverse of endless_day_number."""
+    return day_number - ENDLESS_DAY_BASE
+
+
+def endless_curve_day(shift: int) -> int:
+    """The campaign day an Endless shift's difficulty curves play like.
+
+    Piecewise linear: START → CAMPAIGN_LAST_DAY over shifts 1..CAMPAIGN_SHIFT,
+    then CAMPAIGN_LAST_DAY → CEILING over CAMPAIGN_SHIFT..CEILING_SHIFT, then
+    flat forever. Monotonic, and bounded — Endless never climbs toward
+    certain failure.
+    """
+    shift = max(1, shift)
+    last = CAMPAIGN_LAST_DAY
+    if shift <= ENDLESS_CURVE_CAMPAIGN_SHIFT:
+        span = max(1, ENDLESS_CURVE_CAMPAIGN_SHIFT - 1)
+        return ENDLESS_CURVE_START + (
+            (shift - 1) * (last - ENDLESS_CURVE_START) // span)
+    span = max(1, ENDLESS_CURVE_CEILING_SHIFT - ENDLESS_CURVE_CAMPAIGN_SHIFT)
+    return min(ENDLESS_CURVE_CEILING, last + (
+        (shift - ENDLESS_CURVE_CAMPAIGN_SHIFT) * (ENDLESS_CURVE_CEILING - last) // span))
+
+
+def curve_day(day_number: int) -> int:
+    """The day number the difficulty curves should read.
+
+    Identity for every campaign day. For an Endless day, the campaign-
+    equivalent day from endless_curve_day(). Every curve function in this
+    module routes its day argument through here first; unlock GATES
+    deliberately do not (see the block comment above).
+    """
+    if is_endless_day(day_number):
+        return endless_curve_day(endless_shift(day_number))
+    return day_number
+
+
+def day_label(day_number: int) -> str:
+    """Player-facing name of a day: "Day 7" in the campaign, "Shift 3" in Endless."""
+    if is_endless_day(day_number):
+        return f"Shift {endless_shift(day_number)}"
+    return f"Day {day_number}"
+
+
+def _endless_candidate_count(cday: int) -> int:
+    # Campaign curve up to its own last day (inlined rather than recursing
+    # through DAY_CANDIDATE_COUNT, which would re-enter the endless branch).
+    beyond = min(cday, CAMPAIGN_LAST_DAY) - TUTORIAL_LAST_DAY
+    base = min(CANDIDATE_COUNT_CAP,
+               CANDIDATE_COUNT_BASE + -int(-beyond * CANDIDATE_COUNT_GROWTH // 1))
+    extra = max(0, cday - CAMPAIGN_LAST_DAY) // ENDLESS_CANDIDATE_GROWTH_PERIOD
+    return min(ENDLESS_CANDIDATE_COUNT_CAP, base + extra)
+
 # ─── Candidate volume ramp (#17) ─────────────────────────────────────────────
 #
 # The "volume" difficulty lever, complementing #4's economy/complexity levers.
@@ -830,6 +946,8 @@ def DAY_CANDIDATE_COUNT(day_number: int) -> int:
     Single source of truth for shift length: the intake loop drives off
     Day.candidate_count, which is either the day file's explicit value or this.
     """
+    if is_endless_day(day_number):
+        return _endless_candidate_count(curve_day(day_number))
     if day_number <= TUTORIAL_LAST_DAY:
         return CANDIDATE_COUNT_TUTORIAL
     beyond = day_number - TUTORIAL_LAST_DAY
@@ -888,6 +1006,7 @@ RULE_FLIP_PERIOD = 3
 
 
 def difficulty_band_for_day(day_number: int) -> str:
+    day_number = curve_day(day_number)
     if day_number <= DIFFICULTY_BAND_LAST_EASY:
         return "easy"
     if day_number <= DIFFICULTY_BAND_LAST_MEDIUM:
@@ -952,6 +1071,36 @@ ARCHETYPE_MIX_BY_BAND: dict[str, dict[str, int]] = {
     },
 }
 
+# Endless (#7) runs the same band curve with its own weights. Two archetypes
+# never appear: the Dark Web (the corruption arc is campaign-only) and the
+# White Hat (#7: "every denied candidate genuinely poses a threat" — no moral
+# forks in Endless). Their weight goes to the honest threats instead, so a
+# shift carries the same share of bad actors as the campaign's.
+ENDLESS_ARCHETYPE_MIX_BY_BAND: dict[str, dict[str, int]] = {
+    "easy":   dict(ARCHETYPE_MIX_BY_BAND["easy"]),
+    "medium": {
+        "obvious_admit":    2,
+        "day_to_day":       2,
+        "the_professional": 1,
+        "clumsy_cutie":     1,
+        "the_incompatible": 1,
+        "bad_actor":        2,
+        "sneaky_bugger":    2,
+    },
+    "hard": {
+        "obvious_admit":    1,
+        "day_to_day":       2,
+        "the_professional": 1,
+        "the_incompatible": 1,
+        "clumsy_cutie":     1,
+        "bad_actor":        2,
+        "sneaky_bugger":    5,
+    },
+}
+ENDLESS_EXCLUDED_ARCHETYPES: frozenset[str] = frozenset({"dark_web", "white_hat"})
+assert not any(ENDLESS_EXCLUDED_ARCHETYPES & set(m)
+               for m in ENDLESS_ARCHETYPE_MIX_BY_BAND.values())
+
 # On "hard" days the generator prefers evidence that needs a tool over evidence
 # readable free off the dossier, so a late-game candidate's discrepancies sit
 # behind the ⏱ economy rather than in plain sight. See
@@ -982,6 +1131,12 @@ LW_ENTRIES_BY_DAY: dict[int, int] = {
 LW_ENTRIES_DEFAULT      = 100   # fallback for days not in the dict
 LW_ENTRIES_SCALE_FACTOR = 1.15  # multiplier applied per day beyond the last key
 LW_ENTRIES_MIN          = 10    # floor — never fewer noise rows than this
+# Ceiling (Endless, #7). The per-day growth above is geometric (×1.15/day), which
+# is fine across a 20-day campaign (~740 rows on day 20, under this cap, so the
+# campaign is unaffected) but explodes in an unbounded run — ~12,000 rows by
+# day 40. Endless plateaus its curve day well below that, and this cap is the
+# belt to that suspender.
+LW_ENTRIES_MAX          = 1000
 
 # Batch-3 task #5: fraction of noise AUTH_OK rows (unrelated background
 # accounts) that log in from the same external-city IP pool violations use
@@ -1219,30 +1374,31 @@ UPGRADE_TOOLCOST_STEGOTOOL = "toolcost_stegotool"   # reduces the stego filter c
 TOOLCOST_REDUCTION = 2   # ⏱ knocked off the base cost when owned
 
 # Shop catalog: (upgrade_id, label, HD$ price, description).
+# Prices ×3.5 in the #70 balance pass (2026-09-25) — see HACKDOLLAR_* above.
 # The between-day menu renders this list; effects key off GameState.upgrades.
 UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
-    (UPGRADE_CHAT_HOSTILE,     "Sentiment Scanner",     20, "auto-mark hostile text in candidate chat"),
-    (UPGRADE_EMAIL_APPROVED,   "Domain Whitelist HUD",  20, "auto-highlight approved email domains on the dossier"),
-    (UPGRADE_EMAIL_PROHIBITED, "Domain Blacklist HUD",  25, "auto-highlight prohibited email domains on the dossier"),
-    (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",     20, "auto-highlight approved affiliations on the dossier"),
-    (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",     25, "auto-highlight prohibited affiliations on the dossier"),
-    (UPGRADE_STEGO_TINT,       "Spectral Lens",         30, "stronger blue tint over stego areas of interest"),
-    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        35, "mark the region of the alignment pad the true key sits in"),
-    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      35, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
-    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     30, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
-    (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 45, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  40, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 35, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     30, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",       20, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
-    (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     30, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    30, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_FORUM_AUTO,       "Forum Watch",          30, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer", 20, "label a recovered password's strength verdict, not just the plaintext"),
-    (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",    25, "colour-code the RGB channel entropy readout by severity"),
-    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",    25, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
-    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",     25, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
-    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  30, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
+    (UPGRADE_CHAT_HOSTILE,     "Sentiment Scanner",      70, "auto-mark hostile text in candidate chat"),
+    (UPGRADE_EMAIL_APPROVED,   "Domain Whitelist HUD",   70, "auto-highlight approved email domains on the dossier"),
+    (UPGRADE_EMAIL_PROHIBITED, "Domain Blacklist HUD",   90, "auto-highlight prohibited email domains on the dossier"),
+    (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",      70, "auto-highlight approved affiliations on the dossier"),
+    (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",      90, "auto-highlight prohibited affiliations on the dossier"),
+    (UPGRADE_STEGO_TINT,       "Spectral Lens",         105, "stronger blue tint over stego areas of interest"),
+    (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        120, "mark the region of the alignment pad the true key sits in"),
+    (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      120, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
+    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     105, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
+    (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 160, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
+    (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  140, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
+    (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 120, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
+    (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     105, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
+    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",        70, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
+    (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     105, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    105, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_FORUM_AUTO,       "Forum Watch",          105, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer",  70, "label a recovered password's strength verdict, not just the plaintext"),
+    (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",     90, "colour-code the RGB channel entropy readout by severity"),
+    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",     90, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
+    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",      90, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
+    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  105, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
 ]
 
 # Sub-category (by tool page) each upgrade belongs to, for shop-UI grouping.
@@ -1296,6 +1452,52 @@ COMPUTE_CAPACITY_STEP   = 10   # ⏱ added to capacity per purchase
 
 SAVE_SLOT = "slot_0"
 SAVE_FILE = SAVES_DIR / f"{SAVE_SLOT}.json"
+
+# Endless keeps its own slot (#7, Nick 2026-09-25) so starting or losing an
+# Endless run can never touch a campaign in progress, and vice versa. The main
+# menu shows the two Continue buttons side by side, each naming its mode.
+ENDLESS_SAVE_SLOT = "endless_0"
+ENDLESS_SAVE_FILE = SAVES_DIR / f"{ENDLESS_SAVE_SLOT}.json"
+# Personal best across Endless runs — survives the run's own save being cleared.
+ENDLESS_RECORDS_FILE = SAVES_DIR / "endless_records.json"
+
+
+def save_file_for(mode: str):
+    """The save slot for a GameMode value ("campaign" / "endless")."""
+    return ENDLESS_SAVE_FILE if mode == "endless" else SAVE_FILE
+
+
+# ─── Endless — loss condition & history (#7) ─────────────────────────────────
+#
+# Besides Site Health collapsing (which ends an Endless run exactly as it ends
+# the campaign), an Endless run is lost when the rolling average accuracy over
+# the last ENDLESS_ACCURACY_WINDOW shifts drops below the threshold. It is only
+# evaluated once that many shifts have been played, so a rough first shift
+# can't end a run on its own (Nick, 2026-09-25: 70%, after 5 shifts).
+ENDLESS_ACCURACY_WINDOW    = 5
+ENDLESS_ACCURACY_THRESHOLD = 0.70
+# Trend reporting: the Foreman calls a trend "rising"/"falling" only when the
+# window average moved at least this much against the previous window.
+ENDLESS_TREND_DEADBAND     = 0.03
+ENDLESS_HISTORY_KEEP       = 30     # shifts kept in the save (lifetime totals kept separately)
+
+# ─── Endless — economy (#7) ──────────────────────────────────────────────────
+#
+# Without these, a long Endless run eventually owns the entire shop and money
+# stops meaning anything. Four levers, all Endless-only unless noted:
+#   • Maintenance — each run, a random handful of upgrades is unbuyable for
+#     the whole run, so no two runs build the same kit (Nick's idea).
+#   • Escalating capacity — each ⏱-capacity purchase costs more than the last.
+#   • Site Patch — spend HD$ to repair Site Health; also escalates.
+#   • More credit slots — a reveal is worth more when the run never ends.
+ENDLESS_MAINTENANCE_COUNT    = 5      # upgrades under maintenance per run
+ENDLESS_HACKDOX_CREDIT_MAX   = 5
+ENDLESS_STARTING_HACKDOLLARS = 0
+SHOP_CAPACITY_PRICE_STEP     = 50     # HD$ added per capacity bought (Endless)
+SHOP_PRICE_SITE_PATCH        = 60     # HD$, first patch
+SHOP_SITE_PATCH_PRICE_STEP   = 30     # HD$ added per patch bought
+SITE_PATCH_HEALTH            = 10.0   # % restored per patch (capped at 100)
+SITE_HEALTH_MAX              = 100.0
 
 # ─── Key bindings ─────────────────────────────────────────────────────────────────
 #
@@ -1391,3 +1593,14 @@ SOUND_ENABLED_DEFAULT = True
 DEFAULT_MASTER_VOLUME = 1.0   # overall multiplier on both channels below
 DEFAULT_MUSIC_VOLUME  = 0.6   # background/ambient tracks (no trigger uses this yet)
 DEFAULT_SFX_VOLUME    = 0.8   # one-shot cues — verdicts, tool runs, UI ticks, etc.
+
+
+# ─── Endless range guard (#7) ────────────────────────────────────────────────
+# The Endless day range only works because it sits above every unlock day in
+# the game (see the ENDLESS_DAY_BASE block). Fail at import, loudly, if a
+# retune ever pushes an unlock day into that range.
+assert ENDLESS_DAY_BASE > max(
+    CAMPAIGN_LAST_DAY,
+    *TOOL_UNLOCK_DAY.values(),
+    *BREACH_DB_UNLOCK_DAY.values(),
+), "ENDLESS_DAY_BASE must sit above every campaign/unlock day"

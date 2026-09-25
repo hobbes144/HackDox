@@ -1612,13 +1612,17 @@ def generate_day_log(game_seed: int, day) -> list[_LogEntry]:
         crng = _random.Random(_stable_hash(game_seed, day.number, slot, "lw_entries") & 0xFFFFFFFF)
         all_entries.extend(_lw_candidate_entries(cand, crng, day.number))
 
-    # Noise count from config — scaled per day
-    base_noise = _cfg.LW_ENTRIES_BY_DAY.get(day.number, _cfg.LW_ENTRIES_DEFAULT)
+    # Noise count from config — scaled per day. Reads the CURVE day (Endless
+    # maps its shift onto a campaign-equivalent day; identity in the campaign)
+    # and is capped at LW_ENTRIES_MAX so the geometric growth can't run away.
+    cday       = _cfg.curve_day(day.number)
+    base_noise = _cfg.LW_ENTRIES_BY_DAY.get(cday, _cfg.LW_ENTRIES_DEFAULT)
     last_key   = max(_cfg.LW_ENTRIES_BY_DAY.keys()) if _cfg.LW_ENTRIES_BY_DAY else 1
-    if day.number > last_key:
-        extra_days = day.number - last_key
+    if cday > last_key:
+        extra_days = cday - last_key
         base_noise = int(_cfg.LW_ENTRIES_BY_DAY.get(last_key, _cfg.LW_ENTRIES_DEFAULT)
                          * (_cfg.LW_ENTRIES_SCALE_FACTOR ** extra_days))
+    base_noise   = min(base_noise, _cfg.LW_ENTRIES_MAX)
     target_noise = max(_cfg.LW_ENTRIES_MIN, base_noise - len(all_entries))
     all_entries.extend(_lw_noise_entries(rng, target_noise))
     all_entries.sort(key=lambda e: e.ts_secs)
@@ -2700,7 +2704,7 @@ def build_stego_image(candidate: Candidate, day: int = 1) -> StegoImageData:
     def _sized(kind_key: str) -> tuple[int, int]:
         """Base grid for this payload type, grown by day and capped."""
         base_c, base_r = config.STEGO_GRID_BASE[kind_key]
-        extra = max(0, day - 1)
+        extra = max(0, config.curve_day(day) - 1)
         cols = base_c + extra * config.STEGO_GRID_GROWTH_COLS_PER_DAY
         rows = base_r + extra * config.STEGO_GRID_GROWTH_ROWS_PER_DAY
         max_c, max_r = config.STEGO_GRID_MAX
@@ -3263,7 +3267,7 @@ def build_cipher_block(candidate: Candidate, day: int = 1) -> CipherBlockData:
     _lbl, _col, algo, _desc = _CIPHER_TIER_META[tier]
 
     base_c, base_r = config.CIPHER_GRID_BASE[tier]
-    extra = max(0, day - 1)
+    extra = max(0, config.curve_day(day) - 1)
     cols = base_c + extra * config.CIPHER_GRID_GROWTH_COLS_PER_DAY
     rows = base_r + extra // config.CIPHER_GRID_GROWTH_ROWS_PERIOD
     max_c, max_r = config.CIPHER_GRID_MAX

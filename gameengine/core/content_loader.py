@@ -672,7 +672,56 @@ def _apply_rule_overrides(
     return rules, frozenset(removed_ids)
 
 
+def build_endless_day(day_number: int) -> Day:
+    """Build one Endless shift (#7). `day_number` is in the Endless range
+    (config.endless_day_number(shift)).
+
+    Same recipe as synthesize_day — Day 1's rulebook with this day's
+    Overseer-Variable flips, the curve's length/quota/band — with three
+    differences that ARE Endless:
+
+      • Nothing is gated. The number sits above every unlock day, so the
+        rulebook carries every kind at its final severity and the generator's
+        tier gates let everything through. No tutorial, no progressive unlock.
+      • ENDLESS_ARCHETYPE_MIX_BY_BAND: no Dark Web, no White Hat.
+      • Authored campaign content is never read — days 6-20 carry Dark Web
+        directives and the scripted White Hat, which Endless must not inherit.
+    """
+    if not config.is_endless_day(day_number):
+        raise ValueError(f"{day_number} is not an Endless day number")
+    template = load_day(1)
+    count = config.DAY_CANDIDATE_COUNT(day_number)
+    band  = config.difficulty_band_for_day(day_number)
+    weights = config.ENDLESS_ARCHETYPE_MIX_BY_BAND[band]
+    base_mix = {Archetype(k): v for k, v in weights.items()}
+    return Day(
+        number=day_number,
+        title=config.day_label(day_number),
+        rules=mutate_variable_rules(template.rules, day_number),
+        candidate_count=count,
+        archetype_mix=scale_archetype_mix(base_mix, count),
+        quotas=Quotas(
+            min_correct_admits=config.DAY_MIN_CORRECT_ADMITS(day_number, count),
+            max_false_admits=template.quotas.max_false_admits,
+        ),
+        # The Endless Foreman's copy is chosen by the app from the run's
+        # accuracy trend (core/endless.py), not by day number; these keys are
+        # the generic Endless fallbacks that resolution lands on.
+        overseer_intro_key="endless_intro",
+        overseer_outro_keys={p: f"endless_outro_{p.value}" for p in Performance},
+        allowed_violations=(),
+        difficulty_band=band,
+        forced_includes={},
+        forced_violations={},
+        forced_chat={},
+        rule_sheet=None,
+    )
+
+
 def load_day(day_number: int) -> Day:
+    # Endless (#7): its own day-number range, built procedurally — never a file.
+    if config.is_endless_day(day_number):
+        return build_endless_day(day_number)
     path = config.DAYS_DIR / f"day_{day_number:02d}.json"
     if not path.exists():
         # No authored content for this day. Synthesize one inside the campaign
@@ -815,6 +864,12 @@ def kinds_discovered_through(day_number: int) -> frozenset[DiscrepancyKind]:
     """
     if day_number < 1:
         return frozenset()
+    if config.is_endless_day(day_number):
+        # Nothing is gated in Endless, and its archetype set never changes
+        # between shifts (only the weights do), so "discovered so far" is just
+        # what an Endless shift can plant. Walking 1..1001 would also run
+        # straight into the campaign's missing days 21-1000.
+        return frozenset(kinds_the_day_can_plant(load_day(day_number)))
     discovered: set[DiscrepancyKind] = set()
     for n in range(1, day_number + 1):
         discovered |= kinds_the_day_can_plant(load_day(n))

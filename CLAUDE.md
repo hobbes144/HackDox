@@ -421,8 +421,8 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
 
 | Player action | Outcome |
 |---------------|---------|
-| Correctly admit a valid candidate | +10 HD\$ + up to 10 HD\$ board accuracy bonus · Site Health ▲ |
-| Correctly deny an invalid candidate | +4 HD\$ + up to 10 HD\$ board accuracy bonus |
+| Correctly admit a valid candidate | +8 HD\$ (decays to 5) + up to 4 HD\$ board accuracy bonus · Site Health ▲ |
+| Correctly deny an invalid candidate | +3 HD\$ (decays to 2) + up to 4 HD\$ board accuracy bonus |
 | Incorrectly admit a malicious candidate | Site Health ▼ (no ⏱ penalty) |
 | Incorrectly deny a valid candidate | Lost reward only — no ⏱ or Site Health penalty |
 | Run a tool (ghostscan/logwatch/hashcrack/stegotool) | −5/−4/−3/−1-per-stamp ⏱ |
@@ -517,6 +517,8 @@ The full 20-day campaign is now authored end to end (Batches 1-5, 2026-08-16 →
 **Test suite:** 593 tests collected as of 2026-09-21 (up from 503 at the 2026-09-14 health-check baseline — the difference is the carrier-shape and Logwatch-report work added since). A run this session got through roughly 90% with no failing dots before hitting the shell's execution-time limit — not a confirmed full green run; re-run the suite properly before trusting it as a baseline.
 
 **Known open items** (see Session Log for origin): issue #73 (dossier-tier evidence guard blind spot, filed 2026-09-14, unresolved); a dormant `DISPOSABLE_EMAIL` / `is_incompatible` ordering risk (0 live occurrences across a 2,800-candidate sweep, left as a flagged judgment call rather than fixed); `day_01.json` still declares `rule_cross_breach_reuse` twice; `_UNLOCK_LINES` in `_narration.py` still placeholder text, now largely redundant with the authored day 2-5 briefings; no in-game audio settings screen yet (volumes are file-only); `play_music()`/`stop_music()` are wired but nothing calls them (no ambient tracks exist); pygame not yet installed in Nick's actual Windows game environment (audio verified only in the Linux device-bridge sandbox); a GitHub Actions companion workflow for Jenkins hasn't been built.
+
+**2026-09-25:** Endless Mode (#7) and the #70 balance pass are built on `Final-Game-Polish` (uncommitted) — see the Session Log entry and `BUILD_PLAN_EndlessMode_2026-09.md`.
 
 **Next up:** merge `Stego-Shapes` into `main` (25 unmerged commits plus the current uncommitted logwatch/shape work is a lot to be carrying on a feature branch); a clean full-suite pytest run to confirm the 593-test baseline is actually green; then the still-deferred Day-1 vertical-slice playthrough and the Web renderer (v2).
 
@@ -619,6 +621,16 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 > `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` directly for anything that's landed since, and note that as
 > of this update everything below from 2026-09-12 onward lives on the unmerged `Stego-Shapes` branch,
 > not `main` (see Where I'm At).
+
+### 2026-09-25 (Endless Mode #7 + balance pass #70/#14)
+Plan + shipped log with every number: `BUILD_PLAN_EndlessMode_2026-09.md`.
+- **Endless Mode is live** from the main menu. Its own save slot (`saves/endless_0.json`) — the menu labels "Continue Campaign · Day N" and "Continue Endless · Shift N" separately and says the two never touch; the Endless personal best (`saves/endless_records.json`) shows on the menu and the run-over screen.
+- **How it works:** Endless shift N is day number `1000+N` (`config.ENDLESS_DAY_BASE`). Every unlock gate is `unlock_day <= day`, so the whole kit is live from shift 1 with no gate code changed; the difficulty curves go through `config.curve_day()` (identity on campaign days — a golden snapshot of days 1–20 stayed byte-identical). Shift 1 plays like campaign day 7, shift 15 like day 20, then climbs to day 26 by shift 30 and plateaus. Days come from `content_loader.build_endless_day` — never the authored campaign files; no Dark Web, no White Hat.
+- **Losing:** Site Health collapse, or the 5-shift rolling accuracy under 70% (counted from shift 5). `core/endless.py` owns the run rules; `EndlessOverScreen` shows why, the run's numbers and the personal best.
+- **Economy (Endless):** 5 random upgrades under maintenance per run (MAINT in the shop), escalating capacity price, a Site Patch item, 5 credit slots. Shop rules moved to `core/shop.py` (both modes).
+- **The Foreman in Endless** is on the player's side: 34 `endless_*` lines keyed by the accuracy trend (rising/steady/falling, near-the-line, lost), cooperative rule-change phrasings (small changes casual, new hard denies with a reason). VOICE_GUIDE §3 updated.
+- **Balance pass (#70, both modes)** via the new `sim_balance.py`: ⏱ was already fine; the Dark Web alignment path was unfinishable (admitting DW is scored correct and cost −8 health each → a perfect by-the-book player lost 75% of campaigns); an 85% player lost every run; a perfect player earned 4.6× the catalog by day 20. Retuned health weights, cut income (board bonus 10→4, payouts 10/4→8/3, health bonus 25→15) and raised upgrade prices ×3.5, so by day 20 a perfect player can afford ~79% of the catalog and a solid one ~50% — players have to choose.
+- Tests: 645 → 678 (`test_endless.py` 29, `test_balance.py` 4); every new guard was reverted in a scratch copy and seen red.
 
 ### 2026-09-25 (World lore — the Undertow and the data docks)
 Nick set the world: after an AI disaster (named *the Undertow* in copy), networks and hackers can't be trusted, so data moves physically by ship, and the player vets the couriers who carry it.

@@ -36,6 +36,18 @@ class Archetype(str, Enum):
     THE_INCOMPATIBLE = "the_incompatible" # disposable email domain — quick deny
 
 
+class GameMode(str, Enum):
+    """Which game a GameState belongs to (#7).
+
+    Stored in the save file. Each mode has its own save slot
+    (config.save_file_for), and a save with no mode recorded predates Endless
+    and is therefore a campaign save.
+    """
+
+    CAMPAIGN = "campaign"
+    ENDLESS  = "endless"
+
+
 class Verdict(str, Enum):
     ADMIT = "admit"
     DENY  = "deny"
@@ -479,6 +491,26 @@ class DayResult:
     final_alignment: int
 
 
+@dataclass(frozen=True)
+class ShiftRecord:
+    """One finished Endless shift, as the rolling-accuracy window sees it (#7).
+
+    Deliberately flat and JSON-friendly — it is persisted. `judged` counts
+    verdicts actually given; accuracy is `correct / judged` on the MORAL
+    track (CandidateResult.correct), the same one the economy pays out on.
+    """
+
+    shift: int
+    correct: int
+    judged: int
+    health_delta: float = 0.0
+    hd_earned: int = 0
+
+    @property
+    def accuracy(self) -> float:
+        return self.correct / self.judged if self.judged else 1.0
+
+
 # Upgrade IDs are strings (e.g. "auto_flag_breaches") for forward-compat.
 UpgradeId = str
 
@@ -516,6 +548,25 @@ class GameState:
     # config.TOOL_UNLOCK_DAY on load, so a mid-campaign player isn't locked out.
     unlocked_tools: set[str] = field(default_factory=set)
     completed_days: list[DayResult] = field(default_factory=list)
+    # ── Endless (#7) ──
+    # Which game this state belongs to — a GameMode value string.
+    mode: str = GameMode.CAMPAIGN.value
+    # The most recent config.ENDLESS_HISTORY_KEEP shifts, oldest first. The
+    # rolling-accuracy loss condition reads the tail of this list.
+    shift_history: list[ShiftRecord] = field(default_factory=list)
+    # Lifetime tallies for the whole run (the history above is trimmed).
+    lifetime_correct: int = 0
+    lifetime_judged: int = 0
+    # Upgrade ids under maintenance — unbuyable for this run. Rolled once when
+    # an Endless run starts; always empty in the campaign.
+    maintenance_upgrades: set[str] = field(default_factory=set)
+    # How many times each escalating shop item has been bought this run
+    # ("capacity", "site_patch"), which is what drives its price upward.
+    shop_purchases: dict[str, int] = field(default_factory=dict)
     # In-progress-day fields -- populated only mid-day:
     current_slot_index: int = 0
     pending_results: list[CandidateResult] = field(default_factory=list)
+
+    @property
+    def is_endless(self) -> bool:
+        return self.mode == GameMode.ENDLESS.value
