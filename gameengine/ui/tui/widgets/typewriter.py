@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from textual.containers import ScrollableContainer
 from textual.events import Key
 from textual.message import Message
 from textual.widgets import Static
@@ -63,11 +64,16 @@ class TypewriterLog(Static):
             self.log = log
             self.triggers = triggers
 
-    def __init__(self, *, id=None, classes="", char_delay=DEFAULT_CHAR_DELAY):
+    def __init__(self, *, id=None, classes="", char_delay=DEFAULT_CHAR_DELAY,
+                 follow_scroll: bool = False):
         # Seed with a space, never "" — an empty Static renders a None visual
         # and crashes layout in current Textual.
         super().__init__(" ", id=id, classes=classes)
         self._char_delay = char_delay
+        # 2026-09-25: when the log sits inside a scroll container (the
+        # briefing), keep the line being typed in view. The day-1 world setup
+        # is taller than the panel on terminals under ~140x40.
+        self._follow_scroll = follow_scroll
         self._queue: list[_TWMessage] = []
         self._done_lines: list[str] = []      # fully-revealed lines (markup)
         self._active: _TWMessage | None = None
@@ -217,6 +223,8 @@ class TypewriterLog(Static):
         # TypewriterLog is a Static leaf — render straight into its own content.
         # Never push "" (empty renders a None visual and crashes layout).
         self.update("\n".join(lines) or " ")
+        if self._follow_scroll and isinstance(self.parent, ScrollableContainer):
+            self.call_after_refresh(self.parent.scroll_end, animate=False)
 
     def _stop_timer(self) -> None:
         if self._timer is not None:

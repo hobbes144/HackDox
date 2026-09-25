@@ -176,35 +176,35 @@ DOMAINS_DISPOSABLE = [
 ]
 
 PURPOSES_LEGIT = [
-    "research access to incident reports",
-    "maritime-college coursework on threat modeling",
-    "writing a security checklist for the harbour co-op",
-    "studying breach disclosure patterns",
-    "auditing the crane-control network",
+    "carrying incident reports between harbour CERTs",
+    "courier runs for the maritime college archive",
+    "delivering the harbour co-op's security audits",
+    "hauling breach-disclosure filings to the registry",
+    "escorting crane-control firmware between terminals",
 ]
 
 PURPOSES_SUSPECT = [
-    "looking for unredacted manifest leak data",
-    "private archive of disclosed CVEs",
-    "want to see what's in the breach dumps",
-    "shipping research — can't say more",
-    "personal interest in account dumps",
+    "the unredacted manifest runs, nothing else",
+    "carrying for a private archive — no names",
+    "any run that carries the breach archives",
+    "a private shipment — can't say more",
+    "the account-record shipments, specifically",
 ]
 
 # 2026-09-19 Logwatch report overhaul: the job role each stated purpose
 # implies, shown in the Activity Report header. A pure lookup (no RNG) so no
 # existing roll shifts. Suspect purposes map to vaguer roles on purpose.
 PURPOSE_ROLES: dict[str, str] = {
-    "research access to incident reports":                "Incident Responder",
-    "maritime-college coursework on threat modeling":     "Graduate Student",
-    "writing a security checklist for the harbour co-op": "Security Consultant",
-    "studying breach disclosure patterns":                "Security Researcher",
-    "auditing the crane-control network":                 "SOC Analyst",
-    "looking for unredacted manifest leak data":          "Independent Researcher",
-    "private archive of disclosed CVEs":                  "Archivist",
-    "want to see what's in the breach dumps":             "Hobbyist",
-    "shipping research — can't say more":                 "Undisclosed",
-    "personal interest in account dumps":                 "Freelancer",
+    "carrying incident reports between harbour CERTs":     "Incident Responder",
+    "courier runs for the maritime college archive":       "Graduate Student",
+    "delivering the harbour co-op's security audits":      "Security Consultant",
+    "hauling breach-disclosure filings to the registry":   "Security Researcher",
+    "escorting crane-control firmware between terminals":  "SOC Analyst",
+    "the unredacted manifest runs, nothing else":          "Independent Researcher",
+    "carrying for a private archive — no names":           "Archivist",
+    "any run that carries the breach archives":            "Hobbyist",
+    "a private shipment — can't say more":                 "Undisclosed",
+    "the account-record shipments, specifically":          "Freelancer",
 }
 
 # Where candidates claim to work from. Deliberately DISJOINT from
@@ -258,7 +258,7 @@ _CHAT_WARM = (
 
 _CHAT_NEUTRAL = (
     "I put my papers in yesterday, end of my shift.",
-    "just need access for the reports section, please.",
+    "just need the bond so I can start on the reports run, please.",
     "let me know what else you need.",
 )
 
@@ -291,7 +291,7 @@ _CHAT_DARK_WEB_EARLY = (
 # player either can't stop them or won't bother.
 _CHAT_DARK_WEB_MID = (
     "cute that you're still checking boxes on this end.",
-    "the accounts you people clear for me stay open. stay useful.",
+    "the cases you people clear me to carry always arrive a little lighter. stay useful.",
     "flag it if you want. it won't stick, and we both know it.",
     "I don't even bother covering my tracks on this pier anymore.",
 )
@@ -300,7 +300,7 @@ _CHAT_DARK_WEB_MID = (
 # player directly about whether they'll actually do anything.
 _CHAT_DARK_WEB_LATE = (
     "go ahead, deny me. see what that does to your quota.",
-    "you know exactly what I do with this. that's never been the obstacle.",
+    "you know exactly what I do with what I carry. that's never been the obstacle.",
     "I almost respect it when you pretend this is a hard call.",
     "we both know who actually runs this pier.",
 )
@@ -326,14 +326,14 @@ _CHAT_EARNEST = (
 )
 
 _CHAT_PROFESSIONAL = (
-    "My team lead suggested I register — we use HackDox for CVE triage across the harbour's systems.",
+    "My team lead put me forward — our CVE reports go between harbour offices by hand now, and we need a bonded carrier.",
     "Happy to provide additional verification if needed.",
-    "I've used similar services through the lab before.",
+    "I've carried sealed drives for the lab before.",
     "Let me know if you'd like a reference from my supervisor.",
 )
 
 _CHAT_INCOMPATIBLE = (
-    "I just need quick access before my shift, nothing fancy.",
+    "I just need the bond for one quick run before my shift, nothing fancy.",
     "I didn't want to use my work email for this.",
     "This is just a temp account — I prefer to keep things separate.",
     "Is there a problem? I filled everything out.",

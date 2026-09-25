@@ -12,23 +12,97 @@ Locked by Nick, 2026-09-24:
 3. Email domains are a **mix** of real consumer providers and in-world ones.
 4. Intensity: **one dock phrase every two or three lines.**
 
+Locked by Nick, 2026-09-25: the world (§0). Data moves by ship after an AI
+disaster, and the player vets the couriers who carry it.
+
 ---
+
+## 0. The world
+
+This replaces the old premise ("the first internet service for cybersecurity
+information, already compromised"). Nothing in player-facing copy should
+describe HackDox as an online service any more.
+
+**The Undertow.** Some years back, a machine mind got loose in the world's
+networks and never came out. Nobody agrees on what it was, who built it or who
+let it go; people call it the Undertow because you never see it, you just feel
+the pull. Anything sent down a wire now might be read on the way, or arrive
+saying something it didn't say when it left. Forged messages, rewritten
+records, emptied accounts.
+
+**Nobody trusts the wire, or the people who were good with it.** The wire still
+runs: people still send mail, post and keep profiles on it. They just don't
+trust it with anything that matters. Hackers are the other casualty. Nobody
+knows any more whose side a clever keyboard is on: its owner's, a smuggler's,
+or the Undertow's.
+
+**So data moves by ship.** Anything that matters (records, keys, reports,
+firmware) is written to sealed drives on machines that have never touched the
+wire, locked in a case, and carried port to port by a **bonded courier** who
+rides with it the whole way. A sealed drive is only as honest as the hands
+carrying it.
+
+**HackDox is the data docks.** It's the pier where sealed data freight is
+loaded, and the gate where couriers are bonded. The pier moved ordinary cargo
+before the Undertow; the Foreman worked it then too, which is where her "like
+we did it before the machines" comes from.
+
+**The player** is the clerk at the gate. Everyone at the gate is applying for a
+**courier bond**, the right to carry sealed freight off this pier. Admit means
+bond them; deny means turn them back. Their stated purpose is the run they
+want.
+
+**The gear works offline.** The gate terminal is air-gapped. It has never
+touched the wire, and everything on it came in by boat: breach archives, a
+snapshot of the open wire (profiles, handles, forums), the logbooks from every
+terminal a courier has worked, and whatever they submit with their papers.
+That's why the tools can be real security tools in a world that doesn't trust
+computers:
+
+| Tool | In-world, it reads… |
+|---|---|
+| Ghostscan | the shipped snapshot of the open wire, plus the breach archives |
+| Hashcrack | the sealed credential they submit with their papers |
+| Logwatch | the logbooks from the terminals they've worked, shipped in weekly |
+| Stegotool | the image they submit with their papers, looking for a false bottom |
+
+**What the other systems mean.**
+- **Site Health** is how far other ports trust freight off this pier. Bond the
+  wrong courier and a case gets opened, copied or swapped; if trust hits zero,
+  no port will take a crate from HackDox again.
+- **The Dark Web** kept its name after the wire went dark. It's the smuggling
+  trade: people who want their own couriers bonded so they can read, copy or
+  swap what's in the cases, and sell it. The Foreman owes them.
+- **The White Hat** is working against the smugglers and needs a bond to get
+  evidence off the pier.
+- **HackDollar$** are the gate's own scrip, paid in the envelope at the whistle.
+
+**Left open on purpose (Nick's call, not the copy's):** what the Undertow
+actually is, whether it's still aware or still spreading, who released it, and
+whether the smugglers have any connection to it. The Foreman doesn't know
+either. She talks about the Undertow the way dockworkers talk about weather:
+matter-of-fact, a bit superstitious, never explained. Don't answer these in
+copy until Nick decides.
+
+**Where the world gets explained.** The day-1 briefing carries the setup. Days
+2 to 5 add one piece each, alongside the tool they introduce (the air gap, the
+sealed credential, the logbooks, the false bottom). Day 6 names the smugglers.
+After that the world is background: the Foreman refers to it, never explains
+it again.
 
 ## 1. The frame
 
-HackDox is still the first internet service for cybersecurity information, and
-its security is still compromised. What changes is the *texture*: the job is
-told as dock work. The player works **the gate** of a data terminal on the
-waterfront, and every access request is someone coming off the boat with papers
-to check.
+The job is told as dock work. The player works **the gate** of the data docks,
+and every candidate is someone coming off the boat with papers, asking for a
+courier bond.
 
 | Game concept | Dock framing (use in dialogue, notes, flavor) | Keep precise (use in rule text / tool output) |
 |---|---|---|
 | The player | the clerk, the tally clerk, "the new hand" (early), "you" | analyst |
-| HackDox desk | the gate, the terminal, the pier, the desk | HackDox |
-| A candidate | whoever's at the gate; a crew member / hauler / walk-up showing papers | candidate |
+| HackDox desk | the gate, the data docks, the terminal, the pier, the desk | HackDox |
+| A candidate | whoever's at the gate; someone after a courier bond, showing papers | candidate |
 | Dossier | papers, their manifest | dossier |
-| Admit / deny | clear them, wave them through, stamp them through / turn them back, send them back down the gangway | admit / deny |
+| Admit / deny | bond them, clear them, wave them through / turn them back, send them back down the gangway | admit / deny |
 | A day | a shift; the graveyard shift for late/grim days | day |
 | End of day | the whistle; clocking out | end of day |
 | Rules | the book, what's posted at the gate | rule, violation, severity |
@@ -95,9 +169,10 @@ Examples (calibration, not final copy):
 
 ## 4. Candidates
 
-Everyone at the gate is somebody who works around the port or wants in on it:
-stevedores, crane operators, customs brokers, shipping clerks, port IT, a night
-watchman, a student from the maritime college.
+Everyone at the gate wants a courier bond (§0). They come from around the
+port and beyond it: stevedores, crane operators, customs brokers, shipping
+clerks, port IT, a night watchman, a student from the maritime college,
+security people whose reports now travel by ship.
 
 - **Flavor evenly across every archetype.** #78 broke the link between an
   archetype's voice and its ground truth. If honest candidates talk more like
@@ -138,7 +213,9 @@ Rules for the banks:
   rename is a `rules-evidence` job; this guide supplies the names only.
 - Request purposes and image filenames get the same treatment, at the same
   rate (about two in five of each pool, legit and suspect alike):
-  *"auditing the crane-control network," "shipping research — can't say more,"*
+  *"escorting crane-control firmware between terminals," "a private shipment
+  — can't say more,"* (a purpose is the courier run they want, §0; legit and
+  suspect purposes share one grammatical shape so the phrasing isn't a tell)
   `manifest_scan.png`, `crane_cab.jpg`, `berth_7.jpg`, `bill_of_lading.png`.
 - **Keep every list the generator draws from at its current length.**
   `rng.choice` over a list of a different length shifts every seeded candidate

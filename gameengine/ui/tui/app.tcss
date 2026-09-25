@@ -667,6 +667,11 @@ VolumeRow:focus {
     color: #c8d4e1;
 }
 
+#briefing-scroll {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
 #overseer-panel .speaker {
     color: #c084fc;
     text-style: bold;

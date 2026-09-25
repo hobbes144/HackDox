@@ -334,7 +334,7 @@ Violation retier that came with this rework (also noted in the Evidence Catalog 
 
 ### Premise & Lore
 
-HackDox (the in-fiction service) is **the first internet service for cybersecurity information** — and because it's the first, every security measure protecting it is already compromised. Access is therefore reviewed **manually** by a single gatekeeper: the player.
+**World (2026-09-25, replaces the old "first internet service for cybersecurity information" premise):** some years back a machine mind — *the Undertow* — got loose in the world's networks. Nothing sent down a wire can be trusted any more, and neither can the people who were good with computers. So anything that matters travels by ship: written to sealed drives on air-gapped machines and carried port to port by **bonded couriers**. HackDox is **the data docks** — the pier where that freight is loaded — and the player is the clerk at its gate, deciding who gets a courier bond (admit) and who is turned back (deny). The gate terminal is air-gapped; everything the tools read (breach archives, a snapshot of the open wire, port logbooks, submitted images and credentials) came in by boat. What the Undertow really is, and whether the smugglers are connected to it, is deliberately left open. Full world bible: `VOICE_GUIDE.md` §0.
 
 The player is **forced to do this work against their will**. They report to an **Overseer** whose tone starts warm and friendly during onboarding and grows progressively hostile and manipulative as the days pass. The Overseer is in the pocket of the Dark Web — a small cabal of profiles using their HackDox access for malicious ends — and will increasingly push the player to bend the rules in the Dark Web's favor.
 
@@ -619,6 +619,12 @@ for mod in ['gameengine/core/models.py', 'gameengine/core/candidate_gen.py',
 > `VIOLATION_CATALOG`/`_SEVERITY_REVEAL` directly for anything that's landed since, and note that as
 > of this update everything below from 2026-09-12 onward lives on the unmerged `Stego-Shapes` branch,
 > not `main` (see Where I'm At).
+
+### 2026-09-25 (World lore — the Undertow and the data docks)
+Nick set the world: after an AI disaster (named *the Undertow* in copy), networks and hackers can't be trusted, so data moves physically by ship, and the player vets the couriers who carry it.
+- **World bible:** new `VOICE_GUIDE.md` §0 — the Undertow, data by ship, courier bonds, the air-gapped gate terminal (why the tools work offline), what Site Health / Dark Web / White Hat / HD$ mean in-world, where the world gets explained (day 1 setup, one beat per day on days 2–6), and the questions left open for Nick (what the Undertow is, whether it's still active, who released it, any link to the smugglers).
+- **The Foreman:** `day1_intro_friendly` now opens with the world setup (8 lines, tutorial content kept); `day1_between` (HD$ = gate scrip); days 2–5 intros each add one piece beside their tool (air gap, the courier's credential, shipped logbooks, the false bottom); day 6 has her name the smugglers — dismissively, since she's on their payroll.
+- **Premise clashes fixed:** candidate purposes are now courier runs (same 5+5 lengths, same roles, legit and suspect share one phrasing shape); six chat lines that assumed "access to a service" became courier lines (pool lengths unchanged); menu subtitle; the Dark Web ending's "first internet security service" sentence; `gameengine/__init__.py` docstring; this file's premise.
 
 ### 2026-09-24 (Dockside voice pass — Overseer → the Foreman, harbour word banks, stego harbour scenes)
 Nick's thematic pivot: HackDox = hack + docks, cybersecurity with a longshoreman voice, PG. Decisions: rename the Overseer to **the Foreman** (player-facing only); real elite orgs → made-up harbour orgs; email domains a mix of real and in-world; about one dock phrase every two or three lines.

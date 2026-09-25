@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Container, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Static
 
@@ -50,8 +50,12 @@ class BriefingScreen(Screen):
             yield Static("[b]Foreman:[/]", classes="speaker")
             # #3: the briefing dialogue types out through the TypewriterLog.
             # The log is NOT focused, so the screen keeps its Space=begin binding.
-            self._overseer_log = TypewriterLog(id="briefing-overseer")
-            yield self._overseer_log
+            # 2026-09-25: scrolls, following the typing — day 1's world setup
+            # is taller than the panel on smaller terminals.
+            with VerticalScroll(id="briefing-scroll"):
+                self._overseer_log = TypewriterLog(id="briefing-overseer",
+                                                   follow_scroll=True)
+                yield self._overseer_log
         yield Static(
             "Press [#00ff9f][b]Space[/][/] to begin your shift.",
             classes="hint",

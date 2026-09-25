@@ -185,8 +185,9 @@ ENDINGS: dict[str, Ending] = {
             "trip your review sail through now on the strength of rules "
             "you helped keep soft, and nobody upstairs has to ask you to "
             "bend them anymore — you already know which way they bend. "
-            "The first internet security service on Earth spends its days "
-            "waving smugglers through the gate it was built to hold, and "
+            "The pier they built so the world wouldn't have to trust a "
+            "wire spends its days waving smugglers through the gate it was "
+            "built to hold, and "
             "the tally balances every night, because you're the one "
             "closing it.",
 

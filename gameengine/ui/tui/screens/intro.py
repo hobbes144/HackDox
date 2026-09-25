@@ -46,7 +46,7 @@ class IntroScreen(Screen):
                 with Vertical(classes="menu-column"):
                     yield Static(_LOGO, classes="menu-logo")
                     yield Static(
-                        "Access to HackDox is reviewed by hand. You are the hand.",
+                        "The wire can't be trusted. The data goes by ship. You decide who carries it.",
                         classes="menu-subtitle",
                     )
                     with Vertical(classes="menu-buttons"):
