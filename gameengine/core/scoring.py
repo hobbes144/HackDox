@@ -97,10 +97,14 @@ def credited_flags(
 def board_accuracy_bonus(
     player_flags: set[DiscrepancyKind],
     candidate: Candidate,
+    day_number: int = 1,
 ) -> int:
     """Score the player's evidence board against ground truth.
 
-    Returns 0–BOARD_ACCURACY_MAX_BONUS HackDollar$ (issue #27: the bonus
+    Returns 0–config.board_bonus_max(day_number) HackDollar$ — the ceiling
+    grows over the run while the verdict payout decays (2026-09-25), so a
+    kept board is what pays late. A clean candidate correctly left unflagged
+    pays BOARD_CLEAN_FRACTION of the ceiling. (Issue #27: the bonus
     is paid in HD$ — verdicts never grant computing hours).
     Uses an F1-style metric: perfect match = full bonus, partial = scaled.
     False positives (flagging violations that aren't there) reduce the
@@ -114,10 +118,11 @@ def board_accuracy_bonus(
     (#61d). The player is reading real evidence when they flag it, so it
     should never cost them the bonus.
     """
+    ceiling = config.board_bonus_max(day_number)
     actual = {d.kind for d in candidate.truth.discrepancies}
     if not actual and not player_flags:
         # Clean candidate, player correctly flagged nothing.
-        return config.BOARD_ACCURACY_MAX_BONUS
+        return round(ceiling * config.BOARD_CLEAN_FRACTION)
 
     # Batch-3 content pass, revisiting #61(d): CROSS_BREACH_REUSE (Hashcrack)
     # and BREACH_HIT (Ghostscan) deliberately stay separate, distinct kinds in
@@ -139,9 +144,9 @@ def board_accuracy_bonus(
     false_neg = len(actual - credited)
     denom = true_pos + false_pos + false_neg
     if denom == 0:
-        return config.BOARD_ACCURACY_MAX_BONUS
+        return round(ceiling * config.BOARD_CLEAN_FRACTION)
     accuracy = true_pos / denom
-    return round(config.BOARD_ACCURACY_MAX_BONUS * accuracy)
+    return round(ceiling * accuracy)
 
 
 def score(
@@ -171,7 +176,7 @@ def score(
 
     # Evidence-board bonus (HD$) — only for correct verdicts (issue #27:
     # verdicts never grant ⏱; the daily compute pool is spend-only).
-    bonus = board_accuracy_bonus(player_flags, candidate) if correct else 0
+    bonus = board_accuracy_bonus(player_flags, candidate, day_number) if correct else 0
 
     # Site Health — every ADMIT applies the archetype's weight (issue #20).
     # Beneficial actors raise health; threats lower it. Denials never touch

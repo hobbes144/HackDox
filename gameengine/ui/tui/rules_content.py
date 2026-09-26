@@ -949,7 +949,7 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  there is no other penalty. Ration the pool across all candidates.",
         "",
         (f"  [#6b7785]base budget[/]      [#ffb454]{base} ⏱[/]  "
-        f"[dim](+{config.DAILY_BUDGET_GROWTH} ⏱ per day · raise the base in the shop)[/]"),
+        f"[dim](generous early, tighter as the work grows · raise it in the shop)[/]"),
         f"  [#6b7785]today's budget[/]   [#ffb454]{today_budget} ⏱[/]",
     ]
     lines += _sub("tool costs", "#ffb454")
@@ -995,9 +995,11 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines += _band("HACKDOLLAR$ · CREDITS · UPGRADES", "#00ff9f")
     lines += [
         "  HackDollar$ (HD$) is the persistent between-day currency. Earned on",
-        (f"  correct verdicts ([#00ff9f]+{config.HACKDOLLAR_PER_CORRECT_ADMIT}[/] admit · "
-        f"[#00ff9f]+{config.HACKDOLLAR_PER_CORRECT_DENY}[/] deny) plus the evidence-board"),
+        (f"  correct verdicts (today [#00ff9f]+{config.DAY_REWARD_PAYOUT(d_no, True)}[/] admit · "
+        f"[#00ff9f]+{config.DAY_REWARD_PAYOUT(d_no, False)}[/] deny) plus the evidence-board"),
         "  bonus and the end-of-day health bonus. Spent only in the night shop.",
+        "  [#ffd93d]The verdict rate shrinks every couple of days while the board bonus[/]",
+        "  [#ffd93d]grows — later on, a well-kept board is most of your pay.[/]",
         "",
         "  [#c084fc]HackDox Credits[/] — type [b]reveal[/] to spend one and see the",
         "  current candidate's ground truth (correct verdict + planted",
@@ -1017,6 +1019,8 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
             (f"  [#ff8c42]Maintenance[/] — each Endless run, "
              f"{config.ENDLESS_MAINTENANCE_COUNT} upgrades are out of"),
             "  service for the whole run (marked MAINT in the shop).",
+            (f"  [#ffd93d]Endless shop prices[/] — upgrades cost "
+             f"{config.ENDLESS_UPGRADE_PRICE_MULT:g}× the catalog prices listed below."),
             "",
         ]
         lines += _band("ENDLESS — HOW A RUN ENDS", "#ff5470")
@@ -1057,12 +1061,15 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
         "  [dim]unknown[/] → [b]marked[/] (present) → [#6b7785]✗ absent[/] (ruled out) → unknown.",
         "  Only MARKED items are scored, against the candidate's real violations:",
         "",
-        (f"  [#00ff9f]bonus = {config.BOARD_ACCURACY_MAX_BONUS} HD$ × hits ÷ "
+        (f"  [#00ff9f]bonus = {config.board_bonus_max(d_no)} HD$ × hits ÷ "
         "(hits + false flags + misses)[/]   [dim](on correct verdicts)[/]"),
+        (f"  [dim]today's ceiling {config.board_bonus_max(d_no)} HD$ — it grows over the run, "
+         f"up to {config.BOARD_BONUS_CAP}[/]"),
         "",
         "  [#ff8c42]Do NOT flag everything[/] — every false flag divides the bonus",
-        "  down. A clean candidate with an empty board pays the FULL bonus.",
-        "  Flag what the evidence supports, rule out the rest.",
+        (f"  down. A clean candidate with an empty board pays "
+         f"{config.BOARD_CLEAN_FRACTION:.0%} of it — the money is"),
+        "  in FINDING violations. Flag what the evidence supports, rule out the rest.",
     ]
 
     # ── Alignment ──────────────────────────────────────────────────────

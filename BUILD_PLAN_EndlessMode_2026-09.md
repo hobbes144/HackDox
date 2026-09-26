@@ -287,3 +287,64 @@ tuning without editing config: `--set NAME=VALUE`.
 probably err toward over-cautious denies (which cost nothing on Site Health),
 so these loss rates are, if anything, pessimistic. Worth a real playtest on both
 alignments before closing #70.
+
+## Second pass (2026-09-25, afternoon) — Nick's follow-ups
+
+### Menu & Game Over
+- **Continue buttons show only for a save that can actually be continued**
+  (`persistence.continuable`): not merely a file on disk — a damaged save, Site
+  Health under the loss line, an Endless run under the accuracy line, or a
+  campaign past day 20 all hide the button (and its C/X key does nothing). A run
+  now clears its own slot when it ends: campaign Game Over and campaign complete
+  (`persistence.clear`), Endless run over (already did).
+- **Campaign Game Over** rebuilt on the menu frame — the slow ambient glitch on
+  all four sides, message centred; adds M → main menu. (It had no styling at all
+  before: `#splash` never had CSS.)
+
+### Sim model changes (`sim_balance.py`)
+- **Mistakes by archetype, not evenly** (`ARCHETYPE_ERROR_WEIGHT`): Obvious Admit
+  and Professional ×0.15 of a profile's base error, Incompatible ×0.5, Bad Actor
+  ×0.8, Day-to-Day and Clumsy Cutie ×1.6, Sneaky Bugger ×2.4.
+- **Verdict skill and marking skill are separate.** New profile *sharp, sloppy
+  board*: sharp verdicts, but only 15% of a violator's evidence recorded.
+- **⏱ "cover"**: (budget − need) ÷ (full − need) — the share of the thoroughness
+  above the bare minimum the day pays for. Also reports early vs late HD$/day.
+
+### ⏱ — liberal early, restrictive late
+`daily_compute_budget` now follows `COMPUTE_BUDGET_CURVE` (curve-day anchors,
+interpolated; capacity purchases add on top) instead of `60 + 4/day`.
+| day | 1 | 4 | 5 | 7 | 10 | 15 | 20 | Endless plateau |
+|---|---|---|---|---|---|---|---|---|
+| budget ⏱ | 60 | 130 | 240 | 210 | 205 | 180 | 170 | 190 |
+| cover (before) | — | 0.61 | 0.28 | 0.38 | 0.27 | 0.27 | 0.21 | 0.12 |
+| cover (after) | — | 1.14 | 1.01 | 0.97 | 0.62 | 0.45 | 0.28 | 0.17 |
+The worst seed's minimum spend still fits every day (largest: 84 ⏱ vs 174 on day 18).
+
+### Money — the board becomes the paycheck
+| | before | after |
+|---|---|---|
+| verdict pay (admit / deny) | 8→5 / 3→2 | 8 through day 6, then −1 every 2 days → 0 / 3, −1 every 5 → 0 |
+| board-bonus ceiling | 4 flat | 2 on day 1, +1 every 2 days, cap 10 (day 17) |
+| clean candidate, empty board | full bonus | 10% of the ceiling — the money is in finding violations |
+| end-of-day health bonus | 15 | 3 (it rewards verdicts alone) |
+| Endless pay clock | curve day (shift 1 paid like day 7) | shift number (`config.economy_day`) |
+| Endless upgrade prices | catalog | ×1.5 (`ENDLESS_UPGRADE_PRICE_MULT`) |
+
+Results (share = what a player could afford by day 20, spending on nothing else):
+| profile | campaign HD$/day early → late | campaign share @20 | Endless HD$/day early → late | Endless share @20 |
+|---|---|---|---|---|
+| perfect | 50 → 96 | 68% | 64 → 125 | 74% |
+| sharp (96%) | 45 → 81 | 59% | 58 → 100 | 63% |
+| solid (91%) | 39 → 57 | 46% | 50 → 62 | 47% |
+| **sharp verdicts, sloppy board** | **35 → 35** | **35%** | **45 → 22** | **33%** |
+| shaky (83%) | 34 → 41 | 37% | 43 → 36 | 35% |
+
+A player who calls verdicts right but doesn't mark violations keeps pace early,
+then flatlines while everyone else's pay doubles — in a long Endless run their
+income halves outright. Health with the new error model: by-the-book solid
+campaign 10% loss (resisting 1%), shaky 75%; Endless sharp never loses, solid
+averages ~30 shifts, shaky ~11.
+
+New guards in `test_balance.py`: ⏱ liberal-early/restrictive-late, marking
+becomes necessary, late pay comes from the board, mistakes concentrate on subtle
+archetypes. Every one was reverted in a scratch copy and went red.

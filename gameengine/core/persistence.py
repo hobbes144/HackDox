@@ -92,14 +92,51 @@ def load(mode: str = GameMode.CAMPAIGN.value) -> GameState | None:
     return state
 
 
-def describe(mode: str) -> str | None:
-    """One-line summary of a slot for the main menu ("Day 7 · 180 HD$"), or
-    None if the slot is empty or unreadable. Reads the file directly — the
-    menu must never crash on a damaged save."""
+def continuable(mode: str) -> GameState | None:
+    """The slot's state if the run in it can actually be continued, else None.
+
+    The main menu only offers Continue for a save that leads somewhere
+    (Nick, 2026-09-25). A slot can exist and still be a dead end:
+      • unreadable or damaged,
+      • Site Health already under the loss line (the run ended, or was saved
+        on the between-day screen after it was lost),
+      • an Endless run already under the rolling-accuracy line,
+      • a campaign already past its last day.
+    New runs clear their slot when they end (`clear`), so the last three are
+    mostly saves from before that existed — but the check is what the menu
+    trusts, not the file's existence.
+    """
     try:
         state = load(mode)
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    if state is None or state.mode != mode:
+        return None
+    if state.site_health < config.SITE_HEALTH_LOSS_THRESHOLD:
+        return None
+    if state.is_endless:
+        from . import endless   # local: endless imports persistence's siblings
+        if endless.accuracy_below_loss(state):
+            return None
+    elif state.current_day > config.CAMPAIGN_LAST_DAY:
+        return None
+    return state
+
+
+def clear(mode: str) -> None:
+    """Remove a mode's save — called when its run ends (game over, campaign
+    complete), so the menu stops offering to continue it."""
+    try:
+        config.save_file_for(mode).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def describe(mode: str) -> str | None:
+    """One-line summary of a continuable slot for the main menu
+    ("Day 7 · 180 HD$"), or None if there is nothing to continue. Never raises —
+    the menu must not crash on a damaged save."""
+    state = continuable(mode)
     if state is None:
         return None
     return f"{config.day_label(state.current_day)} · {state.hackdollars} HD$"

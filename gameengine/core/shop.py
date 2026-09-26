@@ -9,6 +9,7 @@ config says it should:
   • Endless escalates the ⏱-capacity price with every purchase.
   • Endless sells a Site Patch (repair Site Health), also escalating.
   • Endless has more HackDox Credit slots.
+  • Endless upgrades cost ENDLESS_UPGRADE_PRICE_MULT× the catalog price.
 """
 
 from __future__ import annotations
@@ -58,8 +59,16 @@ def price_of(state: GameState, item: ShopItem) -> int:
     if item.kind == "site_patch":
         return site_patch_price(state)
     if item.kind == "upgrade":
-        return _UPGRADE_PRICE[item.iid]
+        return upgrade_price(state, item.iid)
     return 0
+
+
+def upgrade_price(state: GameState, uid: str) -> int:
+    """Catalog price; Endless charges ENDLESS_UPGRADE_PRICE_MULT (rounded to 5)."""
+    base = _UPGRADE_PRICE[uid]
+    if state.is_endless:
+        return int(5 * round(base * config.ENDLESS_UPGRADE_PRICE_MULT / 5))
+    return base
 
 
 def items_for(state: GameState) -> list[ShopItem]:

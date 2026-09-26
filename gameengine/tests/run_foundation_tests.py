@@ -139,18 +139,20 @@ def test_scoring_correct_admit_rewards_hackdollars_not_compute() -> None:
     assert state.site_health == config.SITE_HEALTH_START
     # …and pays HackDollar$ (issue #21) + the full board bonus in HD$
     # (clean candidate, nothing flagged — issue #27 moved the bonus to HD$).
-    assert result.board_bonus == config.BOARD_ACCURACY_MAX_BONUS
-    assert state.hackdollars == (config.HACKDOLLAR_PER_CORRECT_ADMIT
-                                 + config.BOARD_ACCURACY_MAX_BONUS)
+    clean_bonus = round(config.board_bonus_max(1) * config.BOARD_CLEAN_FRACTION)
+    assert result.board_bonus == clean_bonus
+    assert state.hackdollars == config.HACKDOLLAR_PER_CORRECT_ADMIT + clean_bonus
 
 
 def test_daily_compute_budget_formula() -> None:
     """Issue #27: fixed daily ⏱ pool, growing with the day number, floored."""
     base = config.STARTING_COMPUTE
-    assert config.daily_compute_budget(1, base) == base
-    assert (config.daily_compute_budget(3, base)
-            == base + 2 * config.DAILY_BUDGET_GROWTH)
-    assert config.daily_compute_budget(1, 0) == config.DAILY_BUDGET_MIN
+    # 2026-09-25: the budget follows config.COMPUTE_BUDGET_CURVE (liberal
+    # early, restrictive late); capacity above the start adds on top.
+    assert config.daily_compute_budget(1, base) == config.COMPUTE_BUDGET_CURVE[1]
+    assert (config.daily_compute_budget(5, base + 20)
+            == config.COMPUTE_BUDGET_CURVE[5] + 20)
+    assert config.daily_compute_budget(1, -10_000) == config.DAILY_BUDGET_MIN
 
 
 def test_every_candidate_has_password_field() -> None:

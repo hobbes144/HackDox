@@ -78,7 +78,9 @@ class IntroScreen(Screen):
         self._refresh_continue()
 
     def _refresh_continue(self) -> None:
-        """#79 AC: each Continue is shown only when its save exists. #7: the
+        """#79 AC: each Continue is shown only when its save can actually be
+        continued (persistence.continuable — not merely when a file exists;
+        Nick, 2026-09-25). #7: the
         campaign and Endless saves are separate, so each Continue button names
         its mode AND where that save stands, and a line under the buttons
         spells out that the two never overwrite each other."""
@@ -140,9 +142,7 @@ class IntroScreen(Screen):
         self.app.start_new_game()
 
     def action_continue_game(self) -> None:
-        if not persistence.exists(GameMode.CAMPAIGN.value):
-            return
-        state = persistence.load(GameMode.CAMPAIGN.value)
+        state = persistence.continuable(GameMode.CAMPAIGN.value)
         if state is None:
             return
         self.app.resume_game(state)
@@ -151,8 +151,7 @@ class IntroScreen(Screen):
         """Start a fresh Endless run. If one is already in progress, the first
         press only warns; the second abandons it (it still counts toward the
         personal best — the shifts it survived were real)."""
-        existing = persistence.load(GameMode.ENDLESS.value) \
-            if persistence.exists(GameMode.ENDLESS.value) else None
+        existing = persistence.continuable(GameMode.ENDLESS.value)
         if existing is not None and not self._confirm_abandon:
             self._confirm_abandon = True
             self.query_one("#menu-hint", Static).update(
@@ -166,9 +165,7 @@ class IntroScreen(Screen):
         self.app.start_endless_game()
 
     def action_continue_endless(self) -> None:
-        if not persistence.exists(GameMode.ENDLESS.value):
-            return
-        state = persistence.load(GameMode.ENDLESS.value)
+        state = persistence.continuable(GameMode.ENDLESS.value)
         if state is None:
             return
         self.app.resume_game(state)

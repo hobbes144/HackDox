@@ -421,8 +421,8 @@ The evidence board is now 26 items *(30 as of 2026-09-19 — `rules_content.VIOL
 
 | Player action | Outcome |
 |---------------|---------|
-| Correctly admit a valid candidate | +8 HD\$ (decays to 5) + up to 4 HD\$ board accuracy bonus · Site Health ▲ |
-| Correctly deny an invalid candidate | +3 HD\$ (decays to 2) + up to 4 HD\$ board accuracy bonus |
+| Correctly admit a valid candidate | +8 HD\$ (flat through day 6, then decays to 0) + board bonus (ceiling 2 → 10 over the run) · Site Health ▲ |
+| Correctly deny an invalid candidate | +3 HD\$ (decays to 0) + board bonus — late in a run the board is most of the pay |
 | Incorrectly admit a malicious candidate | Site Health ▼ (no ⏱ penalty) |
 | Incorrectly deny a valid candidate | Lost reward only — no ⏱ or Site Health penalty |
 | Run a tool (ghostscan/logwatch/hashcrack/stegotool) | −5/−4/−3/−1-per-stamp ⏱ |
@@ -631,6 +631,7 @@ Plan + shipped log with every number: `BUILD_PLAN_EndlessMode_2026-09.md`.
 - **The Foreman in Endless** is on the player's side: 34 `endless_*` lines keyed by the accuracy trend (rising/steady/falling, near-the-line, lost), cooperative rule-change phrasings (small changes casual, new hard denies with a reason). VOICE_GUIDE §3 updated.
 - **Balance pass (#70, both modes)** via the new `sim_balance.py`: ⏱ was already fine; the Dark Web alignment path was unfinishable (admitting DW is scored correct and cost −8 health each → a perfect by-the-book player lost 75% of campaigns); an 85% player lost every run; a perfect player earned 4.6× the catalog by day 20. Retuned health weights, cut income (board bonus 10→4, payouts 10/4→8/3, health bonus 25→15) and raised upgrade prices ×3.5, so by day 20 a perfect player can afford ~79% of the catalog and a solid one ~50% — players have to choose.
 - Tests: 645 → 678 (`test_endless.py` 29, `test_balance.py` 4); every new guard was reverted in a scratch copy and seen red.
+- **Second pass (same day):** Continue buttons only for a *continuable* save (`persistence.continuable`; runs clear their slot when they end); campaign Game Over rebuilt on the four-sided glitch frame. Sim now models mistakes per archetype and marking quality separately. ⏱ budget now follows `config.COMPUTE_BUDGET_CURVE` — covers a check-everything shift through day 7, then tightens to ~28% by day 20 (was ~25% from day 5 on). Economy reworked so the evidence board becomes the paycheck: verdict pay decays to 0, board ceiling grows 2 → 10, clean candidates pay 10%, health bonus 3; Endless pay runs on the shift count and its shop costs 1.5×. A sharp-verdict, sloppy-board player now flatlines at ~35 HD$/day in the campaign (vs 81 for a careful one) and halves in long Endless runs. Tests 678 → 694.
 
 ### 2026-09-25 (World lore — the Undertow and the data docks)
 Nick set the world: after an AI disaster (named *the Undertow* in copy), networks and hackers can't be trusted, so data moves physically by ship, and the player vets the couriers who carry it.

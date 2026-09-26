@@ -122,6 +122,10 @@ class BetweenDayScreen(Screen):
         else:
             bits.append(f"[dim]correct admit {pay_next} HD$[/]")
 
+        board_now, board_next = (config.board_bonus_max(d), config.board_bonus_max(nxt))
+        if board_next != board_now:
+            bits.append(f"[#00ff9f]board bonus {board_now} → {board_next} HD$[/]")
+
         costs_now  = {t: tools_bridge.tool_cost(st, t) for t in config.TOOL_COSTS}
         costs_next = {t: config.DAY_TOOL_COST(t, nxt, st.upgrades)
                       for t in config.TOOL_COSTS}
@@ -148,7 +152,7 @@ class BetweenDayScreen(Screen):
         # in different directions this shift.
         diverged = sum(1 for r in results if r.tracks_diverge)
         board   = sum(r.board_bonus for r in results)
-        board_max = max(1, total * config.BOARD_ACCURACY_MAX_BONUS)
+        board_max = max(1, total * config.board_bonus_max(self._day.number))
         board_pct = round(100 * board / board_max)
         h    = st.site_health
         hcol = ("#00ff9f" if h >= config.SITE_HEALTH_REWARD_THRESHOLD else

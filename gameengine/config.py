@@ -52,27 +52,80 @@ ALIGNMENT_MAX      = +10
 ALIGNMENT_BAND_WHITE_HAT_THRESHOLD = 4    # alignment >= this -> "whitehat"
 ALIGNMENT_BAND_DARK_WEB_THRESHOLD  = -4   # alignment <= this -> "darkweb"
 
-# Daily-budget difficulty formula (issue #27). Later days bring more
-# candidates, so the pool grows a little each day — but slower than the
-# workload does, tightening scarcity as the campaign progresses.
-DAILY_BUDGET_GROWTH = 4    # extra ⏱ per day beyond day 1
-DAILY_BUDGET_MIN    = 30   # formula floor — the day is never unplayable
+# Daily ⏱ budget (issue #27; reshaped 2026-09-25 — Nick: very liberal early,
+# restrictive late, so the player has to become attentive to how they spend).
+#
+# The budget at starting capacity, keyed on the CURVE day (Endless shares it),
+# linearly interpolated between anchors and flat past the last one. Sized with
+# sim_balance.py against what a day actually costs: "need" (cheapest decisive
+# evidence for every deny) and "full" (every tool on every candidate, filters
+# and stamps where there's something to find). What fraction of the gap
+# between them the budget pays for:
+#   days 1-7   ≈ all of it — the tutorial and first free days, check everything
+#   day 10     ≈ 60%   ·   day 15 ≈ 45%   ·   day 20 ≈ 27%
+#   Endless plateau (curve day 26) ≈ 17%, with more, tool-heavier candidates
+# The budget itself peaks around day 5-7 and eases off while the workload keeps
+# growing — that squeeze IS the late-game ⏱ difficulty. The worst seed's
+# `need` stays under the budget on every day (test_balance guards it).
+# Each ⏱-capacity purchase adds on top (capacity − STARTING_COMPUTE).
+COMPUTE_BUDGET_CURVE: dict[int, int] = {
+    1:  60,
+    3:  70,
+    4: 130,    # Logwatch arrives
+    5: 240,    # Stegotool arrives — the whole kit, and hours for all of it
+    7: 210,
+    10: 205,
+    12: 200,
+    15: 180,
+    20: 170,
+    26: 190,   # Endless plateau: 14 candidates, tools at their dearest
+}
+DAILY_BUDGET_MIN    = 30   # floor — the day is never unplayable
+
+
+def _interp_curve(table: dict[int, int], x: int) -> int:
+    keys = sorted(table)
+    if x <= keys[0]:
+        return table[keys[0]]
+    for a, b in zip(keys, keys[1:]):
+        if x <= b:
+            return round(table[a] + (table[b] - table[a]) * (x - a) / (b - a))
+    return table[keys[-1]]
 
 
 def daily_compute_budget(day_number: int, capacity: int) -> int:
     """The ⏱ pool granted at the start of the given day.
 
-    capacity is GameState.compute_capacity (upgradable in the shop).
-    Tune DAILY_BUDGET_GROWTH / capacity purchases to manage difficulty.
+    capacity is GameState.compute_capacity (upgradable in the shop); every
+    point above STARTING_COMPUTE is added to the curve's value.
     """
-    day_number = curve_day(day_number)
-    return max(DAILY_BUDGET_MIN,
-               capacity + DAILY_BUDGET_GROWTH * (day_number - 1))
+    base = _interp_curve(COMPUTE_BUDGET_CURVE, curve_day(day_number))
+    return max(DAILY_BUDGET_MIN, base + (capacity - STARTING_COMPUTE))
 
 
 # Maximum evidence-board accuracy bonus — paid in HackDollar$ on a correct
 # verdict (issue #27 moved this off ⏱: verdicts never grant computing hours).
-BOARD_ACCURACY_MAX_BONUS = 4   # HD$ (was 10 — #70: it was over half of all income)
+# The evidence-board bonus's ceiling GROWS with the day while the verdict
+# payout decays (2026-09-25, Nick: marking violations accurately should become
+# a necessary part of the game later on). Early shifts pay mostly for the
+# verdict; late shifts pay mostly for a well-kept board, so a player who calls
+# every verdict right but doesn't record the evidence runs short of HD$.
+# Reads economy_day (time on the job), so an Endless run's pay ramps over its
+# first 20 shifts exactly as the campaign's does over its 20 days.
+BOARD_BONUS_BASE          = 2    # HD$ ceiling on day 1
+BOARD_BONUS_GROWTH_PERIOD = 2    # +1 HD$ to the ceiling every N days
+BOARD_BONUS_CAP           = 10   # reached on day 17
+# A clean candidate (nothing to find, nothing flagged) pays this fraction of
+# the ceiling: a correct empty board is worth something, but the bonus is
+# for FINDING violations.
+BOARD_CLEAN_FRACTION      = 0.1
+BOARD_ACCURACY_MAX_BONUS  = BOARD_BONUS_BASE   # day-1 ceiling (legacy name)
+
+
+def board_bonus_max(day_number: int) -> int:
+    """The evidence-board bonus ceiling (HD$) for one verdict on this day."""
+    grown = BOARD_BONUS_BASE + (economy_day(day_number) - 1) // BOARD_BONUS_GROWTH_PERIOD
+    return min(BOARD_BONUS_CAP, grown)
 
 # ─── Site Health — persistent % loss condition (issues #18/#20, replaces lives)
 #
@@ -124,7 +177,9 @@ STARTING_HACKDOLLARS          = 0
 # money. (Before: 4.6× the catalog for a perfect player, 2.4× for a sloppy one.)
 HACKDOLLAR_PER_CORRECT_ADMIT  = 8    # HD$ per correct admit (day-1 rate; was 10)
 HACKDOLLAR_PER_CORRECT_DENY   = 3    # HD$ per correct deny (smaller cut; was 4)
-HACKDOLLAR_SITE_HEALTH_BONUS  = 15   # max EOD bonus, scaled by health % (was 25)
+HACKDOLLAR_SITE_HEALTH_BONUS  = 3    # max EOD bonus, scaled by health % (25 → 15 → 3:
+                                     # it rewards right verdicts alone, so it can't be
+                                     # a big share once the board is what pays)
                                      # (paid only above the reward threshold)
 
 # ── Reward decay (#4, lever 1) ───────────────────────────────────────────────
@@ -144,10 +199,19 @@ HACKDOLLAR_SITE_HEALTH_BONUS  = 15   # max EOD bonus, scaled by health % (was 25
 # The board-accuracy bonus and the EOD Site Health bonus deliberately do NOT
 # decay: both are already scored on performance, so decaying them on top would
 # penalise a player twice for the same shift.
-HACKDOLLAR_DECAY_ADMIT_PERIOD = 5    # admit rate steps down every N days
-HACKDOLLAR_DECAY_DENY_PERIOD  = 10   # deny rate steps down every N days
-HACKDOLLAR_FLOOR_ADMIT        = 5    # (was 6)
-HACKDOLLAR_FLOOR_DENY         = 2
+# 2026-09-25 (Nick: recording violations should become necessary later on):
+# the verdict rate now decays steeply once the tutorial is over — an admit pays
+# 8 through day 6, 1 by day 19, nothing from day 21 (Endless) — while the
+# evidence-board ceiling grows (board_bonus_max below). Late shifts pay for a
+# kept board, not for verdicts. Measured (sim_balance.py): a player who calls
+# every verdict right but barely marks violations earns about the same as a
+# careful one early, then flatlines — ~40% of a careful player's late income in
+# the campaign, ~20% in a long Endless run — and can afford roughly half the
+# upgrades by day 20.
+HACKDOLLAR_DECAY_ADMIT_PERIOD = 2    # admit rate steps down every N days after the tutorial
+HACKDOLLAR_DECAY_DENY_PERIOD  = 5    # deny rate steps down every N days after the tutorial
+HACKDOLLAR_FLOOR_ADMIT        = 0
+HACKDOLLAR_FLOOR_DENY         = 0
 
 
 def DAY_REWARD_PAYOUT(day_number: int, admit: bool) -> int:
@@ -157,14 +221,15 @@ def DAY_REWARD_PAYOUT(day_number: int, admit: bool) -> int:
     the smaller cut, and they decay on a slower clock because there is less
     there to take away.
     """
-    day_number = curve_day(day_number)
+    # The tutorial (days 1-5) pays the flat rate (#15); decay starts after it.
+    worked = max(0, economy_day(day_number) - TUTORIAL_LAST_DAY)
     if admit:
         return max(HACKDOLLAR_FLOOR_ADMIT,
                    HACKDOLLAR_PER_CORRECT_ADMIT
-                   - day_number // HACKDOLLAR_DECAY_ADMIT_PERIOD)
+                   - worked // HACKDOLLAR_DECAY_ADMIT_PERIOD)
     return max(HACKDOLLAR_FLOOR_DENY,
                HACKDOLLAR_PER_CORRECT_DENY
-               - day_number // HACKDOLLAR_DECAY_DENY_PERIOD)
+               - worked // HACKDOLLAR_DECAY_DENY_PERIOD)
 
 # ─── HackDox Credits — ground-truth reveal consumable (issues #19/#25) ───────
 #
@@ -894,6 +959,20 @@ def endless_curve_day(shift: int) -> int:
         (shift - ENDLESS_CURVE_CAMPAIGN_SHIFT) * (ENDLESS_CURVE_CEILING - last) // span))
 
 
+def economy_day(day_number: int) -> int:
+    """The day number the PAY curves read (verdict payout decay, evidence-board
+    ceiling): time on the job. The campaign day, or the Endless shift count.
+
+    Deliberately not curve_day: Endless shift 1 plays like campaign day 7, but
+    paying it like day 7 as well made an Endless run out-earn the whole shop by
+    shift ~15 (sim_balance.py, 2026-09-25). Difficulty follows the curve; money
+    ramps with the shifts actually worked, exactly as in the campaign.
+    """
+    if is_endless_day(day_number):
+        return endless_shift(day_number)
+    return day_number
+
+
 def curve_day(day_number: int) -> int:
     """The day number the difficulty curves should read.
 
@@ -1375,30 +1454,31 @@ TOOLCOST_REDUCTION = 2   # ⏱ knocked off the base cost when owned
 
 # Shop catalog: (upgrade_id, label, HD$ price, description).
 # Prices ×3.5 in the #70 balance pass (2026-09-25) — see HACKDOLLAR_* above.
+# Endless charges ENDLESS_UPGRADE_PRICE_MULT on top (core/shop.py).
 # The between-day menu renders this list; effects key off GameState.upgrades.
 UPGRADE_CATALOG: list[tuple[str, str, int, str]] = [
-    (UPGRADE_CHAT_HOSTILE,     "Sentiment Scanner",      70, "auto-mark hostile text in candidate chat"),
-    (UPGRADE_EMAIL_APPROVED,   "Domain Whitelist HUD",   70, "auto-highlight approved email domains on the dossier"),
-    (UPGRADE_EMAIL_PROHIBITED, "Domain Blacklist HUD",   90, "auto-highlight prohibited email domains on the dossier"),
-    (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",      70, "auto-highlight approved affiliations on the dossier"),
-    (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",      90, "auto-highlight prohibited affiliations on the dossier"),
-    (UPGRADE_STEGO_TINT,       "Spectral Lens",         105, "stronger blue tint over stego areas of interest"),
+    (UPGRADE_CHAT_HOSTILE,     "Sentiment Scanner",        70, "auto-mark hostile text in candidate chat"),
+    (UPGRADE_EMAIL_APPROVED,   "Domain Whitelist HUD",     70, "auto-highlight approved email domains on the dossier"),
+    (UPGRADE_EMAIL_PROHIBITED, "Domain Blacklist HUD",     90, "auto-highlight prohibited email domains on the dossier"),
+    (UPGRADE_AFFIL_APPROVED,   "Org Whitelist HUD",        70, "auto-highlight approved affiliations on the dossier"),
+    (UPGRADE_AFFIL_PROHIBITED, "Org Blacklist HUD",        90, "auto-highlight prohibited affiliations on the dossier"),
+    (UPGRADE_STEGO_TINT,       "Spectral Lens",          105, "stronger blue tint over stego areas of interest"),
     (UPGRADE_HASH_HIGHLIGHT,   "Credential HUD",        120, "mark the region of the alignment pad the true key sits in"),
     (UPGRADE_LOG_HIGHLIGHT,    "Log Analyzer HUD",      120, "mark anomalous auth-log rows (▸), reveal each Activity Profile bar's normal-ceiling tick, and highlight bars past it — points, never names"),
-    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",     105, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
+    (UPGRADE_LOG_TRIAGE,       "Threat Triage HUD",      105, "unlock the Logwatch report's Analyst Notes — attack bursts, source & travel anomalies, off-shift work"),
     (UPGRADE_TOOLCOST_GHOSTSCAN, "Ghostscan Optimizer", 160, f"ghostscan costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_LOGWATCH,  "Logwatch Optimizer",  140, f"logwatch costs {TOOLCOST_REDUCTION} ⏱ less"),
     (UPGRADE_TOOLCOST_HASHCRACK, "Hashcrack Optimizer", 120, f"hashcrack costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",     105, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
-    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",        70, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
-    (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",     105, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",    105, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_FORUM_AUTO,       "Forum Watch",          105, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
-    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer",  70, "label a recovered password's strength verdict, not just the plaintext"),
-    (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",     90, "colour-code the RGB channel entropy readout by severity"),
-    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",     90, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
-    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",      90, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
-    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",  105, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
+    (UPGRADE_TOOLCOST_STEGOTOOL, "Stego Optimizer",      105, f"stego filter costs {TOOLCOST_REDUCTION} ⏱ less"),
+    (UPGRADE_CRYPTO_ID,        "Cipher ID HUD",          70, "auto-label the cipher block's encryption tier (MD5/SHA256/bcrypt)"),
+    (UPGRADE_BREACH_AUTO,      "Breach Feed Sync",      105, "confirm breach-corpus hits on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_SOCK_AUTO,        "Sockpuppet Tracer",     105, "confirm sock-puppet account clusters on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_FORUM_AUTO,       "Forum Watch",           105, "confirm threat-forum matches on the free base Ghostscan run, not just the filter"),
+    (UPGRADE_HC_VERDICT,       "Crack Verdict Analyzer",    70, "label a recovered password's strength verdict, not just the plaintext"),
+    (UPGRADE_STEGO_RGB_COLOR,  "Channel Colorizer",       90, "colour-code the RGB channel entropy readout by severity"),
+    (UPGRADE_HC_BREACH_LABEL,  "Breach Classifier",       90, "name LEAKED_PASSWORD / CROSS_BREACH_REUSE on a crack and highlight the corpus evidence — without it the collection list still shows, just unlabeled"),
+    (UPGRADE_STEGO_SHAPE_DETECT, "Glyph Detector",        90, "the first stamp that lands on any carrier cell flags whether the payload has a special glyph shape — never which one"),
+    (UPGRADE_LOG_MAP_TRAVEL,  "Flight Time Analyzer",   105, "add distance/time between origin-map stops, so IMPOSSIBLE_TRAVEL can be judged from the map alone"),
 ]
 
 # Sub-category (by tool page) each upgrade belongs to, for shop-UI grouping.
@@ -1491,6 +1571,12 @@ ENDLESS_HISTORY_KEEP       = 30     # shifts kept in the save (lifetime totals k
 #   • Site Patch — spend HD$ to repair Site Health; also escalates.
 #   • More credit slots — a reveal is worth more when the run never ends.
 ENDLESS_MAINTENANCE_COUNT    = 5      # upgrades under maintenance per run
+# Endless shifts carry more candidates than the matching campaign days and
+# never lose pay to the Dark Web, so the same prices let a strong run own every
+# buyable upgrade by shift ~15. The Endless shop charges more instead
+# (sim_balance.py: a perfect run then affords ~80% of the buyable shop by
+# shift 20, the same share as the campaign).
+ENDLESS_UPGRADE_PRICE_MULT   = 1.5
 ENDLESS_HACKDOX_CREDIT_MAX   = 5
 ENDLESS_STARTING_HACKDOLLARS = 0
 SHOP_CAPACITY_PRICE_STEP     = 50     # HD$ added per capacity bought (Endless)

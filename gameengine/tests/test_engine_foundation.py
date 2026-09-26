@@ -134,9 +134,11 @@ def test_scoring_correct_admit_rewards_health_and_hackdollars(day1):
     # Beneficial admit raises Site Health (issue #20) and pays HD$ (issue #21);
     # clean candidate + empty board = full board bonus in HD$ (issue #27).
     assert result.site_health_delta > 0
-    assert result.board_bonus == config.BOARD_ACCURACY_MAX_BONUS
-    assert state.hackdollars == (config.HACKDOLLAR_PER_CORRECT_ADMIT
-                                 + config.BOARD_ACCURACY_MAX_BONUS)
+    # 2026-09-25: a clean candidate's empty board pays BOARD_CLEAN_FRACTION of
+    # the day's ceiling — the money is in finding violations.
+    clean_bonus = round(config.board_bonus_max(1) * config.BOARD_CLEAN_FRACTION)
+    assert result.board_bonus == clean_bonus
+    assert state.hackdollars == config.HACKDOLLAR_PER_CORRECT_ADMIT + clean_bonus
 
 
 def test_scoring_false_admit_damages_site_health(day1):
@@ -566,9 +568,11 @@ def test_scoring_applies_reward_decay_by_day(day1):
     early = scoring.score(clean, Verdict.ADMIT, set(), day_number=1)
     late  = scoring.score(clean, Verdict.ADMIT, set(), day_number=20)
     assert early.correct and late.correct
-    assert late.hackdollars < early.hackdollars
-    # The board bonus itself must NOT decay — only the base rate does.
-    assert early.board_bonus == late.board_bonus
+    # 2026-09-25 (Nick): the verdict rate decays while the board bonus GROWS —
+    # late shifts pay for a kept board. (This test used to pin the opposite:
+    # a board bonus that never moved.)
+    assert early.board_bonus <= late.board_bonus
+    assert config.board_bonus_max(20) > config.board_bonus_max(1)
     assert (early.hackdollars - early.board_bonus
             == config.DAY_REWARD_PAYOUT(1, True))
     assert (late.hackdollars - late.board_bonus

@@ -73,7 +73,8 @@ class EODScreen(Screen):
             yield Static(
                 f"[dim]Rate today: {config.DAY_REWARD_PAYOUT(self._day.number, True)} HD$ "
                 f"per correct admit · "
-                f"{config.DAY_REWARD_PAYOUT(self._day.number, False)} per correct deny[/]"
+                f"{config.DAY_REWARD_PAYOUT(self._day.number, False)} per correct deny · "
+                f"board bonus up to {config.board_bonus_max(self._day.number)}[/]"
             )
             if self._state.is_endless:
                 # #7: the rolling window replaces alignment (frozen in Endless).

@@ -506,8 +506,8 @@ ContentSwitcher {
 
 /* ── Menu frame (2026-09) ─────────────────────────────────────────────── */
 /* Shared shell — glitch flank on all four sides of a central column — used
-   by IntroScreen, SettingsScreen, CreditsScreen, and CreditRevealScreen
-   (per BUILD_PLAN_MenuSystem_2026-09.md). `.menu-frame` is the OUTER
+   by IntroScreen, SettingsScreen, CreditsScreen, CreditRevealScreen, and
+   PauseScreen (per BUILD_PLAN_MenuSystem_2026-09.md). `.menu-frame` is the OUTER
    Vertical: a horizontal glitch strip along the top, the original
    left-flank/column/right-flank row in the middle, and another horizontal
    strip along the bottom — so the content reads as floating on top of a
@@ -518,8 +518,9 @@ ContentSwitcher {
 .menu-frame {
     height: 1fr;
     align: center middle;     /* only matters for a middle child shorter than
-                                  the frame (e.g. #credit-modal's auto height)
-                                  — IntroScreen/SettingsScreen/CreditsScreen's
+                                  the frame (e.g. #credit-modal's or
+                                  #pause-modal's auto height) —
+                                  IntroScreen/SettingsScreen/CreditsScreen's
                                   own .menu-column already fills the full
                                   height and self-centers its content, so this
                                   is a no-op for them. */
@@ -771,6 +772,13 @@ PauseScreen {
     align: center middle;
 }
 
+/* `#pause-modal` is the same shape as `#credit-modal` below — a fixed-width,
+   height:auto box, not a full-height `.menu-column` — so it reuses that
+   screen's `.menu-frame`/`.menu-frame-row`/`.menu-modal-wrap`/
+   `.menu-modal-flank` structure for the same reason: `align: center middle`
+   alone would center the modal but leave the leftover space above/below it
+   as blank page background instead of glitch. See the fuller comment on
+   `.menu-modal-wrap` further down. */
 #pause-modal {
     width: 44;
     height: auto;
@@ -840,21 +848,24 @@ PauseScreen {
 CreditRevealScreen {
     align: center middle;
 }
-/* `#credit-modal` is height:auto inside `.menu-frame-row`'s Horizontal,
-   next to the two `.menu-flank` panels, which are height:1fr. Centering it
-   with `align: center middle` alone (tried first, 2026-09-24) left the
-   modal centered but with two dead, non-glitchy strips directly above and
-   below it — `align` only POSITIONS the modal, it doesn't paint anything
-   into the leftover space, and that space wasn't a glitch panel, just the
-   page background. Fixed properly by giving that leftover space its own
-   panels instead of leaving it as blank margin: `.menu-modal-wrap` is a
-   Vertical, uniform-height (`1fr`) with the two side flanks, holding TWO
-   `.menu-modal-flank` panels (top and bottom) around `#credit-modal`. Both
-   flanks are `height: 1fr` and the modal itself is fixed/auto height, so
-   Textual's normal flex distribution splits the REMAINING height evenly
+/* `#credit-modal` (and, since 2026-09-25, `#pause-modal` above) is
+   height:auto inside `.menu-frame-row`'s Horizontal, next to the two
+   `.menu-flank` panels, which are height:1fr. Centering it with `align:
+   center middle` alone (tried first, 2026-09-24) left the modal centered
+   but with two dead, non-glitchy strips directly above and below it —
+   `align` only POSITIONS the modal, it doesn't paint anything into the
+   leftover space, and that space wasn't a glitch panel, just the page
+   background. Fixed properly by giving that leftover space its own panels
+   instead of leaving it as blank margin: `.menu-modal-wrap` is a Vertical,
+   uniform-height (`1fr`) with the two side flanks, holding TWO
+   `.menu-modal-flank` panels (top and bottom) around the fixed-width modal.
+   Both flanks are `height: 1fr` and the modal itself is fixed/auto height,
+   so Textual's normal flex distribution splits the REMAINING height evenly
    between them — which both centers the modal (no special alignment logic
    needed) and fills the space with the same drifting glitch as everywhere
-   else, so there's no dead strip left at all. */
+   else, so there's no dead strip left at all. Shared by any `.menu-frame`
+   screen whose centered child is a fixed-size modal rather than a
+   full-height `.menu-column`. */
 .menu-modal-wrap {
     width: auto;
     height: 1fr;

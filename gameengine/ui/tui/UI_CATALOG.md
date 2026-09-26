@@ -52,8 +52,10 @@ CreditsScreen, or GameOverScreen.
   the rest of the menu (Quit included) into view rather than letting it run
   off screen with no way to reach it.
 - **Buttons:** New Campaign · Continue Campaign · New Endless Run · Continue
-  Endless · Settings · Credits · Quit. Each Continue is hidden unless its own
-  save exists, and its label says where that save stands
+  Endless · Settings · Credits · Quit. Each Continue is rendered only when its
+  save can actually be continued (`persistence.continuable`: readable, not
+  already lost, campaign not already complete), and its label says where that
+  save stands
   ("Continue Campaign · Day 7 · 180 HD$", "Continue Endless · Shift 4 · 90 HD$").
 - **Saves line (`#menu-saves`):** when either save exists, a note that the
   campaign and Endless keep separate saves; plus the Endless personal best
@@ -131,7 +133,9 @@ CreditsScreen, or GameOverScreen.
 
 ### GameOverScreen
 - **Trigger:** Site Health below the loss line at end of day (campaign)
-- **Keys:** `R` restart · `Q` quit
+- **Layout:** the menu frame — ambient glitch on all four sides, message centred
+- **Clears** the campaign save (the run is over; Continue stops being offered)
+- **Keys:** `R` restart campaign · `M` main menu · `Q` quit
 
 ### EndlessOverScreen *(Endless run over, #7)*
 - **Trigger:** end of an Endless shift with Site Health under the loss line

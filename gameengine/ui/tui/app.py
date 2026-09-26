@@ -369,6 +369,9 @@ class HackDoxApp(App):
             self._transition(EndlessOverScreen(record, prev_best, new_best,
                                                reason, rolling))
             return
+        # The run is over — stop the menu offering to continue it.
+        if st is not None and self._lab_day is None:
+            persistence.clear(st.mode)
         self._transition(GameOverScreen())
 
     def show_between_day(self) -> None:
@@ -414,6 +417,7 @@ class HackDoxApp(App):
             st.current_day, st.compute_capacity)
         persistence.save(st)
         if not st.is_endless and st.current_day > config.CAMPAIGN_LAST_DAY:
+            persistence.clear(st.mode)   # campaign complete — nothing to continue
             # Issue #42: the explicit end-of-campaign trigger. Reached
             # deliberately now that every day through CAMPAIGN_LAST_DAY is
             # (once #42's Phase 5b lands) authored content, rather than by

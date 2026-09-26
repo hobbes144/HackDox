@@ -22,6 +22,17 @@ Both Quit actions save the in-progress run first (`HackDoxApp.save_progress`,
 a no-op if nothing is in progress) — matches what BetweenDayScreen's own
 quit used to do before Nick had it removed in favor of Pause being the one
 place quitting happens; see BUILD_PLAN_MenuSystem_2026-09.md.
+
+Flanked by the same ambient CRT-glitch panels as the Start Menu/Settings/
+Credits/CreditRevealScreen (`.menu-frame`, `AmbientGlitchPanel`) — added
+2026-09-25, matching Nick's stated next direction of folding the menu
+glitch treatment into more of the game's screens. Same shape as
+`CreditRevealScreen` (a fixed-width, auto-height modal box, not a
+full-height column), so it reuses that screen's `.menu-modal-wrap` /
+`.menu-modal-flank` structure rather than IntroScreen's `.menu-column`:
+`#pause-modal` keeps its own fixed width/border/background; only the
+glitch panels and the `.menu-frame`/`.menu-frame-row`/`.menu-modal-wrap`
+layout are new.
 """
 
 from __future__ import annotations
@@ -30,11 +41,12 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
 from gameengine.ui.tui.screens.settings import SettingsScreen
+from gameengine.ui.tui.widgets import AmbientGlitchPanel
 
 
 class PauseScreen(ModalScreen):
@@ -45,14 +57,23 @@ class PauseScreen(ModalScreen):
     ]
 
     def compose(self) -> ComposeResult:
-        with Container(id="pause-modal"):
-            yield Static("[#7dd3c0][b]PAUSED[/][/]", id="pause-title")
-            with Vertical(id="pause-buttons"):
-                yield Button("Resume", id="pause-resume", variant="success")
-                yield Button("Settings", id="pause-settings")
-                yield Button("Quit to Main Menu", id="pause-quit-menu")
-                yield Button("Quit to Desktop", id="pause-quit-desktop", variant="error")
-            yield Static("[dim]Esc to resume[/]", id="pause-hint")
+        with Vertical(classes="menu-frame"):
+            yield AmbientGlitchPanel(seed=1011, classes="menu-flank-h")
+            with Horizontal(classes="menu-frame-row"):
+                yield AmbientGlitchPanel(seed=1001, classes="menu-flank")
+                with Vertical(classes="menu-modal-wrap"):
+                    yield AmbientGlitchPanel(seed=1090, classes="menu-modal-flank")
+                    with Container(id="pause-modal"):
+                        yield Static("[#7dd3c0][b]PAUSED[/][/]", id="pause-title")
+                        with Vertical(id="pause-buttons"):
+                            yield Button("Resume", id="pause-resume", variant="success")
+                            yield Button("Settings", id="pause-settings")
+                            yield Button("Quit to Main Menu", id="pause-quit-menu")
+                            yield Button("Quit to Desktop", id="pause-quit-desktop", variant="error")
+                        yield Static("[dim]Esc to resume[/]", id="pause-hint")
+                    yield AmbientGlitchPanel(seed=1091, classes="menu-modal-flank")
+                yield AmbientGlitchPanel(seed=1002, classes="menu-flank")
+            yield AmbientGlitchPanel(seed=1012, classes="menu-flank-h")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
