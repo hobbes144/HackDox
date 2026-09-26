@@ -44,12 +44,15 @@ class CreditsScreen(Screen):
             with Horizontal(classes="menu-frame-row"):
                 yield AmbientGlitchPanel(seed=303, classes="menu-flank")
                 with Vertical(classes="menu-column"):
-                    yield Static("C R E D I T S", classes="menu-logo")
-                    yield Static(_CREDITS_TEXT, classes="menu-subtitle",
-                                 id="credits-body")
-                    with Vertical(classes="menu-buttons"):
-                        yield Button("Back", id="credits-back")
-                    yield Static("[#00ff9f][b]Esc[/][/] back", classes="menu-hint")
+                    yield AmbientGlitchPanel(seed=323, classes="menu-modal-flank")
+                    with Vertical(classes="menu-column-content"):
+                        yield Static("C R E D I T S", classes="menu-logo")
+                        yield Static(_CREDITS_TEXT, classes="menu-subtitle",
+                                     id="credits-body")
+                        with Vertical(classes="menu-buttons"):
+                            yield Button("Back", id="credits-back")
+                        yield Static("[#00ff9f][b]Esc[/][/] back", classes="menu-hint")
+                    yield AmbientGlitchPanel(seed=333, classes="menu-modal-flank")
                 yield AmbientGlitchPanel(seed=404, classes="menu-flank")
             yield AmbientGlitchPanel(seed=414, classes="menu-flank-h")
 

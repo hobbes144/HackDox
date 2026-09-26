@@ -15,7 +15,12 @@ violations — see `filter_labels`, which reads the engine's own per-row
 `violation_kind` exactly like the log renderer's filter path always has.)
 
 What the report can and cannot tell (the reveal-tier table, pinned by tests):
-  CLAIMED_IP_MISMATCH  identifiable  — the claimed IP never appears as a login origin
+  CLAIMED_IP_MISMATCH  identifiable  — the claimed IP never appears as a login origin.
+                                   Since 2026-09-25 the free tier only LISTS each
+                                   origin's IP; the player compares it to VIA IP.
+                                   The ✓/✗ claimed marks, the green claimed-IP map
+                                   marker and the "never seen" line are Threat
+                                   Triage HUD (they are conclusions, not data).
   IMPOSSIBLE_TRAVEL    judgeable     — every city change between clean logins is listed
                                    with distance + time (and drawn on the map); since
                                    2026-09-20 honest trips exist too, so the player
@@ -435,13 +440,16 @@ def _origin_coords(o: Origin) -> tuple[float, float] | None:
     return CITY_COORDS.get(o.place)
 
 
-def _origin_color(o: Origin) -> str:
-    if o.is_claimed_ip:
+def _origin_color(o: Origin, notes: bool = False) -> str:
+    # Green-for-the-claimed-IP is a conclusion (it answers "was the claimed IP
+    # seen?" at a glance), so it is Threat Triage HUD's, like the ✓/✗ marks.
+    # Red is plain log data -- failures came from that IP -- and stays free.
+    if o.is_claimed_ip and notes:
         return _C_OK
     return _C_CRIT if o.hostile else _C_HOT
 
 
-def _origin_map(r: LogwatchReport, lay: _Layout) -> list[str]:
+def _origin_map(r: LogwatchReport, lay: _Layout, notes: bool = False) -> list[str]:
     """The ASCII world map of this account's login origins (2026-09-20).
 
     Markers are the origins' numbers (matching the legend below). Arcs join
@@ -458,7 +466,7 @@ def _origin_map(r: LogwatchReport, lay: _Layout) -> list[str]:
         index[o.place] = i + 1
         c = _origin_coords(o)
         if c:
-            markers.append(ascii_map.Marker(str(i + 1), *c, _origin_color(o)))
+            markers.append(ascii_map.Marker(str(i + 1), *c, _origin_color(o, notes)))
     arcs = []
     for t in r.travel:
         a, b = CITY_COORDS.get(t.place_a), CITY_COORDS.get(t.place_b)
@@ -469,7 +477,7 @@ def _origin_map(r: LogwatchReport, lay: _Layout) -> list[str]:
 
 
 def _origins_and_resources(r: LogwatchReport, lay: _Layout,
-                           travel: bool = False) -> list[str]:
+                           travel: bool = False, notes: bool = False) -> list[str]:
     full = lay.width >= config.LW_REPORT_WIDTH
     show_map = (config.LW_MAP_ENABLED and lay.width >= config.LW_MAP_MIN_WIDTH
                 and any(_origin_coords(o) for o in r.origins))
@@ -477,22 +485,36 @@ def _origins_and_resources(r: LogwatchReport, lay: _Layout,
            else f"  [{_C_LABEL}]where this account logged in from[/]" if full else "")
     rows = [f"  [{_C_HEAD}][b]ORIGINS[/][/]{sub}"]
     if show_map:
-        rows += _origin_map(r, lay)
-    if not r.claimed_ip_seen:
+        rows += _origin_map(r, lay, notes)
+    # 2026-09-25 (Nick): whether the claimed IP ever logged in is for the
+    # player to work out -- VIA IP is in the header, every origin's IP is on
+    # its row. The free tier used to answer it three ways at once (this line,
+    # the ✓/✗ marks, the green map marker); all three are Threat Triage HUD's
+    # now, alongside the SOURCE DISCREPANCY note they duplicate.
+    if notes and not r.claimed_ip_seen:
         rows.append(f"  [{_C_WARN}]✗ claimed IP {_esc(r.claimed_ip)} never seen[/]")
     num = {o.place: i + 1 for i, o in enumerate(r.origins)}
     for i, o in enumerate(r.origins):
-        mark = f"[{_C_OK}]✓[/]" if o.is_claimed_ip else f"[{_C_WARN}]✗[/]"
+        if notes:
+            mark = f"[{_C_OK}]✓[/] " if o.is_claimed_ip else f"[{_C_WARN}]✗[/] "
+        else:
+            mark = f"[{_C_LABEL}]·[/] "
         if show_map:
             detail = f"{o.logins} ok" + (f" · {o.failures_from} fail" if o.failures_from else "")
-            n = f"[b {_origin_color(o)}]{i + 1}[/] "
+            n = f"[b {_origin_color(o, notes)}]{i + 1}[/] "
         else:
             detail = (f"{o.logins} login{'s' if o.logins != 1 else ''}"
                       + (f" · {o.failures_from} fail" if o.failures_from else ""))
             n = ""
-        ip_col = f"[{_C_LABEL}]{o.ip:<15}[/] " if full else ""
-        rows.append(f"  {n}{mark} [{_C_VALUE}]{_esc(o.place):<17}[/] "
-                    f"{ip_col}[{_C_LABEL}]{detail}[/]")
+        if full:
+            rows.append(f"  {n}{mark}[{_C_VALUE}]{_esc(o.place):<17}[/] "
+                        f"[{_C_LABEL}]{o.ip:<15}[/] [{_C_LABEL}]{detail}[/]")
+        else:
+            # Compact: the IP gets its own line rather than being dropped --
+            # without it a narrow terminal could not check the claimed IP.
+            rows.append(f"  {n}{mark}[{_C_VALUE}]{_esc(o.place):<17}[/] "
+                        f"[{_C_LABEL}]{detail}[/]")
+            rows.append(f"      [{_C_LABEL}]{o.ip}[/]")
     # Travel: every pair, never classified here — distance and time only.
     # Gated behind Flight Time Analyzer (Nick's brief): free tier is the map
     # and its numbered markers — including the arcs already drawn on it,
@@ -643,7 +665,7 @@ def render_report(r: LogwatchReport, *, log_state: str = "sealed", hud: bool = F
     lines += ["", _rule("ACTIVITY TIMELINE", lay)]
     lines += _timeline(r, lay)
     lines += ["", _rule("LOCATIONS & ACCESS", lay)]
-    lines += _origins_and_resources(r, lay, travel)
+    lines += _origins_and_resources(r, lay, travel, notes)
     lines += ["", _rule("ANALYST NOTES", lay)]
     if notes:
         lines += _alerts(r, lay)

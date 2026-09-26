@@ -201,6 +201,14 @@ automatically.
 ]
 ```
 
+> **Where `text` shows up (2026-09-25):** a rule's `text` feeds the Foreman's
+> rule-change narration only. The Rules tab prints one fixed, severity-neutral
+> line per violation (`RULE_TEXT` in `ui/tui/rules_content.py`), in fixed
+> position, and only the ✗ DENY / △ FLAG marker follows the day's `severity` —
+> the same model as the Evidence Board. Anything a day needs to *say* about a
+> tier change goes in `rule_sheet.notes`. A new `DiscrepancyKind` needs a
+> `RULE_TEXT` line and `RULE_KEYWORDS` entry (tests enforce both).
+
 > **⚠️ DIRECTIVES ARE NOT CUMULATIVE ACROSS DAYS — YOU MUST RE-AUTHOR THEM ON EVERY LATER DAY.**
 > `load_day`'s inherit-without-`rules` branch always rebuilds a day's book from
 > **Day 1**, never from the previous day. So if day 8 adds DW-01 and day 9's

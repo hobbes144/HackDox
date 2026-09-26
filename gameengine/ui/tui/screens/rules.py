@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, TabbedContent, TabPane
 
@@ -17,6 +17,7 @@ from gameengine.ui.tui.shared import (
     _B,
 )
 from gameengine.ui.tui.widgets import (
+    AmbientGlitchPanel,
     EvidenceBoard,
     EvidenceState,
 )
@@ -60,30 +61,39 @@ class RulesScreen(ModalScreen):
         )
 
     def compose(self) -> ComposeResult:
-        with Container(id="rules-modal"):
-            yield Static("[b][#7dd3c0]HACKDOX  DOCUMENTATION HUB[/][/]", id="rules-title")
-            with TabbedContent(id="rules-tabs"):
-                with TabPane("Rules", id="tab-rules"), VerticalScroll():
-                    yield Static(self._build_rules_text(), classes="rules-section")
-                # #50: the dossier-tier reference split out of the Rules tab.
-                with TabPane("Dossier", id="tab-dossier"), VerticalScroll():
-                    yield Static(self._build_dossier_text(), classes="rules-section")
-                with TabPane("OSINT", id="tab-osint"), VerticalScroll():
-                    yield Static(self._build_osint_text(), classes="rules-section")
-                with TabPane("Credentials", id="tab-creds"), VerticalScroll():
-                    yield Static(self._build_creds_text(), classes="rules-section")
-                with TabPane("Log Analysis", id="tab-logs"), VerticalScroll():
-                    yield Static(self._build_logs_text(), classes="rules-section")
-                with TabPane("Steganography", id="tab-stego"), VerticalScroll():
-                    yield Static(self._build_stego_text(), classes="rules-section")
-                if self._ev_board is not None:
-                    with TabPane("Evidence", id="tab-evidence"):
-                        yield self._ev_board
-            yield Static(
-                f"[dim]Tab/click to switch sections  ·  "
-                f"Press [b]{_B['page_rules'].upper()}[/] or Esc to close[/]",
-                id="rules-hint",
-            )
+        with Vertical(classes="menu-frame"):
+            yield AmbientGlitchPanel(seed=1211, classes="menu-flank-h")
+            with Horizontal(classes="menu-frame-row"):
+                yield AmbientGlitchPanel(seed=1201, classes="menu-flank")
+                with Vertical(id="rules-modal-wrap", classes="menu-modal-wrap"):
+                    yield AmbientGlitchPanel(seed=1290, classes="menu-modal-flank")
+                    with Container(id="rules-modal"):
+                        yield Static("[b][#7dd3c0]HACKDOX  DOCUMENTATION HUB[/][/]", id="rules-title")
+                        with TabbedContent(id="rules-tabs"):
+                            with TabPane("Rules", id="tab-rules"), VerticalScroll():
+                                yield Static(self._build_rules_text(), classes="rules-section")
+                            # #50: the dossier-tier reference split out of the Rules tab.
+                            with TabPane("Dossier", id="tab-dossier"), VerticalScroll():
+                                yield Static(self._build_dossier_text(), classes="rules-section")
+                            with TabPane("OSINT", id="tab-osint"), VerticalScroll():
+                                yield Static(self._build_osint_text(), classes="rules-section")
+                            with TabPane("Credentials", id="tab-creds"), VerticalScroll():
+                                yield Static(self._build_creds_text(), classes="rules-section")
+                            with TabPane("Log Analysis", id="tab-logs"), VerticalScroll():
+                                yield Static(self._build_logs_text(), classes="rules-section")
+                            with TabPane("Steganography", id="tab-stego"), VerticalScroll():
+                                yield Static(self._build_stego_text(), classes="rules-section")
+                            if self._ev_board is not None:
+                                with TabPane("Evidence", id="tab-evidence"):
+                                    yield self._ev_board
+                        yield Static(
+                            f"[dim]Tab/click to switch sections  ·  "
+                            f"Press [b]{_B['page_rules'].upper()}[/] or Esc to close[/]",
+                            id="rules-hint",
+                        )
+                    yield AmbientGlitchPanel(seed=1291, classes="menu-modal-flank")
+                yield AmbientGlitchPanel(seed=1202, classes="menu-flank")
+            yield AmbientGlitchPanel(seed=1212, classes="menu-flank-h")
 
     # ── Tab content builders ──────────────────────────────────────────
 

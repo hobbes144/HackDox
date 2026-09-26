@@ -203,3 +203,38 @@ def test_briefing_screen_plays_overseer_beat():
             log = app.screen.query_one("#briefing-overseer", TypewriterLog)
             assert log.is_idle          # both lines chained and finished
     _run(go())
+
+
+def test_dark_web_flippant_purple_gated_behind_sentiment_scanner():
+    """2026-09-25 (Nick): "flippant" is the Dark Web operative's register and
+    no one else's, so its purple italic named the archetype on sight. It reads
+    as neutral until Sentiment Scanner is owned."""
+    from gameengine import config
+
+    day = load_day(8)
+    cand = None
+    for seed in range(400):
+        for slot in range(day.candidate_count):
+            c = candidate_gen.generate(seed, day, slot)
+            if any(l.tag == "flippant" for l in c.chat_script):
+                cand = c
+                break
+        if cand:
+            break
+    assert cand is not None, "no flippant-chat candidate found"
+
+    calls: list[tuple] = []
+
+    class _Rec(ChatPanel):
+        def post(self, speaker, lines, *, color="#c8d4e1", icon="", style="",
+                 triggers=None, prefix="") -> None:
+            calls.append((color, style))
+
+    idx = [i for i, l in enumerate(cand.chat_script) if l.tag == "flippant"]
+    p = _Rec(); p.upgrades = set(); p.set_candidate(cand)
+    for i in idx:
+        assert calls[i] == ("#c8d4e1", ""), calls[i]
+    calls.clear()
+    p = _Rec(); p.upgrades = {config.UPGRADE_CHAT_HOSTILE}; p.set_candidate(cand)
+    for i in idx:
+        assert calls[i] == ("#c084fc", "italic"), calls[i]

@@ -33,19 +33,22 @@ class GameOverScreen(Screen):
             with Horizontal(classes="menu-frame-row"):
                 yield AmbientGlitchPanel(seed=505, classes="menu-flank")
                 with Vertical(classes="menu-column"):
-                    yield Static("[b][#ff5470]G A M E   O V E R[/][/]",
-                                 classes="menu-logo")
-                    yield Static(
-                        "Site Health collapsed — the threats you admitted "
-                        "took the site down.",
-                        classes="menu-subtitle",
-                    )
-                    yield Static(
-                        "[#00ff9f][b]R[/][/] Restart campaign   ·   "
-                        "[#00ff9f][b]M[/][/] Main menu   ·   "
-                        "[#00ff9f][b]Q[/][/] Quit",
-                        classes="menu-hint",
-                    )
+                    yield AmbientGlitchPanel(seed=525, classes="menu-modal-flank")
+                    with Vertical(classes="menu-column-content"):
+                        yield Static("[b][#ff5470]G A M E   O V E R[/][/]",
+                                     classes="menu-logo")
+                        yield Static(
+                            "Site Health collapsed — the threats you admitted "
+                            "took the site down.",
+                            classes="menu-subtitle",
+                        )
+                        yield Static(
+                            "[#00ff9f][b]R[/][/] Restart campaign   ·   "
+                            "[#00ff9f][b]M[/][/] Main menu   ·   "
+                            "[#00ff9f][b]Q[/][/] Quit",
+                            classes="menu-hint",
+                        )
+                    yield AmbientGlitchPanel(seed=535, classes="menu-modal-flank")
                 yield AmbientGlitchPanel(seed=606, classes="menu-flank")
             yield AmbientGlitchPanel(seed=616, classes="menu-flank-h")
 

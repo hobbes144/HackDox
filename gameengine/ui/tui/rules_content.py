@@ -23,6 +23,7 @@ then tool-specific reference subsections behind clear dividers.
 from __future__ import annotations
 
 import re
+import textwrap
 
 from gameengine import config
 from gameengine.core import candidate_gen, content_loader, tools_bridge
@@ -499,22 +500,219 @@ def _rule_tool(rule) -> ToolName | None:
 # part that actually changes rule to rule — the trigger condition — the part
 # that stands out, instead of every line reading as the same wall of text.
 _RULE_PREFIX_STRIP = (
-    re.compile(r"^Deny any candidate who(?:se)?\s+", re.IGNORECASE),
+    re.compile(r"^Deny any candidate (?:who(?:se)?\s+)?", re.IGNORECASE),
     re.compile(r"^Flag \(do not auto-deny\)\s+", re.IGNORECASE),
 )
 
 
-def _highlighted_rule_line(text: str, accent: str) -> str:
-    for pat in _RULE_PREFIX_STRIP:
-        m = pat.match(text)
-        if m:
-            prefix, remainder = text[:m.end()], text[m.end():]
-            remainder = remainder[:1].upper() + remainder[1:]
-            return f"[dim]{prefix}[/][{accent}][b]{remainder}[/][/]"
-    # Unrecognised phrasing (a future rule authored differently) — still an
-    # improvement over plain text, just without the dimmed lead-in to split.
-    return f"[{accent}][b]{text}[/][/]"
+# 2026-09-25 (Nick): the rules list read as one wall of bold colour, because
+# the whole trigger clause of every rule was highlighted. Now only the
+# KEYWORDS are — the one or two words a player scans for on the page itself
+# ("brute-force", "crossing glyph", "MD5"). Keyed by violation rather than
+# one global word list, so a keyword can never light up in the wrong rule.
+# Every authored rule text must match at least one of its kind's phrases —
+# test_every_authored_rule_has_a_highlighted_keyword enforces it.
+RULE_KEYWORDS: dict[DiscrepancyKind, tuple[str, ...]] = {
+    DiscrepancyKind.DISPOSABLE_EMAIL:       ("disposable", "throwaway"),
+    DiscrepancyKind.HOSTILE_CHAT:           ("hostilely", "threatens"),
+    DiscrepancyKind.AFFILIATION_NOT_STATED: ("no affiliation",),
+    DiscrepancyKind.UNSALTED_STORAGE:       ("unsalted",),
+    DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  ("claimed GitHub", "commit email"),
+    DiscrepancyKind.AFFILIATION_MISMATCH:   ("affiliation does not match",),
+    DiscrepancyKind.AFFILIATION_UNLISTED:   ("no organisation",),
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: ("public presence",),
+    DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   ("sock-puppet", "related accounts"),
+    DiscrepancyKind.THREAT_FORUM_MATCH:     ("threat / dark-web forum",),
+    DiscrepancyKind.BURNER_IDENTITY:        ("created within days",),
+    DiscrepancyKind.TYPOSQUAT_HANDLE:       ("lookalike",),
+    DiscrepancyKind.BREACH_HIT:             ("breach corpus",),
+    DiscrepancyKind.LEAKED_PASSWORD:        ("known breach corpus",),
+    DiscrepancyKind.CROSS_BREACH_REUSE:     ("multiple breach corpora",),
+    DiscrepancyKind.WEAK_CREDENTIAL:        ("weak password",),
+    DiscrepancyKind.WEAK_ENCRYPTION:        ("weak encryption", "MD5"),
+    DiscrepancyKind.BRUTE_FORCE_IN_LOG:     ("brute-force",),
+    DiscrepancyKind.CREDENTIAL_STUFFING:    ("credential-stuffing",),
+    DiscrepancyKind.LOW_AND_SLOW:           ("low-and-slow",),
+    DiscrepancyKind.IMPOSSIBLE_TRAVEL:      ("too far apart",),
+    DiscrepancyKind.INSIDER_BEHAVIOR:       ("after-hours", "privilege escalation"),
+    DiscrepancyKind.AFTER_HOURS_ACCESS:     ("outside business hours",),
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    ("claimed connection IP",),
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  ("covert embedded payload",),
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:      ("encrypted", "obfuscated"),
+    DiscrepancyKind.COVERT_C2_CHANNEL:      ("command-and-control",),
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD:   ("crossing glyph",),
+    DiscrepancyKind.RECURSIVE_PAYLOAD:      ("closed, hollow glyph",),
+    DiscrepancyKind.HOSTILE_PAYLOAD:        ("parallel slash strokes",),
+}
 
+# 2026-09-25 (Nick): the Rules tab shows ONE fixed, severity-neutral line per
+# violation instead of the day file's authored `rule.text` — the same model
+# as the Evidence Board: static wording, static position, and only the ✗/△
+# marker and keyword colour follow today's severity. The authored texts carry
+# their day's stance in them ("— poor hygiene, not proof of malice"), so when
+# a later day re-tiered a rule to DENY the old wording still argued FLAG
+# (days 12+). The authored text still drives the rule-change narration; the
+# day's own nuance belongs in rule_sheet.notes ("TODAY, IN PLAIN LANGUAGE").
+# Every line must contain at least one of its kind's RULE_KEYWORDS
+# (test_every_rule_line_has_a_highlighted_keyword).
+RULE_TEXT: dict[DiscrepancyKind, str] = {
+    DiscrepancyKind.DISPOSABLE_EMAIL:       "Email domain is a known disposable / throwaway service.",
+    DiscrepancyKind.HOSTILE_CHAT:           "Behaves hostilely or threatens the service.",
+    DiscrepancyKind.AFFILIATION_NOT_STATED: "Dossier has no affiliation stated.",
+    DiscrepancyKind.UNSALTED_STORAGE:       "Stored credential is unsalted — the password is printed in the clear.",
+    DiscrepancyKind.EMAIL_GITHUB_MISMATCH:  "Claimed GitHub does not match their commit email history.",
+    DiscrepancyKind.AFFILIATION_MISMATCH:   "Dossier affiliation does not match the organisation on their public profiles.",
+    DiscrepancyKind.AFFILIATION_UNLISTED:   "Public profiles list no organisation at all.",
+    DiscrepancyKind.MISSING_PUBLIC_PROFILE: "Handle has almost no public presence.",
+    DiscrepancyKind.SOCK_PUPPET_ACCOUNTS:   "Handle appears across a network of sock-puppet accounts.",
+    DiscrepancyKind.THREAT_FORUM_MATCH:     "Handle matches an account on a threat / dark-web forum.",
+    DiscrepancyKind.BURNER_IDENTITY:        "Public accounts were all created within days of each other.",
+    DiscrepancyKind.TYPOSQUAT_HANDLE:       "Handle is a lookalike of a listed organisation's handle.",
+    DiscrepancyKind.BREACH_HIT:             "Email found in a breach corpus.",
+    DiscrepancyKind.LEAKED_PASSWORD:        "Credential cracks to a password found in a known breach corpus.",
+    DiscrepancyKind.CROSS_BREACH_REUSE:     "Cracked password recurs across multiple breach corpora.",
+    DiscrepancyKind.WEAK_CREDENTIAL:        "Credential cracks to a weak password.",
+    DiscrepancyKind.WEAK_ENCRYPTION:        "Password is stored with weak encryption (MD5).",
+    DiscrepancyKind.BRUTE_FORCE_IN_LOG:     "Logs show brute-force activity on their account.",
+    DiscrepancyKind.CREDENTIAL_STUFFING:    "Logs show a credential-stuffing sweep (one source hitting many accounts).",
+    DiscrepancyKind.LOW_AND_SLOW:           "Logs reveal a low-and-slow intrusion spread out to evade detection.",
+    DiscrepancyKind.IMPOSSIBLE_TRAVEL:      "Logins come from locations too far apart to travel between.",
+    DiscrepancyKind.INSIDER_BEHAVIOR:       "Logs show after-hours access combined with privilege escalation.",
+    DiscrepancyKind.AFTER_HOURS_ACCESS:     "Activity outside business hours.",
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "Claimed connection IP never appears in the logs.",
+    DiscrepancyKind.STEGO_PAYLOAD_PRESENT:  "Image carries a covert embedded payload.",
+    DiscrepancyKind.ENCRYPTED_PAYLOAD:      "Image hides an encrypted or obfuscated payload.",
+    DiscrepancyKind.COVERT_C2_CHANNEL:      "Image hides a covert command-and-control beacon.",
+    DiscrepancyKind.SIGNAL_COMMS_PAYLOAD:   "Image carrier forms a crossing glyph (signal-comms payload).",
+    DiscrepancyKind.RECURSIVE_PAYLOAD:      "Image carrier forms a closed, hollow glyph (recursive payload).",
+    DiscrepancyKind.HOSTILE_PAYLOAD:        "Image carrier forms parallel slash strokes (hostile payload).",
+}
+
+# A rule's tail after " — " is its rationale ("— poor hygiene, not proof of
+# malice"). Kept, but dimmed: the page already groups DENY and FLAG, so the
+# clause before the dash is what the player needs at a glance. The one tail
+# that says nothing the FLAG heading doesn't is dropped outright.
+_RULE_TAIL_DROP = re.compile(r"\s*—\s*corroborate before denying\.?\s*$", re.IGNORECASE)
+_RULE_BODY = "#a9b7c6"
+
+
+def _rule_kind(rule) -> DiscrepancyKind | None:
+    if not rule.predicate.startswith("has_discrepancy:"):
+        return None
+    try:
+        return DiscrepancyKind(rule.predicate.split(":", 1)[1])
+    except ValueError:
+        return None
+
+
+def _keyword_segments(clause: str, keywords: tuple[str, ...],
+                      accent: str) -> list[tuple[str, str]]:
+    """(text, style) runs: each keyword bold + accent, body colour elsewhere.
+    Longest phrase first, so "known breach corpus" wins over "breach corpus"."""
+    if not keywords:
+        return [(clause, _RULE_BODY)]
+    alts = "|".join(re.escape(k) for k in sorted(keywords, key=len, reverse=True))
+    out, pos = [], 0
+    for m in re.finditer(alts, clause, re.IGNORECASE):
+        if m.start() > pos:
+            out.append((clause[pos:m.start()], _RULE_BODY))
+        out.append((m.group(0), f"b {accent}"))
+        pos = m.end()
+    if pos < len(clause):
+        out.append((clause[pos:], _RULE_BODY))
+    return out
+
+
+def _wrap_segments(segments: list[tuple[str, str]], width: int,
+                   indent: str) -> list[str]:
+    """Greedy word-wrap of styled runs with a hanging `indent`, emitting one
+    self-contained markup string per line (the rules page is validated line
+    by line). Rich would wrap a long rule to column 0, which is what made the
+    old list hard to scan."""
+    words: list[tuple[str, str]] = []
+    for text, style in segments:
+        for i, w in enumerate(re.split(r"(\s+)", text)):
+            if w:
+                words.append((w, style))
+    lines: list[list[tuple[str, str]]] = [[]]
+    col = 0
+    for w, style in words:
+        if w.isspace():
+            if col:
+                lines[-1].append((" ", style))
+                col += 1
+            continue
+        if col and col + len(w) > width:
+            while lines[-1] and lines[-1][-1][0] == " ":
+                lines[-1].pop()
+            lines.append([])
+            col = 0
+        lines[-1].append((w, style))
+        col += len(w)
+
+    def render(run: list[tuple[str, str]]) -> str:
+        out, cur, buf = [], None, ""
+        for w, style in run + [("", None)]:
+            if style != cur and buf:
+                out.append(f"[{cur}]{buf}[/]")
+                buf = ""
+            cur = style
+            buf += w
+        return "".join(out)
+
+    return [render(ln) if i == 0 else indent + render(ln)
+            for i, ln in enumerate(lines) if ln]
+
+
+def _highlighted_rule_lines(text: str, accent: str,
+                            kind: DiscrepancyKind | None = None,
+                            width: int | None = None, indent: str = " " * 5) -> list[str]:
+    """One rule, condensed for the grouped list: the "Deny any candidate
+    whose" / "Flag (do not auto-deny)" lead-in is dropped (the ✗/△ marker and
+    the legend already say it), keywords stand out, the rationale tail after
+    " — " is dim, and long rules wrap under their own text.
+
+    A kind with a RULE_TEXT entry renders that fixed line instead of `text`
+    (see RULE_TEXT); the authored text is only the fallback for a predicate
+    the table doesn't cover."""
+    if kind in RULE_TEXT:
+        segs = _keyword_segments(RULE_TEXT[kind], RULE_KEYWORDS.get(kind, ()), accent)
+        return _wrap_segments(segs, width or _W - 5, indent)
+    body = text
+    for pat in _RULE_PREFIX_STRIP:
+        m = pat.match(body)
+        if m:
+            body = body[m.end():]
+            break
+    body = _RULE_TAIL_DROP.sub(".", body).strip()
+    body = body[:1].upper() + body[1:]
+    clause, sep, tail = body.partition(" — ")
+    segs = _keyword_segments(clause, RULE_KEYWORDS.get(kind, ()) if kind else (), accent)
+    if sep:
+        segs.append((" — " + tail, "dim"))
+    return _wrap_segments(segs, width or _W - 5, indent)
+
+
+def _highlighted_rule_line(text: str, accent: str,
+                           kind: DiscrepancyKind | None = None) -> str:
+    """Single-string form (no wrapping) — kept for callers outside the list."""
+    return "".join(_highlighted_rule_lines(text, accent, kind, width=10_000))
+
+
+# Board order: the kinds in VIOLATION_CLUSTERS' authored sequence.
+_RULE_ORDER: dict[DiscrepancyKind, int] = {
+    k: i for i, k in enumerate(k for _g, _c, _l, ks in VIOLATION_CLUSTERS for k in ks)
+}
+
+_RULE_PAGE_ORDER = (ToolName.DOSSIER, ToolName.GHOSTSCAN, ToolName.HASHCRACK,
+                    ToolName.LOGWATCH, ToolName.STEGOTOOL)
+_RULE_PAGE_META: dict[ToolName | None, tuple[str, str]] = {
+    ToolName.DOSSIER:   ("DOSSIER PAGE",   "#7dd3c0"),
+    ToolName.GHOSTSCAN: ("GHOSTSCAN PAGE", "#6ad4ff"),
+    ToolName.HASHCRACK: ("HASHCRACK PAGE", "#c084fc"),
+    ToolName.LOGWATCH:  ("LOGWATCH PAGE",  "#ffb454"),
+    ToolName.STEGOTOOL: ("STEGOTOOL PAGE", "#ff8cc8"),
+}
 
 SEV_COLOR   = {"minor": "#ffd93d", "major": "#ff8c42", "critical": "#ff5470"}
 _SEV_RANK   = {"minor": 0, "major": 1, "critical": 2}
@@ -556,7 +754,7 @@ _CATCH: dict[DiscrepancyKind, str] = {
     DiscrepancyKind.CREDENTIAL_STUFFING:    "free report raises the SAME unclassified anomaly as brute force · the auth log shows ONE source failing on MANY accounts · filter names it",
     DiscrepancyKind.AFTER_HOURS_ACCESS:     "free report's off-shift note; the auth log shows routine paths — benign alone (minor)",
     DiscrepancyKind.LOW_AND_SLOW:           "never trips the report's alert — failures bar past its tick, scattered × on the FAIL lane · filter correlates it",
-    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free report: the claimed IP never appears among the login origins — corroborate before denying",
+    DiscrepancyKind.CLAIMED_IP_MISMATCH:    "free report: compare VIA IP with every ORIGINS row — no row carries it (Threat Triage HUD calls it out)",
     DiscrepancyKind.LEAKED_PASSWORD:        "align the cipher block and the recovery readout names the corpus the plaintext was dumped in; the Ghostscan breach panel corroborates it",
     DiscrepancyKind.WEAK_CREDENTIAL:        "the recovered plaintext is a dictionary word or keyboard walk — judge it yourself, or buy Crack Verdict Analyzer to have it called",
     DiscrepancyKind.CROSS_BREACH_REUSE:     "the recovery readout names TWO corpora holding the same plaintext — the breach panel lists both",
@@ -685,8 +883,8 @@ _EXAMPLE: dict[DiscrepancyKind, tuple[str, str, str]] = {
     ),
     DiscrepancyKind.CLAIMED_IP_MISMATCH: (
         "CLAIMS   Boston, US  via 10.0.4.22",
-        "ORIGINS  ✗ claimed IP 10.0.4.22 never seen · ✗ Frankfurt, DE  4 logins",
-        "the free Activity Report shows it — no ⏱ needed to see it",
+        "ORIGINS  · Frankfurt, DE  185.23.9.4  4 logins   (no 10.0.4.22 row)",
+        "the free Activity Report shows it — no ⏱ needed, just a careful read",
     ),
     DiscrepancyKind.LEAKED_PASSWORD: (
         'CRACKED:  "dragon2019"',
@@ -753,6 +951,39 @@ def _band(title: str, accent: str, note: str = "") -> list[str]:
 def _sub(title: str, accent: str = "#6b7785") -> list[str]:
     bar = "─" * max(1, _W - len(title) - 4)
     return ["", f"[{accent}]── {title} {bar}[/]"]
+
+
+def _columns(cols: list[tuple[str, str, list[str]]],
+             col_w: int | tuple[int, ...] = 20,
+             gap: int = 2, indent: int = 2) -> list[str]:
+    """Side-by-side vertical lists: [(HEADER, accent, [item, ...]), ...].
+
+    2026-09-25 (Nick): the domain / affiliation banks were one long
+    " · "-joined run per category, which is hard to scan. Each category is
+    now its own column, one entry per line, so the player runs an eye down
+    TRUSTED / QUESTIONABLE / DISPOSABLE side by side. Entries longer than the
+    column wrap under themselves; padding is computed on the plain text so
+    the markup never throws the columns out of line.
+    """
+    widths = (col_w,) * len(cols) if isinstance(col_w, int) else col_w
+    cells: list[list[tuple[str, str]]] = []
+    for (header, accent, items), w in zip(cols, widths):
+        col = [(header, f"b {accent}"), ("─" * w, accent)]
+        for item in items:
+            wrapped = textwrap.wrap(item, w - 2, break_long_words=False) or [""]
+            col.append(("· " + wrapped[0], "#c8d4e1"))
+            col += [("  " + w, "#c8d4e1") for w in wrapped[1:]]
+        cells.append(col)
+    height = max(len(c) for c in cells)
+    out = []
+    for row in range(height):
+        parts = []
+        for col, w in zip(cells, widths):
+            text, style = col[row] if row < len(col) else ("", "")
+            pad = " " * max(0, w - len(text))
+            parts.append(f"[{style}]{text}[/]{pad}" if text else " " * w)
+        out.append((" " * indent + (" " * gap).join(parts)).rstrip())
+    return out
 
 
 def _fit(text: str, width: int) -> str:
@@ -887,19 +1118,36 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     # (tests, the rules-lab preview) shows the full campaign rulebook.
     visible = [r for r in rules if _tool_unlocked(_rule_tool(r), unlocked_tools)]
     hidden  = len(rules) - len(visible)
-    disq  = [r for r in visible if r.severity == "disqualifying"]
-    minor = [r for r in visible if r.severity != "disqualifying"]
-    if disq:
+    # 2026-09-25 (Nick): grouped by the PAGE whose evidence triggers the rule,
+    # in tool-unlock order, instead of one DENY list and one FLAG list of ~30
+    # rules each spanning every page. On the Logwatch page you now read one
+    # short block. DENY stays above FLAG inside each block.
+    if visible:
         lines.append("")
-        lines.append("[#ff5470][b]DISQUALIFYING[/][/]  — any one of these → DENY")
-        for r in disq:
-            lines.append(f"  [#ff5470]✗[/]  {_highlighted_rule_line(r.text, '#ff5470')}")
-    if minor:
+        lines.append("  [#ff5470]✗[/] [b #ff5470]DENY[/] [dim]any one is enough[/]"
+                     "     [#ff8c42]△[/] [b #ff8c42]FLAG[/] [dim]mark it on the board, "
+                     "corroborate first[/]")
+    by_page: dict[ToolName | None, list] = {}
+    for r in visible:
+        by_page.setdefault(_rule_tool(r), []).append(r)
+    for tool in (*_RULE_PAGE_ORDER, None):
+        page_rules = by_page.get(tool)
+        if not page_rules:
+            continue
+        title, accent = _RULE_PAGE_META.get(tool, ("OTHER", "#6b7785"))
         lines.append("")
-        lines.append("[#ff8c42][b]WEIGHTED[/][/]  — flag on the Evidence Board; "
-                     "corroborate before denying")
-        for r in minor:
-            lines.append(f"  [#ff8c42]△[/]  {_highlighted_rule_line(r.text, '#ff8c42')}")
+        lines.append(f"[b {accent}]▎ {title}[/]")
+        # Static position (the Evidence Board's rule): the same authored
+        # cluster order every day, never re-sorted on severity — a rule that
+        # changes tier changes colour and marker, not place.
+        page_rules.sort(key=lambda r: _RULE_ORDER.get(_rule_kind(r), len(_RULE_ORDER)))
+        for r in page_rules:
+            deny = r.severity == "disqualifying"
+            mark = "[#ff5470]✗[/]" if deny else "[#ff8c42]△[/]"
+            body = _highlighted_rule_lines(
+                r.text, "#ff5470" if deny else "#ff8c42", _rule_kind(r))
+            lines.append(f"  {mark}  {body[0]}")
+            lines += body[1:]
     if not rules:
         lines.append("[dim]No rules loaded for this day.[/]")
     elif hidden:
@@ -942,11 +1190,8 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     _endless = config.is_endless_day(d_no)
     today_budget = config.daily_compute_budget(d_no, base)
     lines += [
-        "  A fixed ⏱ pool is granted at the start of every shift. It is spent",
-        "  ONLY on tools, filters, and stamps — verdicts never grant ⏱, and",
-        "  leftover hours are discarded at end of day (no carry-over).",
-        "  Running out mid-day disables tools for the rest of the shift;",
-        "  there is no other penalty. Ration the pool across all candidates.",
+        "  A fresh ⏱ pool every shift, spent only on [b]tools, filters, stamps[/].",
+        "  Leftovers don't carry over. Run dry and tools lock until tomorrow.",
         "",
         (f"  [#6b7785]base budget[/]      [#ffb454]{base} ⏱[/]  "
         f"[dim](generous early, tighter as the work grows · raise it in the shop)[/]"),
@@ -977,12 +1222,9 @@ def build_rules_text(day: Day | None, unlocked_tools: set[str] | None = None) ->
     lines.append("")
     lines += _band("SITE HEALTH (⛨) — THE LOSS CONDITION", "#ff5470")
     lines += [
-        "  A persistent 0–100% gauge that carries across days. Every ADMITTED",
-        "  candidate applies a hidden weight: beneficial actors raise health,",
-        "  threats lower it. Denials never move it — a denied threat never",
-        "  entered the site. Deltas accumulate silently during the shift and",
-        "  land in ONE batch at end of day (watch the pending value in the",
-        "  status bar). Wrong denials cost you nothing but the reward.",
+        "  A 0–100% gauge that carries across days. Only [b]admits[/] move it —",
+        "  good actors raise it, threats lower it. Denials never touch it.",
+        "  Changes land together at end of day (pending value in the status bar).",
         "",
         (f"  [#ff5470]▼ below {config.SITE_HEALTH_LOSS_THRESHOLD:.0f}%[/]"
         "   at end of day — HackDox is lost (game over)"),
@@ -1158,8 +1400,8 @@ def build_dossier_text(day: Day | None) -> str:
         "             [dim]Hashcrack arrives and credential hygiene starts being[/]",
         "             [dim]judged properly — from then it is a major violation.[/]",
     ]
-    lines.append("")
-    lines += violation_table(day, "DOSSIER")
+    # (2026-09-25: a second, identical DOSSIER violation table used to render
+    # here — the same rows twice on one tab. Removed.)
 
     # ── The day's rule sheet (#49) ─────────────────────────────────────
     # Authored per day in day_NN.json and rendered VERBATIM — this is the
@@ -1185,39 +1427,43 @@ def build_dossier_text(day: Day | None) -> str:
             lines += [f"     {a}" for a in sheet.denied_affiliations]
 
     # ── Reference lists (dynamic from ghostscan data) ──────────────────
+    # 2026-09-25 (Nick): three side-by-side columns per list, one entry per
+    # line. The tools no longer call a domain or org "questionable" for free
+    # (that verdict is the whitelist/blacklist HUDs'), so these columns are
+    # where the player places it themselves.
     lines += _sub("email domains", "#7dd3c0")
-    trusted    = " · ".join(sorted(tools_bridge._GS_TRUSTED_DOMAINS))
-    disposable = " · ".join(sorted(tools_bridge._GS_SUSPICIOUS_DOMAINS))
-    privacy    = " · ".join(sorted(tools_bridge._GS_PRIVACY_DOMAINS))
+    lines += _columns([
+        ("✓ TRUSTED", "#00ff9f",
+         sorted(tools_bridge._GS_TRUSTED_DOMAINS) + ["any .edu · .ac.uk", "any .gov · .mil"]),
+        ("? QUESTIONABLE", "#ff8c42", sorted(tools_bridge._GS_PRIVACY_DOMAINS)),
+        ("✗ DISPOSABLE", "#ff5470", sorted(tools_bridge._GS_SUSPICIOUS_DOMAINS)),
+    ])
+    # #58: a questionable (privacy) domain is context, never an instruction to
+    # flag — DISPOSABLE_EMAIL is the only domain violation, and flagging it on
+    # a privacy provider scores as a false positive.
     lines += [
-        f"[#00ff9f]✓  TRUSTED[/]   {trusted}",
-        "             .edu · .ac.uk · .gov · .mil · verified employers",
-        f"[#ff5470]✗  DISPOSABLE[/] {disposable}",
-        "             [dim]→ plants DISPOSABLE_EMAIL — the fast-deny signal[/]",
-        # #58, second location. tools_bridge stopped telling the player to flag
-        # a privacy domain because DISPOSABLE_EMAIL is the only thing they could
-        # flag, it is a different domain class, and board_accuracy_bonus scores
-        # it as a false positive — the UI was instructing an action the scoring
-        # model punishes. This copy still said it. Same bug, same fix: context,
-        # not an instruction.
-        (f"[#ff8c42]?  PRIVACY[/]   {privacy}"
-        "   [dim](legitimate — but leaves no identity trail)[/]"),
+        "",
+        "  [#ff8c42]questionable[/] [dim]= real, but leaves no identity trail — not a violation alone[/]",
+        "  [#ff5470]disposable[/]   [dim]= DISPOSABLE_EMAIL, the fast-deny signal[/]",
     ]
     lines += _sub("affiliations", "#7dd3c0")
-    # 2026-09-24: the elite orgs are made-up harbour organisations now
-    # (VOICE_GUIDE.md §5), so a player can no longer recognise them from the
-    # real world — this is where they learn the list. Derived from the same
-    # bank the generator and the sweep use.
-    elite  = " · ".join(sorted(tools_bridge._GS_ELITE_ORGS))
-    orgs   = " · ".join(sorted(tools_bridge._GS_LEGIT_ORGS))
-    forums = " · ".join(tools_bridge._GS_CRITICAL_FORUMS)
+    # 2026-09-24: the elite orgs are made-up harbour organisations (VOICE_GUIDE
+    # §5), so this is where the player learns them. Every list is derived from
+    # the same banks the generator and the sweep use.
+    lines += _columns([
+        ("✓ TRUSTED", "#00ff9f",
+         ["★ " + o for o in sorted(tools_bridge._GS_ELITE_ORGS)]
+         + sorted(tools_bridge._GS_LEGIT_ORGS)),
+        ("? QUESTIONABLE", "#ff8c42",
+         list(candidate_gen.AFFILIATIONS_THIN) + [candidate_gen.NO_AFFILIATION_STATED]),
+        ("✗ THREAT", "#ff5470", list(tools_bridge._GS_CRITICAL_FORUMS)),
+    ], col_w=(28, 18, 14))
     lines += [
-        f"[#00ff9f]✓  ELITE[/]     {elite}",
-        "             [dim]→ can't be faked: the sweep always confirms these[/]",
-        f"[#00ff9f]✓  TRUSTED[/]   {orgs}",
-        f"[#ff5470]✗  THREAT COMMUNITIES[/] {forums}",
-        ("[#ff8c42]?  UNVERIFIABLE[/] \"independent\" · \"freelance\" · \"self-employed\""
-        "   [dim](needs corroboration)[/]"),
+        "",
+        "  [#00ff9f]★ elite[/]      [dim]= can't be faked — the sweep always confirms it[/]",
+        "  [#ff8c42]questionable[/] [dim]= thin, needs corroboration[/]",
+        f"               [dim]{candidate_gen.NO_AFFILIATION_STATED} = nothing stated — flag it[/]",
+        "  [#ff5470]threat[/]       [dim]= a known threat-actor community[/]",
     ]
     return "\n".join(lines)
 
@@ -1468,9 +1714,10 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
         f"  [#7dd3c0]TIMELINE[/]  24h lanes AUTH ● · FAIL × · FILES □ · PRIV ◆;",
         f"    ░ is the {s0}–{s1} shift; a digit = several events in one cell.",
         "  [#7dd3c0]ORIGINS[/]  a world map of where this account logged in",
-        "    from, numbered to match the legend. ✓ = the claimed IP; red",
-        "    numbers failed their way in. Dotted arcs + the 1→2 lines are",
-        "    city changes between CLEAN logins: distance and time only.",
+        "    from, numbered to match the legend, each with its IP — check",
+        "    them against VIA IP yourself. Red numbers failed their way in.",
+        "    Dotted arcs + the 1→2 lines are city changes between CLEAN",
+        "    logins: distance and time only.",
         f"    [b]People travel[/] — faster than ~{config.LW_MAX_FEASIBLE_KMH} km/h is",
         "    what no flight explains.",
         "  [#7dd3c0]RESOURCES[/]  routine / sensitive reads, privileged commands",
@@ -1498,8 +1745,8 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
         "                       alone, meaningful in combination",
         "  [#ff5470]LOW_AND_SLOW[/]         a few failures from one IP, hours apart —",
         "                       built to stay under the report's alert",
-        "  [#ffd93d]CLAIMED_IP_MISMATCH[/]  the claimed IP never logs in at all —",
-        "                       visible on the free report",
+        "  [#ffd93d]CLAIMED_IP_MISMATCH[/]  VIA IP matches no ORIGINS row — the",
+        "                       claimed IP never logged in",
         "",
         "  [dim]One failed login is not an attack — honest people mistype.[/]",
         "  [dim]HASH_SUBMIT rows are context only; Logwatch shows no breach data.[/]",
@@ -1510,7 +1757,8 @@ def build_logs_text(day: Day | None, unlocked_tools: set[str] | None = None) -> 
         "                    inside an anomaly, reveals each Activity Profile",
         "                    bar's ceiling tick, and flags bars past it. It",
         "                    points; it never names.",
-        "  [#00ff9f]Threat Triage HUD[/]   unlocks the report's Analyst Notes",
+        "  [#00ff9f]Threat Triage HUD[/]   unlocks the report's Analyst Notes and",
+        "                      marks which origin is the claimed IP (✓/✗)",
         "  [#00ff9f]Logwatch Optimizer[/]  the log pull costs less ⏱",
     ]
     return "\n".join(lines)

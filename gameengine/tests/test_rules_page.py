@@ -232,6 +232,10 @@ def test_rules_tab_disqualifying_weighted_gated_by_unlocked_tools():
     dossier_only = rules_content.build_rules_text(day, unlocked_tools=set())
     everything = rules_content.build_rules_text(
         day, unlocked_tools={"ghostscan", "hashcrack", "logwatch", "stegotool"})
+    # Keyword highlighting puts markup INSIDE phrases, so compare plain text.
+    from rich.text import Text
+    dossier_only = Text.from_markup(dossier_only).plain
+    everything = Text.from_markup(everything).plain
     # OSINT/CREDENTIAL-tier rules are locked out until their tool is unlocked...
     assert "sock-puppet accounts" not in dossier_only
     assert "breach corpus" not in dossier_only
@@ -254,17 +258,145 @@ def test_rules_tab_unlocked_tools_none_shows_full_rulebook():
     assert "more rule" not in full
 
 
-def test_rule_text_boilerplate_is_dimmed_and_trigger_is_highlighted():
-    """Every rule opens with one of two fixed boilerplate phrases; the render
-    should dim that lead-in and bold+colour the clause that actually differs
-    rule to rule, rather than leaving the whole line one flat colour."""
+def test_rule_text_boilerplate_is_dropped_and_only_keywords_are_highlighted():
+    """2026-09-25 (Nick): the whole trigger clause used to be bold + coloured,
+    which made the list a wall of colour. The "Deny any candidate whose" /
+    "Flag (do not auto-deny)" lead-in is gone (the ✗/△ marker says it) and
+    only each rule's KEYWORDS carry the accent."""
     day = load_day(1)
     text = rules_content.build_rules_text(day)
-    assert "[dim]Deny any candidate who" in text
-    assert "[dim]Flag (do not auto-deny)" in text
-    # The highlighted remainder keeps the section's accent colour + bold.
-    assert "[#ff5470][b]" in text
-    assert "[#ff8c42][b]" in text
+    assert "Deny any candidate" not in text
+    assert "Flag (do not auto-deny)" not in text
+    assert "[b #ff5470]brute-force[/]" in text          # a DENY keyword
+    assert "[b #ff8c42]MD5[/]" in text                  # a FLAG keyword
+    # The rest of the clause is NOT bold.
+    assert "[b #ff5470]Submitted logs" not in text
+
+
+def test_every_rule_line_has_a_highlighted_keyword():
+    """Every kind any day's ruleset uses has a fixed RULE_TEXT line, and that
+    line contains at least one of its RULE_KEYWORDS — otherwise it renders
+    with nothing to scan for."""
+    import re as _re
+    for n in range(1, 21):
+        for r in load_day(n).rules:
+            kind = rules_content._rule_kind(r)
+            if kind is None:
+                continue
+            line = rules_content.RULE_TEXT.get(kind)
+            assert line, f"{kind.name} has no RULE_TEXT line"
+            kws = rules_content.RULE_KEYWORDS.get(kind, ())
+            assert any(_re.search(_re.escape(k), line, _re.IGNORECASE)
+                       for k in kws), f"{kind.name}: no keyword in {line!r}"
+
+
+def _rule_rows(day_n):
+    """{kind: (page heading, index within page, marker)} from the Rules tab."""
+    from rich.text import Text
+    text = Text.from_markup(rules_content.build_rules_text(load_day(day_n))).plain
+    # First line of each rendered rule -> kind (every RULE_TEXT line is
+    # distinct in its first five words).
+    by_head = {tuple(t.split()[:5]): k for k, t in rules_content.RULE_TEXT.items()}
+    assert len(by_head) == len(rules_content.RULE_TEXT)
+    rows, page, idx = {}, None, 0
+    for ln in text.split("\n"):
+        if ln.startswith("▎ ") and ln.endswith("PAGE"):
+            page, idx = ln[2:], 0
+            continue
+        if page and ln.startswith(("  ✗  ", "  △  ")):
+            rows[by_head[tuple(ln[5:].split()[:5])]] = (page, idx, ln[2])
+            idx += 1
+    return rows
+
+
+def test_rule_position_and_wording_are_static_colour_follows_severity():
+    """2026-09-25 (Nick): the Evidence Board model — static position, dynamic
+    colour. A rule re-tiered between days keeps its page and its slot and its
+    wording; only the ✗/△ marker (and keyword colour) changes. Day 8 → 12
+    re-tiers several rules, so the comparison is not vacuous."""
+    early, late = _rule_rows(8), _rule_rows(12)
+    common = set(early) & set(late)
+    assert len(common) > 15
+    moved = [k for k in common if early[k][:2] != late[k][:2]]
+    assert not moved, moved
+    retiered = [k for k in common if early[k][2] != late[k][2]]
+    assert retiered, "expected at least one rule to change tier between day 8 and 12"
+    # The marker is today's severity, never the authored wording's.
+    day12 = {rules_content._rule_kind(r): r.severity for r in load_day(12).rules}
+    for k, (_p, _i, mark) in late.items():
+        assert (mark == "✗") == (day12[k] == "disqualifying"), k
+
+
+def test_rules_tab_never_contradicts_its_marker():
+    """The authored rule texts carried their day's stance ("— not proof of
+    malice", "until then it is a flag, not a deny"), which read wrong once a
+    later day re-tiered the rule. None of that wording reaches the Rules tab."""
+    from rich.text import Text
+    for n in range(1, 21):
+        text = Text.from_markup(rules_content.build_rules_text(load_day(n))).plain
+        ruleset = text.split("DAILY QUOTAS")[0]
+        rows = [ln for ln in ruleset.split("\n") if ln.startswith(("  ✗  ", "  △  "))]
+        for ln in rows:
+            for bad in ("not a deny", "don't deny", "not proof", "do not auto-deny",
+                        "Deny any candidate", "automatic deny"):
+                assert bad not in ln, (n, ln)
+
+
+def test_rules_are_grouped_by_the_page_that_reveals_them():
+    from rich.text import Text
+    day = load_day(1)
+    text = Text.from_markup(rules_content.build_rules_text(day)).plain
+    heads = ["DOSSIER PAGE", "GHOSTSCAN PAGE", "HASHCRACK PAGE",
+             "LOGWATCH PAGE", "STEGOTOOL PAGE"]
+    pos = [text.index("▎ " + h) for h in heads]
+    assert pos == sorted(pos), "pages out of tool-unlock order"
+    # A logwatch rule sits under LOGWATCH, not under another page.
+    i = text.index("brute-force")
+    assert pos[3] < i < pos[4]
+    # Locked tools contribute no heading at all.
+    locked = Text.from_markup(
+        rules_content.build_rules_text(day, unlocked_tools=set())).plain
+    assert "DOSSIER PAGE" in locked and "LOGWATCH PAGE" not in locked
+
+
+def test_rules_lines_are_valid_markup_and_wrap_under_their_own_text():
+    from rich.text import Text
+    for n in (1, 8, 12, 20):
+        for ln in rules_content.build_rules_text(load_day(n)).split("\n"):
+            Text.from_markup(ln)                           # raises if malformed
+    text = rules_content.build_rules_text(load_day(1))
+    for ln in text.split("\n"):
+        plain = Text.from_markup(ln).plain
+        if plain.startswith(("  ✗  ", "  △  ")):
+            assert len(plain) <= rules_content._W, plain
+
+
+def test_reference_lists_are_side_by_side_columns():
+    """2026-09-25 (Nick): trusted / questionable / disposable side by side,
+    one entry per line."""
+    from rich.text import Text
+    from gameengine.core import candidate_gen
+    text = Text.from_markup(rules_content.build_dossier_text(load_day(1))).plain
+    rows = text.split("\n")
+    head = next(r for r in rows if "✓ TRUSTED" in r and "? QUESTIONABLE" in r
+                and "✗ DISPOSABLE" in r)
+    assert head is not None
+    head_aff = next(r for r in rows if "✓ TRUSTED" in r and "✗ THREAT" in r)
+    assert head_aff is not None
+    # Every bank entry appears on its own row (first line of its cell).
+    for d in (*candidate_gen.DOMAINS_TRUSTED, *candidate_gen.DOMAINS_PRIVACY,
+              *candidate_gen.DOMAINS_DISPOSABLE):
+        assert any(f"· {d}" in r for r in rows), d
+    for org in (*candidate_gen.AFFILIATIONS_THIN,):
+        first = org.split()[0]
+        assert any(f"· {first}" in r for r in rows), org
+    # And the old " · "-joined runs are gone.
+    assert "gmail.com · " not in text
+
+
+def test_dossier_tab_has_one_violation_table():
+    text = rules_content.build_dossier_text(load_day(6))
+    assert text.count("▎ VIOLATIONS — DOSSIER") == 1
 
 
 def test_rules_screen_evidence_board_respects_unlocked_tools():

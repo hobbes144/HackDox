@@ -73,25 +73,28 @@ class EndlessOverScreen(Screen):
             with Horizontal(classes="menu-frame-row"):
                 yield AmbientGlitchPanel(seed=303, classes="menu-flank")
                 with Vertical(classes="menu-column"):
-                    yield Static("[b][#ff5470]R U N   O V E R[/][/]",
-                                 classes="menu-logo")
-                    yield Static(self._why(), classes="menu-subtitle")
-                    yield Static(
-                        "\n".join([
-                            f"[#6b7785]Shifts survived[/]   [b]{r.shifts}[/]",
-                            f"[#6b7785]Run accuracy[/]      [b]{_pct(r.accuracy)}[/]",
-                            f"[#6b7785]HackDollar$[/]       [b]{r.hackdollars}[/]",
-                            "",
-                            self._best_line(),
-                        ]),
-                        id="endless-over-stats",
-                    )
-                    yield Static(
-                        "[#00ff9f][b]R[/][/] New Endless run   ·   "
-                        "[#00ff9f][b]M[/][/] Main menu   ·   "
-                        "[#00ff9f][b]Q[/][/] Quit",
-                        classes="menu-hint",
-                    )
+                    yield AmbientGlitchPanel(seed=1721, classes="menu-modal-flank")
+                    with Vertical(classes="menu-column-content"):
+                        yield Static("[b][#ff5470]R U N   O V E R[/][/]",
+                                     classes="menu-logo")
+                        yield Static(self._why(), classes="menu-subtitle")
+                        yield Static(
+                            "\n".join([
+                                f"[#6b7785]Shifts survived[/]   [b]{r.shifts}[/]",
+                                f"[#6b7785]Run accuracy[/]      [b]{_pct(r.accuracy)}[/]",
+                                f"[#6b7785]HackDollar$[/]       [b]{r.hackdollars}[/]",
+                                "",
+                                self._best_line(),
+                            ]),
+                            id="endless-over-stats",
+                        )
+                        yield Static(
+                            "[#00ff9f][b]R[/][/] New Endless run   ·   "
+                            "[#00ff9f][b]M[/][/] Main menu   ·   "
+                            "[#00ff9f][b]Q[/][/] Quit",
+                            classes="menu-hint",
+                        )
+                    yield AmbientGlitchPanel(seed=1731, classes="menu-modal-flank")
                 yield AmbientGlitchPanel(seed=404, classes="menu-flank")
             yield AmbientGlitchPanel(seed=414, classes="menu-flank-h")
 

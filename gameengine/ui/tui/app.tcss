@@ -506,9 +506,11 @@ ContentSwitcher {
 
 /* ── Menu frame (2026-09) ─────────────────────────────────────────────── */
 /* Shared shell — glitch flank on all four sides of a central column — used
-   by IntroScreen, SettingsScreen, CreditsScreen, CreditRevealScreen, and
-   PauseScreen (per BUILD_PLAN_MenuSystem_2026-09.md). `.menu-frame` is the OUTER
-   Vertical: a horizontal glitch strip along the top, the original
+   by every screen with the game's menu/end-state look: IntroScreen,
+   SettingsScreen, CreditsScreen, RulesScreen, PauseScreen, CreditRevealScreen,
+   GameOverScreen, EndlessOverScreen, and CampaignEndScreen (per
+   BUILD_PLAN_MenuSystem_2026-09.md and its follow-ups). `.menu-frame` is the
+   OUTER Vertical: a horizontal glitch strip along the top, the original
    left-flank/column/right-flank row in the middle, and another horizontal
    strip along the bottom — so the content reads as floating on top of a
    glitchy backdrop on every side, not just left/right (Nick, 2026-09-24).
@@ -519,11 +521,13 @@ ContentSwitcher {
     height: 1fr;
     align: center middle;     /* only matters for a middle child shorter than
                                   the frame (e.g. #credit-modal's or
-                                  #pause-modal's auto height) —
-                                  IntroScreen/SettingsScreen/CreditsScreen's
-                                  own .menu-column already fills the full
-                                  height and self-centers its content, so this
-                                  is a no-op for them. */
+                                  #pause-modal's auto height, or
+                                  #rules-modal-wrap's fixed 84%) —
+                                  IntroScreen/SettingsScreen/CreditsScreen/
+                                  GameOverScreen/EndlessOverScreen/
+                                  CampaignEndScreen's own .menu-column already
+                                  fills the full height, so this is a no-op
+                                  for them. */
 }
 
 .menu-frame-row {
@@ -564,14 +568,31 @@ ContentSwitcher {
     background: #0b0e10;
 }
 
+/* `.menu-column` used to just be `align: center middle` with padding — for
+   content shorter than the column (true on any terminal taller than the
+   menu itself), that left the actual buttons/logo centred inside a column
+   whose top and bottom strips were plain page background, not glitch, even
+   though the `.menu-flank` panels to its immediate left and right WERE
+   glitching for those exact same rows (Nick, 2026-09-25 — "gaps in the
+   glitch effect above and below the content window"). Fixed the same way as
+   `#credit-modal`/`#pause-modal`'s own leftover space: the column no longer
+   centres its children itself. Its actual content moves into a nested
+   `.menu-column-content` (auto height, carries the old padding), bracketed
+   top and bottom by two more `.menu-modal-flank` panels (`height: 1fr`), so
+   Textual's flex distribution splits whatever's left over between them —
+   same trick, reused for a column instead of a modal box. */
 .menu-column {
     width: 64;
     max-width: 100%;
     height: 1fr;
-    align: center middle;
-    padding: 2 4;
     overflow-y: auto;
     scrollbar-size-vertical: 1;
+}
+
+.menu-column-content {
+    width: 100%;
+    height: auto;
+    padding: 2 4;
 }
 
 .menu-logo {
@@ -709,8 +730,28 @@ RulesScreen {
     align: center middle;
 }
 
-#rules-modal {
+/* Flanked by the same ambient glitch as Pause/CreditReveal (2026-09-25), via
+   the shared `.menu-frame`/`.menu-modal-wrap` shell. Unlike those two modals
+   (fixed width, auto height), `#rules-modal` is meant to occupy most of the
+   screen at a size proportional to it (84%/85%), not size to its own content
+   — so it can't reuse `.menu-modal-wrap`'s plain `width: auto` the way they
+   do: an auto-width container measuring a percentage-width child is
+   circular (the container needs the child's size to size itself, and the
+   child needs the container's size to compute its percentage — confirmed
+   live via run_test, it collapsed the modal to a few columns wide). Fixing
+   the WRAP's width to 84% breaks the circularity — 84% of `.menu-frame-row`,
+   a definite size — and `#rules-modal` itself becomes `width: 100%`
+   (of that wrap) so the two numbers aren't multiplied together. `height:
+   85%` stays a plain percentage of the wrap's height (itself definite, from
+   `.menu-modal-wrap`'s `height: 1fr`), which isn't circular — the two
+   `.menu-modal-flank` fillers above/below just split whatever 15% is left,
+   the same trick as the other two modals. */
+#rules-modal-wrap {
     width: 84%;
+}
+
+#rules-modal {
+    width: 100%;
     height: 85%;
     background: #0d1117;
     border: double #7dd3c0;

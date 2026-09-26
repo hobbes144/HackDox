@@ -285,6 +285,11 @@ class ChatPanel(TypewriterLog):
     # from each other or from what candidate_gen._build_chat writes.
     _EVIDENCE_TAG:  ClassVar[str] = "hostile"
     _HOSTILE_TAGS: ClassVar[frozenset[str]] = frozenset({"hostile", "hostile_flavor"})
+    # 2026-09-25 (Nick): tone styles that single out ONE archetype. "flippant"
+    # is the Dark Web operative's register and nobody else's, so its purple
+    # italic named the archetype on sight. Same gate as the hostile pair: it
+    # reads as neutral until Sentiment Scanner is owned.
+    _ARCHETYPE_TAGS: ClassVar[frozenset[str]] = frozenset({"flippant"})
 
     def set_candidate(self, candidate: Candidate) -> None:
         self.clear_log()
@@ -305,6 +310,8 @@ class ChatPanel(TypewriterLog):
                 # WITHOUT the violation would be the ones glowing red. Gated
                 # together, an unupgraded player sees no colour difference
                 # between them at all — which is what they have not paid for.
+                col, sty = self._TAG_STYLE["neutral"]
+            elif tag in self._ARCHETYPE_TAGS and not _has_sentiment:
                 col, sty = self._TAG_STYLE["neutral"]
             else:
                 col, sty = self._TAG_STYLE.get(tag, ("#c8d4e1", ""))

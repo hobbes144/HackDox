@@ -54,23 +54,26 @@ class IntroScreen(Screen):
             with Horizontal(classes="menu-frame-row"):
                 yield AmbientGlitchPanel(seed=101, classes="menu-flank")
                 with Vertical(classes="menu-column"):
-                    yield Static(_LOGO, classes="menu-logo")
-                    yield Static(
-                        "Access to HackDox is reviewed by hand. You are the hand.",
-                        classes="menu-subtitle",
-                    )
-                    # Above the buttons, so it stays visible on a short
-                    # terminal (the column scrolls, and the bottom goes first).
-                    yield Static("", id="menu-saves", classes="menu-saves")
-                    with Vertical(classes="menu-buttons"):
-                        yield Button("New Campaign", id="menu-new-game", variant="success")
-                        yield Button("Continue Campaign", id="menu-continue")
-                        yield Button("New Endless Run", id="menu-endless")
-                        yield Button("Continue Endless", id="menu-continue-endless")
-                        yield Button("Settings", id="menu-settings")
-                        yield Button("Credits", id="menu-credits")
-                        yield Button("Quit", id="menu-quit", variant="error")
-                    yield Static("", id="menu-hint", classes="menu-hint")
+                    yield AmbientGlitchPanel(seed=121, classes="menu-modal-flank")
+                    with Vertical(classes="menu-column-content"):
+                        yield Static(_LOGO, classes="menu-logo")
+                        yield Static(
+                            "Access to HackDox is reviewed by hand. You are the hand.",
+                            classes="menu-subtitle",
+                        )
+                        # Above the buttons, so it stays visible on a short
+                        # terminal (the column scrolls, and the bottom goes first).
+                        yield Static("", id="menu-saves", classes="menu-saves")
+                        with Vertical(classes="menu-buttons"):
+                            yield Button("New Campaign", id="menu-new-game", variant="success")
+                            yield Button("Continue Campaign", id="menu-continue")
+                            yield Button("New Endless Run", id="menu-endless")
+                            yield Button("Continue Endless", id="menu-continue-endless")
+                            yield Button("Settings", id="menu-settings")
+                            yield Button("Credits", id="menu-credits")
+                            yield Button("Quit", id="menu-quit", variant="error")
+                        yield Static("", id="menu-hint", classes="menu-hint")
+                    yield AmbientGlitchPanel(seed=131, classes="menu-modal-flank")
                 yield AmbientGlitchPanel(seed=202, classes="menu-flank")
             yield AmbientGlitchPanel(seed=212, classes="menu-flank-h")
 

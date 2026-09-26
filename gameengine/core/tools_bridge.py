@@ -403,13 +403,24 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True,
     # neutral "verify via sweep" copy already used for domains/orgs the game
     # genuinely doesn't recognise -- the tell disappears, not the underlying
     # info (the sweep itself still confirms it once run).
+    #
+    # 2026-09-25 (Nick): the "questionable" middle band -- privacy mail
+    # providers, thin / unverifiable affiliations -- was still flagged here for
+    # free, in amber, on every candidate. Placing a domain or org on the lists
+    # is the player's job (Dossier reference tab); the tool only says so once
+    # a matching whitelist/blacklist HUD is owned. Without one, every domain
+    # and org gets the same neutral prompt, so the line itself is no tell.
     upgrades = upgrades or ()
     d = candidate.dossier
     email_domain = candidate.email.split("@")[-1].lower() if "@" in candidate.email else ""
+    email_hud = (config.UPGRADE_EMAIL_APPROVED in upgrades
+                 or config.UPGRADE_EMAIL_PROHIBITED in upgrades)
+    affil_hud = (config.UPGRADE_AFFIL_APPROVED in upgrades
+                 or config.UPGRADE_AFFIL_PROHIBITED in upgrades)
 
     if email_domain in _GS_SUSPICIOUS_DOMAINS and config.UPGRADE_EMAIL_PROHIBITED in upgrades:
         email_flag = "[#ff5470]✗  disposable provider — flag immediately[/]"
-    elif email_domain in _GS_PRIVACY_DOMAINS:
+    elif email_domain in _GS_PRIVACY_DOMAINS and email_hud:
         # #58: was "privacy provider — flag if other issues present", which told
         # the player to flag something with no matching DiscrepancyKind. The
         # nearest thing to flag is DISPOSABLE_EMAIL, a different domain class, and
@@ -421,8 +432,10 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True,
                       "offers no identity trail[/]")
     elif (email_domain in _GS_TRUSTED_DOMAINS or email_domain.endswith((".edu", ".ac.uk")))             and config.UPGRADE_EMAIL_APPROVED in upgrades:
         email_flag = "[#00ff9f]✓  recognised provider[/]"
-    else:
+    elif email_hud:
         email_flag = "[#6b7785]-  unknown domain — verify affiliation[/]"
+    else:
+        email_flag = "[#6b7785]-  check the domain against the Dossier reference lists[/]"
 
     affil_lower = candidate.claimed_affiliation.lower()
     if any(kw in affil_lower for kw in _GS_SUSPECT_AFFIL_KW) and config.UPGRADE_AFFIL_PROHIBITED in upgrades:
@@ -442,10 +455,12 @@ def _ghostscan_identity_lines(candidate: Candidate, hint: bool = True,
         # "verify via sweep" prompt an unrecognised org gets.
         affil_flag = ("[#00ff9f]✓  trusted organisation — cannot be faked, "
                       "sweep will confirm[/]")
-    elif affil_lower in ("independent", "freelance", "self-employed", ""):
+    elif affil_lower in ("independent", "freelance", "self-employed", "") and affil_hud:
         affil_flag = "[#ffd93d]?  unverifiable — needs corroboration[/]"
-    else:
+    elif affil_hud:
         affil_flag = "[#6b7785]-  not in known list — verify via sweep[/]"
+    else:
+        affil_flag = "[#6b7785]-  check the org against the Dossier reference lists[/]"
 
     gh_flag = (
         f"[#6b7785]-  [b]{d.claimed_github}[/] claimed — run scan to verify[/]"
@@ -3673,9 +3688,9 @@ def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
         if has_reuse:
             lines.append("  [#ff5470][b]▲ CROSS_BREACH_REUSE[/][/]  "
                          "— this exact plaintext appears in more than one corpus")
-    elif has_leaked or has_reuse:
-        lines.append("  [dim]classify it yourself — one corpus reads as "
-                     "LEAKED_PASSWORD, two or more as CROSS_BREACH_REUSE[/]")
+    # 2026-09-25 (Nick): no "classify it yourself" prompt without Breach
+    # Classifier. Reading the corpus row against the reference is simply what
+    # a finished crack asks of the player; spelling it out was noise.
     if has_unsalt:
         lines.append("  [#ff8c42][b]▲ UNSALTED_STORAGE[/][/]  "
                      "— stored without a salt; no decryption was required")
@@ -3690,9 +3705,6 @@ def cipher_resolve_lines(block: CipherBlockData, candidate: Candidate,
         if has_weak:
             lines.append("  [#ffd93d][b]▲ WEAK_CREDENTIAL[/][/]  "
                          "— recovered plaintext fails the complexity threshold")
-    else:
-        lines.append("  [dim]judge the password's own strength yourself — "
-                     "see the reference panel[/]")
     lines.append("  [dim]flag it on the Evidence Board (Tab)[/]")
     return lines
 

@@ -7569,3 +7569,52 @@ def test_identity_dedupe_leaves_unique_slots_untouched():
             total += 1
             moved += c.display_name != f"{first} {last}"
     assert moved <= total * 0.05, f"{moved}/{total} identities moved"
+
+
+# ─── 2026-09-25 (Nick): no free "questionable" / "judge it yourself" copy ─────
+
+def _nick_0925_candidates(days=(3, 8, 14, 20), seeds=range(40)):
+    out = []
+    for dn in days:
+        day = load_day(dn)
+        for seed in seeds:
+            for slot in range(day.candidate_count):
+                out.append((dn, candidate_gen.generate(seed, day, slot)))
+    return out
+
+
+def test_ghostscan_identity_calls_nothing_questionable_without_a_hud():
+    """Privacy mail providers and thin/unverifiable orgs used to be flagged
+    in amber on the free identity check. Placing them on the lists is the
+    player's job; the tool only says so once a matching HUD is owned."""
+    saw_privacy = saw_thin = False
+    for _dn, c in _nick_0925_candidates():
+        free = "\n".join(tools_bridge.get_ghostscan_identity(c, upgrades=set()))
+        for word in ("anonymous mail provider", "unverifiable", "recognised provider",
+                     "disposable provider", "trusted organisation", "threat actor"):
+            assert word not in free, (c.id, word)
+        assert "[#ffd93d]?" not in free.split("github")[0], c.id
+        cls_e = tools_bridge.classify_email_domain(c.email)
+        cls_a = tools_bridge.classify_affiliation(c.claimed_affiliation)
+        if cls_e == "privacy":
+            saw_privacy = True
+            paid = "\n".join(tools_bridge.get_ghostscan_identity(
+                c, upgrades={config.UPGRADE_EMAIL_APPROVED}))
+            assert "anonymous mail provider" in paid
+        if cls_a == "unverifiable":
+            saw_thin = True
+            paid = "\n".join(tools_bridge.get_ghostscan_identity(
+                c, upgrades={config.UPGRADE_AFFIL_APPROVED}))
+            assert "unverifiable" in paid
+    assert saw_privacy, "sample never produced a privacy-domain candidate"
+    assert saw_thin, "sample never produced an unverifiable affiliation"
+
+
+def test_cipher_result_has_no_judge_it_yourself_prompts():
+    n = 0
+    for dn, c in _nick_0925_candidates(days=(3, 10, 20), seeds=range(25)):
+        block = tools_bridge.build_cipher_block(c, dn)
+        text = "\n".join(tools_bridge.cipher_resolve_lines(block, c, dn, upgrades=set()))
+        assert "yourself" not in text, (c.id, text)
+        n += 1
+    assert n

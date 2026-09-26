@@ -335,3 +335,27 @@ def test_no_map_below_its_minimum_width():
     text = "\n".join(Text.from_markup(ln).plain
                      for ln in render_report(r, width=config.LW_MAP_MIN_WIDTH - 1))
     assert "┌" not in text
+
+
+def test_claimed_ip_verdict_is_not_given_away_on_the_free_tier():
+    """2026-09-25 (Nick): whether the claimed IP ever logged in is for the
+    player to work out from VIA IP and the ORIGINS rows. Free tier: no "never
+    seen" line, no ✓/✗ claimed marks, no green claimed-IP map marker — but
+    every origin's IP must be on the page, or the check is impossible."""
+    from gameengine.core.logwatch_report import render_report
+    checked = 0
+    for c, _ks, r, log in _sample()[::2]:
+        for width in (None, config.LW_REPORT_WIDTH - 10):
+            free = "\n".join(render_report(r, width=width))
+            assert "never seen" not in free, c.id
+            origins = free.split("ORIGINS", 1)[1].split("RESOURCES", 1)[0]
+            assert "✓" not in origins and "✗" not in origins, c.id
+            assert f"[b {'#00ff9f'}]" not in origins, c.id
+            for o in r.origins:
+                assert o.ip in origins, (c.id, o.ip, width)
+            paid = "\n".join(render_report(r, width=width, notes=True))
+            assert ("never seen" in paid) == (not r.claimed_ip_seen), c.id
+            if r.origins:
+                assert "✓" in paid or "✗" in paid
+        checked += 1
+    assert checked

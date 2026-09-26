@@ -46,26 +46,29 @@ class SettingsScreen(Screen):
             with Horizontal(classes="menu-frame-row"):
                 yield AmbientGlitchPanel(seed=501, classes="menu-flank")
                 with Vertical(classes="menu-column"):
-                    yield Static("S E T T I N G S", classes="menu-logo")
-                    yield Static("Sound", classes="menu-subtitle")
-                    with Vertical(id="settings-rows"):
-                        yield VolumeRow("Master", sound_manager.master_volume,
-                                        self._on_master, id="vol-master")
-                        yield VolumeRow("Music", sound_manager.music_volume,
-                                        self._on_music, id="vol-music")
-                        yield VolumeRow("SFX", sound_manager.sfx_volume,
-                                        self._on_sfx, id="vol-sfx")
-                        with Horizontal(id="settings-mute-row"):
-                            yield Static("Sound enabled", id="settings-mute-label")
-                            yield Switch(value=sound_manager.enabled,
-                                         id="settings-mute")
-                    with Vertical(classes="menu-buttons"):
-                        yield Button("Back", id="settings-back")
-                    yield Static(
-                        "[#00ff9f][b]←→[/][/] adjust  ·  [#00ff9f][b]↑↓/Tab[/][/] navigate  ·  "
-                        "[#00ff9f][b]Esc[/][/] back",
-                        classes="menu-hint",
-                    )
+                    yield AmbientGlitchPanel(seed=521, classes="menu-modal-flank")
+                    with Vertical(classes="menu-column-content"):
+                        yield Static("S E T T I N G S", classes="menu-logo")
+                        yield Static("Sound", classes="menu-subtitle")
+                        with Vertical(id="settings-rows"):
+                            yield VolumeRow("Master", sound_manager.master_volume,
+                                            self._on_master, id="vol-master")
+                            yield VolumeRow("Music", sound_manager.music_volume,
+                                            self._on_music, id="vol-music")
+                            yield VolumeRow("SFX", sound_manager.sfx_volume,
+                                            self._on_sfx, id="vol-sfx")
+                            with Horizontal(id="settings-mute-row"):
+                                yield Static("Sound enabled", id="settings-mute-label")
+                                yield Switch(value=sound_manager.enabled,
+                                             id="settings-mute")
+                        with Vertical(classes="menu-buttons"):
+                            yield Button("Back", id="settings-back")
+                        yield Static(
+                            "[#00ff9f][b]←→[/][/] adjust  ·  [#00ff9f][b]↑↓/Tab[/][/] navigate  ·  "
+                            "[#00ff9f][b]Esc[/][/] back",
+                            classes="menu-hint",
+                        )
+                    yield AmbientGlitchPanel(seed=531, classes="menu-modal-flank")
                 yield AmbientGlitchPanel(seed=602, classes="menu-flank")
             yield AmbientGlitchPanel(seed=612, classes="menu-flank-h")
 
